@@ -96,6 +96,18 @@ A red gate is never committed. Further gates arrive with the milestones that
 introduce them: integration, security, adversarial, recovery, compatibility,
 simulator, and image.
 
+### Checks that need a reference device
+
+Some Android compatibility checks need a booted reference device, which needs
+KVM on Linux. On a host without it — macOS, or Linux without KVM — the gate
+reports each of those checks by name as skipped rather than printing nothing. A
+gate that silently omitted them would read as a passing one.
+
+The mediation and the application bridge are exercised without a device and run
+everywhere. What needs the device is executing real application binaries, and
+until that runs, Android binary execution is not implemented. See
+`docs/decisions/0003-reference-device-image.md`.
+
 ### Brand independence
 
 The build reads the brand document at configure time, so replacing the document

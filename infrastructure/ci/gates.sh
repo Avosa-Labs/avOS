@@ -83,6 +83,28 @@ run_gate 'convention-check' zig build convention-check
 run_gate 'brand-check' zig build brand-check
 run_gate 'brand-check (synthetic brand)' zig build brand-check "-Dbrand=$reference_brand"
 run_gate 'simulator (canonical demo)' zig build simulator -- --no-ledger
+# Some checks need a reference device, which needs KVM on Linux. A host that
+# cannot run them reports each by name as skipped: an absent gate that printed
+# nothing would eventually be read as a passing one.
+report_device_gates() {
+    if [ -e /dev/kvm ]; then
+        return 1
+    fi
+    printf '\n=== reference device checks ===\n'
+    for check in \
+        'reference device boots from the pinned build' \
+        'supported application installs and launches' \
+        'application capability call reaches the bridge' \
+        'unauthorized host capability request denied at the boundary' \
+        'runtime fault leaves the shell unaffected'
+    do
+        printf 'SKIP  %s (no KVM on this host)\n' "$check"
+    done
+    return 0
+}
+
+report_device_gates || true
+
 run_gate 'doctor' zig build doctor
 
 if [ "$offline" -eq 0 ]; then
