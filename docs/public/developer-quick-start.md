@@ -189,6 +189,48 @@ past a fault, or stopping with nothing to show, is what fails.
 
 `--format=json` gives the same run in machine-readable form.
 
+## Watch an update fail and roll back
+
+An update writes the new system to the spare slot, boots it, and keeps it only
+once it starts correctly. If it hangs, the device returns to the version that
+worked. The scenario drives the real updater through the same calls an install
+path makes:
+
+```sh
+zig build simulator -- --scenario=rollback --outcome=hangs-on-start
+```
+
+```text
+update (hangs_on_start)
+
+steps
+  before the update                   would boot primary     bootable
+  staging into the spare slot         would boot primary     bootable
+  spare slot written and verified     would boot primary     bootable
+  spare slot selected for next boot   would boot secondary   bootable
+  boot attempt 1 failed               would boot secondary   bootable
+  boot attempt 2 failed               would boot secondary   bootable
+  boot attempt 3 failed               would boot primary     bootable
+  returned to the working slot        would boot primary     bootable
+
+running version 2.0  (update not kept)
+the device was bootable at every step: yes
+```
+
+The four outcomes:
+
+```sh
+zig build simulator -- --scenario=rollback --outcome=boots-cleanly   # commits
+zig build simulator -- --scenario=rollback --outcome=hangs-on-start  # rolls back
+zig build simulator -- --scenario=rollback --outcome=is-a-downgrade  # refused before writing
+zig build simulator -- --scenario=rollback --outcome=is-corrupt      # refused before committing
+```
+
+Read the `would boot` column. Only three of the four outcomes keep the update,
+and in every one of them some slot is bootable at every step — the property the
+two-slot design exists to hold. The exit code reports that invariant, not
+whether the update committed.
+
 ## Run the tests
 
 ```sh
