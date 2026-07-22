@@ -14,6 +14,7 @@ const formatted_paths = [_][]const u8{
     "services",
     "shell",
     "simulator",
+    "tests",
     "tools",
 };
 
@@ -187,6 +188,22 @@ pub fn build(b: *std.Build) void {
     b.step("simulator", "Run a scenario against the control plane").dependOn(&run_simulator.step);
 
     addModuleTests(b, test_step, "inspector", inspector_module);
+
+    // Acceptance tests hold a milestone to what it must demonstrate. They sit
+    // outside the modules they exercise, so they can only use the interfaces a
+    // real caller has.
+    const acceptance_module = b.createModule(.{
+        .root_source_file = b.path("tests/acceptance/acceptance.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "core", .module = core_module },
+            .{ .name = "design", .module = design_module },
+            .{ .name = "shell", .module = shell_module },
+            .{ .name = "brand", .module = brand_module },
+        },
+    });
+    addModuleTests(b, test_step, "acceptance", acceptance_module);
 
     const format = b.addFmt(.{ .paths = &formatted_paths });
     b.step("format", "Apply canonical formatting").dependOn(&format.step);

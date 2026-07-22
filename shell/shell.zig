@@ -9,10 +9,12 @@ pub const surfaces = @import("surfaces/surfaces.zig");
 pub const command = @import("command/command.zig");
 pub const inspectors = @import("inspectors/inspectors.zig");
 pub const session = @import("session/session.zig");
+pub const render = @import("render/render.zig");
 
 test {
     _ = surfaces;
     _ = command;
     _ = inspectors;
     _ = session;
+    _ = render;
 }
