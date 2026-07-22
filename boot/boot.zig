@@ -10,12 +10,14 @@
 //! something acceptable, and one that measures can say which.
 
 pub const chain = @import("chain/chain.zig");
+pub const early_ui = @import("early-ui/early_ui.zig");
 pub const measurements = @import("measurements/measurements.zig");
 pub const recovery = @import("recovery/recovery.zig");
 pub const verified = @import("verified/verified.zig");
 
 test {
     _ = chain;
+    _ = early_ui;
     _ = measurements;
     _ = recovery;
     _ = verified;
