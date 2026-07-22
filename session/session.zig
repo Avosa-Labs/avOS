@@ -10,8 +10,10 @@
 
 pub const endpoint = @import("endpoint/endpoint.zig");
 pub const instance = @import("instance/instance.zig");
+pub const transport = @import("transport/transport.zig");
 
 test {
     _ = endpoint;
     _ = instance;
+    _ = transport;
 }

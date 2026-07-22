@@ -219,6 +219,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "shell", .module = shell_module },
             .{ .name = "brand", .module = brand_module },
             .{ .name = "runtime_android", .module = runtime_android_module },
+            .{ .name = "session", .module = session_module },
         },
     });
     addModuleTests(b, test_step, "acceptance", acceptance_module);
