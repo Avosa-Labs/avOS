@@ -10,6 +10,7 @@ const formatted_paths = [_][]const u8{
     "core",
     "ipc",
     "runtimes",
+    "services",
     "simulator",
     "tools",
 };
@@ -44,6 +45,12 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const services_module = b.createModule(.{
+        .root_source_file = b.path("services/services.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const simulator_module = b.createModule(.{
         .root_source_file = b.path("simulator/simulator.zig"),
         .target = target,
@@ -57,6 +64,7 @@ pub fn build(b: *std.Build) void {
     });
 
     runtime_native_module.addImport("core", core_module);
+    services_module.addImport("core", core_module);
     simulator_module.addImport("core", core_module);
 
     const brand_module = b.createModule(.{
@@ -98,6 +106,7 @@ pub fn build(b: *std.Build) void {
     addModuleTests(b, test_step, "core", core_module);
     addModuleTests(b, test_step, "ipc", ipc_module);
     addModuleTests(b, test_step, "runtime-native", runtime_native_module);
+    addModuleTests(b, test_step, "services", services_module);
     addModuleTests(b, test_step, "simulator", simulator_module);
 
     for (tools) |tool| {

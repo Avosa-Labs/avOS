@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-22T12:41:11Z",
+  "generated_at": "2026-07-22T13:39:32Z",
   "selection_rule": "latest stable release, resolved from official sources, pinned exactly",
   "zig": {
     "version": "0.16.0",
@@ -126,5 +126,44 @@
       ]
     }
   ],
-  "components": []
+  "components": [
+    {
+      "name": "wasmtime",
+      "version": "47.0.2",
+      "license": "Apache-2.0 WITH LLVM-exception",
+      "decision_record": "docs/decisions/0001-webassembly-component-runtime.md",
+      "archives": [
+        {
+          "target": "aarch64-macos",
+          "source": "https://github.com/bytecodealliance/wasmtime/releases/download/v47.0.2/wasmtime-v47.0.2-aarch64-macos-c-api.tar.xz",
+          "sha256": "c013fe243fd6e13cd63f13dcfa88c3aff5664e356181a2e1bda2c3bf8381fde0",
+          "size_bytes": 13203812
+        },
+        {
+          "target": "x86_64-macos",
+          "source": "https://github.com/bytecodealliance/wasmtime/releases/download/v47.0.2/wasmtime-v47.0.2-x86_64-macos-c-api.tar.xz",
+          "sha256": "5910124fafa760b8dc3444aae034ba224a7454fe1bb7855d1bed5fc118941588",
+          "size_bytes": 15049732
+        },
+        {
+          "target": "aarch64-linux",
+          "source": "https://github.com/bytecodealliance/wasmtime/releases/download/v47.0.2/wasmtime-v47.0.2-aarch64-linux-c-api.tar.xz",
+          "sha256": "8b82df54e4911d2c6bd70804ceb654eed011a24a23c16194f40ba60cc1307d7b",
+          "size_bytes": 13785544
+        },
+        {
+          "target": "x86_64-linux",
+          "source": "https://github.com/bytecodealliance/wasmtime/releases/download/v47.0.2/wasmtime-v47.0.2-x86_64-linux-c-api.tar.xz",
+          "sha256": "35f70f64eb5f9ca72018f3279218a137112c7876b026710315af9ef272a4e91c",
+          "size_bytes": 16151256
+        },
+        {
+          "target": "x86_64-windows",
+          "source": "https://github.com/bytecodealliance/wasmtime/releases/download/v47.0.2/wasmtime-v47.0.2-x86_64-windows-c-api.zip",
+          "sha256": "80ed88b37de47bbc439f2690aea5f695b85b8bf2c7919556a93803c4f09ffd92",
+          "size_bytes": 28927266
+        }
+      ]
+    }
+  ]
 }

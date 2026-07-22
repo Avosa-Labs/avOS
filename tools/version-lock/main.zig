@@ -23,6 +23,55 @@ const manifest_path = "toolchain.lock.json";
 /// SPDX identifier for the compiler distribution.
 const compiler_license = "MIT";
 
+/// A component resolved from its project's official release feed.
+///
+/// Each entry names the feed to query and the artifacts to pin. Adding one is a
+/// deliberate act that follows an architecture decision record, not a
+/// convenience for whatever a build happens to need.
+const RequestedComponent = struct {
+    name: []const u8,
+    /// Release feed. Only an official project source is ever consulted.
+    release_feed: []const u8,
+    /// Artifact name pattern per target, with the resolved tag substituted for
+    /// the placeholder.
+    artifact_pattern: []const u8,
+    targets: []const TargetArtifact,
+    license: []const u8,
+    /// The decision record authorizing this component.
+    decision_record: []const u8,
+};
+
+const TargetArtifact = struct {
+    target: []const u8,
+    /// Name fragment identifying this target's artifact within the release.
+    fragment: []const u8,
+};
+
+const requested_components = [_]RequestedComponent{
+    .{
+        .name = "wasmtime",
+        .release_feed = "https://api.github.com/repos/bytecodealliance/wasmtime/releases/latest",
+        .artifact_pattern = "c-api",
+        .targets = &.{
+            .{ .target = "aarch64-macos", .fragment = "aarch64-macos-c-api.tar.xz" },
+            .{ .target = "x86_64-macos", .fragment = "x86_64-macos-c-api.tar.xz" },
+            .{ .target = "aarch64-linux", .fragment = "aarch64-linux-c-api.tar.xz" },
+            .{ .target = "x86_64-linux", .fragment = "x86_64-linux-c-api.tar.xz" },
+            .{ .target = "x86_64-windows", .fragment = "x86_64-windows-c-api.zip" },
+        },
+        .license = "Apache-2.0 WITH LLVM-exception",
+        .decision_record = "docs/decisions/0001-webassembly-component-runtime.md",
+    },
+};
+
+const PinnedComponent = struct {
+    name: []const u8,
+    version: []const u8,
+    license: []const u8,
+    decision_record: []const u8,
+    archives: []const Archive,
+};
+
 /// Development hosts the bootstrap must serve. A pin missing any of these would
 /// leave a supported host unable to reproduce the build from the manifest.
 const required_targets = [_][]const u8{
@@ -125,17 +174,28 @@ pub fn main(init: std.process.Init) !u8 {
         return 1;
     };
 
+    // Components are resolved from their own official feeds, which the offline
+    // path cannot reach; an offline run pins the compiler only.
+    const components: []const PinnedComponent = if (options.index_path != null)
+        &.{}
+    else
+        resolveComponents(io, arena, err) catch |resolve_error| {
+            try err.print("version-lock: component resolution failed: {t}\n", .{resolve_error});
+            try err.flush();
+            return 1;
+        };
+
     var rendered: std.Io.Writer.Allocating = .init(arena);
     defer rendered.deinit();
-    try renderManifest(&rendered.writer, compilers, timestamp(io));
+    try renderManifest(&rendered.writer, compilers, components, timestamp(io));
 
     switch (options.mode) {
         .write => {
             try io_adapters.writeFile(io_adapters.cwd(), io, manifest_path, rendered.written());
-            try out.print("version-lock: wrote {s} with {d} pinned compiler release(s)\n", .{
-                manifest_path,
-                compilers.len,
-            });
+            try out.print(
+                "version-lock: wrote {s} with {d} pinned compiler release(s) and {d} component(s)\n",
+                .{ manifest_path, compilers.len, components.len },
+            );
             try out.writeAll("Review the diff before committing; an upgrade is a migration.\n");
             try out.flush();
             return 0;
@@ -163,13 +223,26 @@ pub fn main(init: std.process.Init) !u8 {
 }
 
 fn fetchReleaseIndex(io: std.Io, arena: std.mem.Allocator) ![]u8 {
+    return fetchJson(io, arena, release_index_url);
+}
+
+/// Retrieves a document from an official release source.
+///
+/// Only ever called with a location declared in this file, so the set of hosts
+/// this tool will talk to is fixed at compile time rather than derived from
+/// anything it downloads.
+fn fetchJson(io: std.Io, arena: std.mem.Allocator, location: []const u8) ![]u8 {
     var client: std.http.Client = .{ .allocator = arena, .io = io };
     defer client.deinit();
 
     var body: std.Io.Writer.Allocating = .init(arena);
     const result = try client.fetch(.{
-        .location = .{ .url = release_index_url },
+        .location = .{ .url = location },
         .response_writer = &body.writer,
+        .extra_headers = &.{
+            .{ .name = "accept", .value = "application/vnd.github+json" },
+            .{ .name = "user-agent", .value = "platform-version-lock" },
+        },
     });
     if (result.status != .ok) return error.ReleaseIndexUnavailable;
     return body.written();
@@ -231,6 +304,137 @@ fn resolveCompilers(
     }
 
     return compilers.toOwnedSlice(arena);
+}
+
+/// Resolves each declared component from its project's official release feed.
+///
+/// Applies the same rules as the compiler path: the tag must denote a stable
+/// release, every artifact must carry a digest published by the project, and
+/// every artifact must be served over a secure location. A component missing
+/// any of these stops the run rather than being pinned weakly.
+fn resolveComponents(
+    io: std.Io,
+    arena: std.mem.Allocator,
+    err: *std.Io.Writer,
+) ![]const PinnedComponent {
+    var pinned: std.ArrayList(PinnedComponent) = .empty;
+
+    for (requested_components) |requested| {
+        const feed = try fetchJson(io, arena, requested.release_feed);
+        const parsed = try std.json.parseFromSlice(std.json.Value, arena, feed, .{
+            .ignore_unknown_fields = true,
+        });
+        const release = switch (parsed.value) {
+            .object => |object| object,
+            else => return error.MalformedReleaseIndex,
+        };
+
+        // A project marking its own release a prerelease is decisive. A feed
+        // that omits the field is refused rather than assumed stable.
+        const prerelease_field = release.get("prerelease") orelse {
+            try err.print("version-lock: {s} feed does not state release status\n", .{requested.name});
+            return error.PrereleaseRejected;
+        };
+        switch (prerelease_field) {
+            .bool => |is_prerelease| if (is_prerelease) {
+                try err.print("version-lock: {s} latest release is a prerelease\n", .{requested.name});
+                return error.PrereleaseRejected;
+            },
+            else => return error.MalformedReleaseIndex,
+        }
+
+        const tag = switch (release.get("tag_name") orelse return error.MalformedReleaseIndex) {
+            .string => |value| value,
+            else => return error.MalformedReleaseIndex,
+        };
+        const version = std.mem.trimStart(u8, tag, "v");
+        if (!isStableVersion(version)) {
+            try err.print("version-lock: {s} tag '{s}' is not a stable version\n", .{ requested.name, tag });
+            return error.PrereleaseRejected;
+        }
+
+        const assets = switch (release.get("assets") orelse return error.MalformedReleaseIndex) {
+            .array => |array| array,
+            else => return error.MalformedReleaseIndex,
+        };
+
+        var archives: std.ArrayList(Archive) = .empty;
+        for (requested.targets) |target| {
+            const archive = findAsset(arena, assets.items, target.fragment) catch |failure| {
+                try err.print(
+                    "version-lock: {s} has no artifact for '{s}': {t}\n",
+                    .{ requested.name, target.target, failure },
+                );
+                return failure;
+            };
+            try archives.append(arena, .{
+                .target = target.target,
+                .source = archive.source,
+                .sha256 = archive.sha256,
+                .size_bytes = archive.size_bytes,
+            });
+        }
+
+        try pinned.append(arena, .{
+            .name = requested.name,
+            .version = try arena.dupe(u8, version),
+            .license = requested.license,
+            .decision_record = requested.decision_record,
+            .archives = try archives.toOwnedSlice(arena),
+        });
+    }
+
+    return pinned.toOwnedSlice(arena);
+}
+
+/// Locates one release asset by the fragment identifying its target.
+fn findAsset(
+    arena: std.mem.Allocator,
+    assets: []const std.json.Value,
+    fragment: []const u8,
+) !RawArchive {
+    for (assets) |entry| {
+        const asset = switch (entry) {
+            .object => |object| object,
+            else => continue,
+        };
+        const name = switch (asset.get("name") orelse continue) {
+            .string => |value| value,
+            else => continue,
+        };
+        if (!std.mem.endsWith(u8, name, fragment)) continue;
+
+        const location = switch (asset.get("browser_download_url") orelse
+            return error.MissingArtifactLocation) {
+            .string => |value| value,
+            else => return error.MalformedReleaseIndex,
+        };
+        if (!std.mem.startsWith(u8, location, "https://")) return error.InsecureArtifactLocation;
+
+        // The project publishes the digest alongside the artifact. An artifact
+        // without one cannot be pinned, however convenient it would be.
+        const digest_text = switch (asset.get("digest") orelse return error.MissingIntegrityMetadata) {
+            .string => |value| value,
+            else => return error.MissingIntegrityMetadata,
+        };
+        const prefix = "sha256:";
+        if (!std.mem.startsWith(u8, digest_text, prefix)) return error.MissingIntegrityMetadata;
+        const digest = digest_text[prefix.len..];
+        if (!isHexDigest(digest)) return error.MissingIntegrityMetadata;
+
+        const size = switch (asset.get("size") orelse return error.MissingArtifactSize) {
+            .integer => |value| std.math.cast(u64, value) orelse return error.MalformedReleaseIndex,
+            .string => |value| try std.fmt.parseInt(u64, value, 10),
+            else => return error.MalformedReleaseIndex,
+        };
+
+        return .{
+            .source = try arena.dupe(u8, location),
+            .sha256 = try arena.dupe(u8, digest),
+            .size_bytes = size,
+        };
+    }
+    return error.TargetNotPublished;
 }
 
 const RawArchive = struct {
@@ -314,7 +518,12 @@ fn timestamp(io: std.Io) i64 {
 /// Renders the manifest with a fixed field and element order so that two runs
 /// against an unchanged index produce a byte-identical document and the diff
 /// shows only genuine pin changes.
-fn renderManifest(writer: *std.Io.Writer, compilers: []const Compiler, generated_at: i64) !void {
+fn renderManifest(
+    writer: *std.Io.Writer,
+    compilers: []const Compiler,
+    components: []const PinnedComponent,
+    generated_at: i64,
+) !void {
     var stringify: std.json.Stringify = .{ .writer = writer, .options = .{ .whitespace = .indent_2 } };
 
     try stringify.beginObject();
@@ -377,6 +586,33 @@ fn renderManifest(writer: *std.Io.Writer, compilers: []const Compiler, generated
 
     try stringify.objectField("components");
     try stringify.beginArray();
+    for (components) |component| {
+        try stringify.beginObject();
+        try stringify.objectField("name");
+        try stringify.write(component.name);
+        try stringify.objectField("version");
+        try stringify.write(component.version);
+        try stringify.objectField("license");
+        try stringify.write(component.license);
+        try stringify.objectField("decision_record");
+        try stringify.write(component.decision_record);
+        try stringify.objectField("archives");
+        try stringify.beginArray();
+        for (component.archives) |archive| {
+            try stringify.beginObject();
+            try stringify.objectField("target");
+            try stringify.write(archive.target);
+            try stringify.objectField("source");
+            try stringify.write(archive.source);
+            try stringify.objectField("sha256");
+            try stringify.write(archive.sha256);
+            try stringify.objectField("size_bytes");
+            try stringify.write(archive.size_bytes);
+            try stringify.endObject();
+        }
+        try stringify.endArray();
+        try stringify.endObject();
+    }
     try stringify.endArray();
 
     try stringify.endObject();
