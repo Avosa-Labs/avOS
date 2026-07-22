@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "brand/schema.json",
+  "title": "Brand configuration",
+  "description": "Every user-facing occurrence of the product name, company name, domain, support address, and legal entity is resolved from a document matching this schema. Replacing the document rebrands the product without source edits.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "name",
+    "short_name",
+    "domain",
+    "support_uri",
+    "legal_name"
+  ],
+  "properties": {
+    "schema_version": {
+      "description": "Version of this schema the document conforms to. Increment on a breaking field change and migrate every brand document in the same change.",
+      "type": "integer",
+      "const": 1
+    },
+    "name": {
+      "description": "Full public product name. May contain spaces and non-ASCII characters. Interface code must not assume a character or word count.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "short_name": {
+      "description": "Compact product name for constrained surfaces. May equal name.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32
+    },
+    "domain": {
+      "description": "Public domain presented to users. Not a signing domain and not a wire identifier; changing it is a brand operation, not a migration.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 253
+    },
+    "support_uri": {
+      "description": "Where a user or security reporter is directed for help.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048
+    },
+    "legal_name": {
+      "description": "Legal entity shown in legal, licensing, and packaging surfaces.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    }
+  }
+}

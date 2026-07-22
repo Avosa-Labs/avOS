@@ -1,0 +1,81 @@
+# Provider entry point for the gate set.
+#
+# This file is thin on purpose. It selects hosts and calls the gate script, so
+# the definition of "green" lives in the repository at infrastructure/ci/gates.sh
+# and a contributor runs exactly what this lane runs. Changing provider changes
+# this file and nothing else.
+#
+# The compiler is obtained through the repository's own bootstrap, which
+# resolves and digest-verifies the release pinned in toolchain.lock.json. No
+# third-party toolchain action is used: an unpinned action would undermine the
+# reproducibility the manifest exists to guarantee.
+
+name: gates
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gates-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    name: gates (${{ matrix.host }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - host: linux-x86_64
+            runner: ubuntu-latest
+          - host: macos-aarch64
+            runner: macos-latest
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v5
+        with:
+          # The specification exclusion check distinguishes "untracked" from
+          # "absent", so it needs real history rather than a detached blob.
+          fetch-depth: 1
+
+      - name: Bootstrap the pinned compiler
+        run: tools/bootstrap/bootstrap.sh
+
+      # The install location comes from bootstrap itself rather than being
+      # recomputed here, so the two can never disagree about where it went.
+      - name: Resolve the compiler onto PATH
+        run: tools/bootstrap/bootstrap.sh --print-path >> "$GITHUB_PATH"
+
+      - name: Confirm the running compiler is the pinned one
+        run: zig version
+
+      - name: Run gates
+        run: infrastructure/ci/gates.sh
+
+  specification-exclusion:
+    name: specification is not committed
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out
+        uses: actions/checkout@v5
+
+      # The local-only policy is enforced through .git/info/exclude, which is
+      # not pushed. This lane therefore asserts the outcome that matters: the
+      # specification must not be present in repository history.
+      - name: Assert the specification is untracked
+        run: |
+          if git ls-files --error-unmatch docs/PLATFORM_SPEC.md >/dev/null 2>&1; then
+            echo "docs/PLATFORM_SPEC.md is tracked; the local-only policy forbids committing it" >&2
+            exit 1
+          fi
+          echo "ok  docs/PLATFORM_SPEC.md is not tracked"

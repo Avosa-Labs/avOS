@@ -1,0 +1,19 @@
+.{
+    .name = .platform,
+    .version = "0.0.0",
+    .fingerprint = 0x3952d0cb04d8888e,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "toolchain.lock.json",
+        "brand",
+        "compat",
+        "core",
+        "tools",
+        "README.md",
+        "LICENSE",
+        "NOTICE",
+    },
+}

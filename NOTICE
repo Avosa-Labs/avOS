@@ -1,0 +1,24 @@
+This product includes third-party components.
+
+Every external component is selected as a latest stable release, pinned by
+exact version and verified digest, and recorded with an SPDX license
+identifier in `toolchain.lock.json`. That manifest is the authoritative
+record; this file is a human-readable summary of it.
+
+Components currently pinned:
+
+- Zig compiler — MIT — https://ziglang.org/
+
+Component classes permitted by the architecture but not yet adopted, each
+requiring an architecture decision record before it is pinned:
+
+- AOSP platform and its supported Linux kernel line
+- Cuttlefish reference-device tooling
+- QEMU
+- Wasmtime and the WebAssembly Component Model tooling
+- SQLite
+- cryptographic libraries selected after security review
+- UI, graphics, text, and media libraries selected after the shell spike
+
+No component is adopted because it is popular. Regenerate the summary above
+from the manifest rather than editing it by hand.

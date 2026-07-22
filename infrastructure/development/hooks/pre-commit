@@ -1,0 +1,25 @@
+#!/usr/bin/env sh
+# Refuses a commit that would introduce a convention or brand violation.
+#
+# These two checks are fast and catch what is expensive to remove from history.
+# The full gate set runs separately; this hook is not a substitute for it.
+
+set -eu
+
+repository_root=$(git rev-parse --show-toplevel)
+cd "$repository_root"
+
+command -v zig >/dev/null 2>&1 || {
+    printf 'pre-commit: zig is not on PATH; run tools/bootstrap/bootstrap.sh\n' >&2
+    exit 1
+}
+
+zig build convention-check || {
+    printf '\npre-commit: authoring conventions violated; commit refused\n' >&2
+    exit 1
+}
+
+zig build brand-check || {
+    printf '\npre-commit: product naming outside the brand layer; commit refused\n' >&2
+    exit 1
+}

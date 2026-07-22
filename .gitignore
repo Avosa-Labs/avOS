@@ -1,0 +1,4 @@
+/out/
+.zig-cache/
+zig-out/
+/.tools/
