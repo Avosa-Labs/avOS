@@ -27,13 +27,20 @@ green. See `docs/operations/build.md`.
 The repository builds from a clean checkout with no private machine state.
 
 ```sh
-tools/bootstrap/bootstrap.sh     # POSIX hosts
-tools/bootstrap/bootstrap.ps1    # Windows hosts
+tools/bootstrap/bootstrap.sh                              # POSIX hosts
+export PATH="$(tools/bootstrap/bootstrap.sh --print-path):$PATH"
+zig build doctor                                          # confirm the checkout
+zig build simulator -- --scenario=canonical-demo          # run the demonstration
+zig build test                                            # run the tests
+infrastructure/ci/gates.sh                                # run every gate
 ```
 
-Bootstrap installs nothing system-wide. It resolves the exact compiler pinned
-in `toolchain.lock.json`, verifies its digest, and places it in a project-local
-ignored tool directory.
+Bootstrap installs nothing system-wide. It resolves the exact compiler and
+components pinned in `toolchain.lock.json`, verifies each digest before
+extracting, and places them in a project-local ignored tool directory.
+
+`docs/public/developer-quick-start.md` walks through all of this, including how
+to read the demonstration's output.
 
 ## Commands
 
@@ -87,6 +94,7 @@ and what has never been measured.
 
 ## Documentation
 
+- `docs/public/developer-quick-start.md` — set up, run the demo, run the tests
 - `docs/public/architecture-overview.md` — system topology and trust zones
 - `docs/operations/build.md` — compiler support, pinning, and gates
 - `docs/security/threat-model.md` — adversaries, assets, and boundaries
