@@ -9,12 +9,18 @@
 # resolves and digest-verifies the release pinned in toolchain.lock.json. No
 # third-party toolchain action is used: an unpinned action would undermine the
 # reproducibility the manifest exists to guarantee.
+#
+# Two hosts, on pull requests only. Both hosts because the platform must not
+# quietly depend on one of them, and a defect specific to an architecture is
+# found by building on that architecture or not at all.
+#
+# Pull requests only because every merge to main is a squash of a branch whose
+# head commit this workflow already checked. A push lane re-runs the same tree
+# and reports the same answer.
 
 name: gates
 
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 

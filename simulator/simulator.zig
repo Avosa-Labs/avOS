@@ -9,9 +9,11 @@
 pub const host = @import("host/host.zig");
 pub const model = @import("model/model.zig");
 pub const canonical = @import("scenarios/canonical.zig");
+pub const boot_scenario = @import("scenarios/boot.zig");
 
 test {
     _ = host;
     _ = model;
     _ = canonical;
+    _ = boot_scenario;
 }

@@ -9,12 +9,14 @@
 //! error.
 
 const std = @import("std");
+const boot = @import("boot");
 const compat = @import("compat");
 const io_adapters = compat.io;
 const core = @import("core");
 const simulator = @import("simulator");
 
 const canonical = simulator.canonical;
+const boot_scenario = simulator.boot_scenario;
 const Host = simulator.host.Host;
 
 const Options = struct {
@@ -22,8 +24,12 @@ const Options = struct {
     seed: u64 = 20260722,
     format: Format = .text,
     show_ledger: bool = true,
+    /// Which fault the boot scenario injects.
+    fault: boot_scenario.Fault = .none,
+    /// What the device has to fall back on when a boot stops.
+    available: boot_scenario.Available = .{},
 
-    const Scenario = enum { canonical_demo };
+    const Scenario = enum { canonical_demo, boot };
     const Format = enum { text, json };
 };
 
@@ -52,6 +58,20 @@ pub fn main(init: std.process.Init) !u8 {
         },
         else => return parse_error,
     };
+
+    if (options.scenario == .boot) {
+        const report = try boot_scenario.run(options.fault, options.available);
+        switch (options.format) {
+            .text => try renderBootText(out, report),
+            .json => try renderBootJson(out, report),
+        }
+        try out.flush();
+        // A device that stopped on a tampered stage did the right thing, so
+        // the exit code reports whether the device behaved correctly rather
+        // than whether it booted. Exiting non-zero on a demonstrated refusal
+        // would call the correct outcome a failure.
+        return if (bootBehavedCorrectly(report)) 0 else 1;
+    }
 
     var host: Host = undefined;
     Host.init(&host, gpa, .{ .seed = options.seed });
@@ -154,6 +174,94 @@ fn renderText(
     }
 }
 
+/// Whether the device did what it must, whatever the fault was.
+///
+/// Booting with no fault, and refusing with one, are both correct. What is not
+/// correct is booting past a fault, or stopping with nothing to show.
+fn bootBehavedCorrectly(report: boot_scenario.Report) bool {
+    if (report.fault == .none) return report.completed and report.recovery == null;
+    if (report.completed) return false;
+    if (report.recovery == null) return false;
+    return report.screen.lines().len > 0;
+}
+
+/// Renders a boot the way a person would experience it: what each stage did,
+/// then the screen the device would actually show.
+fn renderBootText(out: *std.Io.Writer, report: boot_scenario.Report) !void {
+    try out.print("boot ({s})\n\n", .{@tagName(report.fault)});
+
+    try out.writeAll("stages\n");
+    for (report.steps[0..report.taken]) |step| {
+        try out.print("  {s: <14}  version {d: <3}  ", .{ @tagName(step.stage), step.version });
+        if (step.digest) |digest| {
+            try out.print("measured {x}\n", .{digest[0..8]});
+        } else {
+            try out.print("REFUSED  {s}\n", .{step.refusal.?});
+        }
+    }
+
+    try out.print("\nattested summary  {x}\n", .{report.summary[0..16]});
+    if (report.code().len > 0) {
+        try out.print("support code      {s}\n", .{report.code()});
+    }
+
+    if (report.recovery) |outcome| {
+        try out.print("\nthe device did not boot; it will {s}\n", .{@tagName(outcome)});
+        try out.writeAll("\nwhat the screen shows\n\n");
+        try writeScreen(out, report.screen);
+    } else {
+        try out.writeAll("\nthe device booted; the shell takes over from here\n");
+    }
+}
+
+/// Draws the surface inside a frame the width of the panel it was laid out for,
+/// so what a person sees on a device is what is printed here.
+fn writeScreen(out: *std.Io.Writer, screen: boot.early_ui.Surface) !void {
+    try out.writeAll("    +");
+    for (0..boot.early_ui.columns) |_| try out.writeByte('-');
+    try out.writeAll("+\n");
+    for (screen.lines()) |line| {
+        try out.print("    |{s}|\n", .{line});
+    }
+    try out.writeAll("    +");
+    for (0..boot.early_ui.columns) |_| try out.writeByte('-');
+    try out.writeAll("+\n");
+}
+
+fn renderBootJson(out: *std.Io.Writer, report: boot_scenario.Report) !void {
+    var stringify: std.json.Stringify = .{ .writer = out, .options = .{ .whitespace = .indent_2 } };
+    try stringify.beginObject();
+    try stringify.objectField("fault");
+    try stringify.write(@tagName(report.fault));
+    try stringify.objectField("completed");
+    try stringify.write(report.completed);
+    try stringify.objectField("stages");
+    try stringify.beginArray();
+    for (report.steps[0..report.taken]) |step| {
+        try stringify.beginObject();
+        try stringify.objectField("stage");
+        try stringify.write(@tagName(step.stage));
+        try stringify.objectField("version");
+        try stringify.write(step.version);
+        try stringify.objectField("measured");
+        try stringify.write(step.digest != null);
+        if (step.refusal) |refusal| {
+            try stringify.objectField("refused");
+            try stringify.write(refusal);
+        }
+        try stringify.endObject();
+    }
+    try stringify.endArray();
+    try stringify.objectField("recovery");
+    if (report.recovery) |outcome| {
+        try stringify.write(@tagName(outcome));
+    } else {
+        try stringify.write(null);
+    }
+    try stringify.endObject();
+    try out.writeByte('\n');
+}
+
 fn renderTask(out: *std.Io.Writer, host: *Host, id: core.identity.TaskId, depth: usize) !void {
     const task = host.graph.get(id) orelse return;
     for (0..depth) |_| try out.writeAll("  ");
@@ -234,6 +342,16 @@ fn parseArguments(
                 try err.print("simulator: unknown format '{s}'\n", .{value});
                 return error.InvalidArguments;
             };
+        } else if (std.mem.startsWith(u8, argument, "--fault=")) {
+            const value = argument["--fault=".len..];
+            options.fault = parseFault(value) orelse {
+                try err.print("simulator: unknown fault '{s}'\n", .{value});
+                return error.InvalidArguments;
+            };
+        } else if (std.mem.eql(u8, argument, "--no-recovery-image")) {
+            options.available.recovery_image_verified = false;
+        } else if (std.mem.eql(u8, argument, "--no-previous-slot")) {
+            options.available.previous_slot_bootable = false;
         } else if (std.mem.eql(u8, argument, "--no-ledger")) {
             options.show_ledger = false;
         } else {
@@ -250,6 +368,17 @@ fn parseScenario(value: []const u8) ?Options.Scenario {
     return std.meta.stringToEnum(Options.Scenario, value);
 }
 
+/// Accepts a fault name with either hyphens or underscores, because a person
+/// typing it should not have to remember which the source used.
+fn parseFault(value: []const u8) ?boot_scenario.Fault {
+    var normalized: [32]u8 = undefined;
+    if (value.len > normalized.len) return null;
+    for (value, 0..) |character, index| {
+        normalized[index] = if (character == '-') '_' else character;
+    }
+    return std.meta.stringToEnum(boot_scenario.Fault, normalized[0..value.len]);
+}
+
 fn writeUsage(out: *std.Io.Writer) !void {
     try out.writeAll(
         \\Usage: simulator [options]
@@ -259,7 +388,14 @@ fn writeUsage(out: *std.Io.Writer) !void {
         \\the run met its acceptance criteria.
         \\
         \\Options:
-        \\  --scenario=<name>  Scenario to run (default: canonical-demo)
+        \\  --scenario=<name>  canonical-demo or boot (default: canonical-demo)
+        \\
+        \\Boot scenario options:
+        \\  --fault=<name>       none, tampered-bootloader, tampered-control-plane,
+        \\                       or downgraded-kernel (default: none)
+        \\  --no-recovery-image  the recovery image does not verify
+        \\  --no-previous-slot   there is no slot to fall back to
+        \\
         \\  --seed=<number>    Identifier seed; the same seed replays exactly
         \\  --format=text|json Output format (default: text)
         \\  --no-ledger        Omit the ledger from text output
@@ -312,4 +448,43 @@ test "acceptance requires every criterion, not a majority" {
     var still_running = passing;
     still_running.unfinished_tasks = 1;
     try std.testing.expect(!meetsAcceptance(still_running));
+}
+
+test "a fault name is accepted with hyphens or underscores" {
+    try std.testing.expectEqual(
+        boot_scenario.Fault.tampered_bootloader,
+        parseFault("tampered-bootloader").?,
+    );
+    try std.testing.expectEqual(
+        boot_scenario.Fault.tampered_bootloader,
+        parseFault("tampered_bootloader").?,
+    );
+    try std.testing.expectEqual(@as(?boot_scenario.Fault, null), parseFault("nonsense"));
+    // A name longer than any fault must be refused rather than truncated into
+    // one that happens to match.
+    try std.testing.expectEqual(@as(?boot_scenario.Fault, null), parseFault("n" ** 64));
+}
+
+test "a refusal is a correct outcome, not a failed run" {
+    // Every fault must be refused, and the absence of one must boot. Reporting
+    // a demonstrated refusal as a failure would train a reader to ignore the
+    // exit code.
+    for (std.enums.values(boot_scenario.Fault)) |fault| {
+        const report = try boot_scenario.run(fault, .{});
+        try std.testing.expect(bootBehavedCorrectly(report));
+    }
+
+    // Booting past a fault is what must fail.
+    var wrong = try boot_scenario.run(.tampered_bootloader, .{});
+    wrong.completed = true;
+    try std.testing.expect(!bootBehavedCorrectly(wrong));
+
+    // So is stopping with nothing to show a person.
+    var silent = try boot_scenario.run(.tampered_bootloader, .{});
+    silent.recovery = null;
+    try std.testing.expect(!bootBehavedCorrectly(silent));
+}
+
+test "the boot scenario is reachable by name" {
+    try std.testing.expectEqual(Options.Scenario.boot, parseScenario("boot").?);
 }

@@ -106,6 +106,89 @@ zig build simulator -- --seed=1234          # a different run; same seed replays
 The seed determines every identifier, so two runs with the same seed produce
 identical output and can be compared byte for byte.
 
+## Watch a boot fail
+
+Reading a test that asserts a device refuses a tampered stage is not the same as
+seeing the screen it would have shown. The boot scenario walks the real chain,
+signs its own stages, injects one fault, and prints both what the device
+concluded and the panel it would draw:
+
+```sh
+zig build simulator -- --scenario=boot --fault=tampered-control-plane
+```
+
+```text
+boot (tampered_control_plane)
+
+stages
+  bootloader      version 7    measured 350ae70ed43ccb5e
+  kernel          version 7    measured 7c2f712a5b31004c
+  control_plane   version 7    REFUSED  SignatureRejected
+
+attested summary  2b0d2a8d66bb43ef41d9186efbb29401
+support code      2b0d2a8d
+
+the device did not boot; it will boot_recovery_image
+
+what the screen shows
+
+    +----------------------------------------+
+    |the installed system could not be       |
+    |verified; starting recovery to repair it|
+    |                                        |
+    |this will take a few minutes and does   |
+    |not erase your data                     |
+    +----------------------------------------+
+```
+
+The four faults, and what each demonstrates:
+
+```sh
+# nothing goes wrong; three stages measured, the shell takes over
+zig build simulator -- --scenario=boot --fault=none
+
+# caught at the first stage, where nothing is yet trusted to find a recovery
+# image, so the device falls back to the slot that last worked
+zig build simulator -- --scenario=boot --fault=tampered-bootloader
+
+# caught at the last stage, where a recovery image can be loaded
+zig build simulator -- --scenario=boot --fault=tampered-control-plane
+
+# a genuine but older kernel, refused by the anti-rollback floor
+zig build simulator -- --scenario=boot --fault=downgraded-kernel
+```
+
+Take away what the device could fall back on and it stops rather than running
+something unverified:
+
+```sh
+zig build simulator -- --scenario=boot --fault=tampered-bootloader \
+  --no-previous-slot --no-recovery-image
+```
+
+```text
+    +----------------------------------------+
+    |the installed system could not be       |
+    |verified and no trusted alternative is  |
+    |available; this device needs servicing  |
+    |                                        |
+    |contact support and quote the code below|
+    |                                        |
+    |e3b0c442                                |
+    +----------------------------------------+
+```
+
+Halting is worse for the owner than a working device and better than an
+untrustworthy one. Notice what is not on any of these screens: there is no
+option to continue anyway, because an option a person can press is an option an
+attacker can arrange to have pressed.
+
+The exit code reports whether the device *behaved correctly*, not whether it
+booted — refusing a tampered stage is the right outcome, so it exits 0. Booting
+past a fault, or stopping with nothing to show, is what fails.
+
+`--format=json` gives the same run in machine-readable form.
+
 ## Run the tests
 
 ```sh
@@ -183,6 +266,8 @@ name has not leaked out of the brand layer.
   it states what is absent, what is narrower than its name suggests, and what
   has never been measured
 - `docs/public/architecture-overview.md` — trust zones and how authority works
+- `docs/architecture/boot.md` — the verified chain, measurement, and recovery
+- `docs/security/secure-boot.md` — what a device can prove, and what it cannot
 - `docs/operations/build.md` — compiler policy, pinning, and the gates
 - `docs/security/threat-model.md` — adversaries, assets, boundaries
 - `docs/decisions/` — why things are the way they are
