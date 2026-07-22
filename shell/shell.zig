@@ -6,7 +6,11 @@
 //! present an action as complete before it is.
 
 pub const surfaces = @import("surfaces/surfaces.zig");
+pub const command = @import("command/command.zig");
+pub const inspectors = @import("inspectors/inspectors.zig");
 
 test {
     _ = surfaces;
+    _ = command;
+    _ = inspectors;
 }
