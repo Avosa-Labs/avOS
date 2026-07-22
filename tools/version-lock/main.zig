@@ -154,6 +154,11 @@ pub fn main(init: std.process.Init) !u8 {
         else => return parse_error,
     };
 
+    // A credential for the release feed, when the host supplies one. Absent is
+    // normal and not an error: the run simply competes for the anonymous rate
+    // limit.
+    const token = init.environ_map.get("PLATFORM_RELEASE_FEED_TOKEN");
+
     const index_text = if (options.index_path) |path|
         try io_adapters.readFile(io_adapters.cwd(), io, path, arena, .limited(8 * 1024 * 1024))
     else
@@ -176,18 +181,42 @@ pub fn main(init: std.process.Init) !u8 {
 
     // Components are resolved from their own official feeds, which the offline
     // path cannot reach; an offline run pins the compiler only.
+    var components_reachable = true;
     const components: []const PinnedComponent = if (options.index_path != null)
         &.{}
     else
-        resolveComponents(io, arena, err) catch |resolve_error| {
-            try err.print("version-lock: component resolution failed: {t}\n", .{resolve_error});
-            try err.flush();
-            return 1;
+        resolveComponents(io, arena, token, err) catch |resolve_error| switch (resolve_error) {
+            // A feed that cannot be reached is not evidence that the pins are
+            // wrong. Verification says so and checks what it can, rather than
+            // reporting drift that has not been observed; writing, which must
+            // produce a complete manifest, still fails.
+            error.ReleaseIndexUnavailable => blk: {
+                components_reachable = false;
+                if (options.mode == .write) {
+                    try err.writeAll(
+                        "version-lock: a component feed is unreachable; the manifest is not modified\n",
+                    );
+                    try err.flush();
+                    return 1;
+                }
+                break :blk &.{};
+            },
+            else => {
+                try err.print("version-lock: component resolution failed: {t}\n", .{resolve_error});
+                try err.flush();
+                return 1;
+            },
         };
 
     var rendered: std.Io.Writer.Allocating = .init(arena);
     defer rendered.deinit();
     try renderManifest(&rendered.writer, compilers, components, timestamp(io));
+
+    if (!components_reachable) {
+        try out.writeAll(
+            "version-lock: component feeds unreachable; verifying the compiler pins only\n",
+        );
+    }
 
     switch (options.mode) {
         .write => {
@@ -206,7 +235,16 @@ pub fn main(init: std.process.Init) !u8 {
                 try err.flush();
                 return 1;
             };
-            if (equalIgnoringTimestamp(committed, rendered.written())) {
+            const comparable = if (components_reachable)
+                committed
+            else
+                upToComponents(committed);
+            const produced = if (components_reachable)
+                rendered.written()
+            else
+                upToComponents(rendered.written());
+
+            if (equalIgnoringTimestamp(comparable, produced)) {
                 try out.print("version-lock: {s} matches the official release sources\n", .{manifest_path});
                 try out.flush();
                 return 0;
@@ -223,7 +261,7 @@ pub fn main(init: std.process.Init) !u8 {
 }
 
 fn fetchReleaseIndex(io: std.Io, arena: std.mem.Allocator) ![]u8 {
-    return fetchJson(io, arena, release_index_url);
+    return fetchJson(io, arena, release_index_url, null);
 }
 
 /// Retrieves a document from an official release source.
@@ -231,19 +269,37 @@ fn fetchReleaseIndex(io: std.Io, arena: std.mem.Allocator) ![]u8 {
 /// Only ever called with a location declared in this file, so the set of hosts
 /// this tool will talk to is fixed at compile time rather than derived from
 /// anything it downloads.
-fn fetchJson(io: std.Io, arena: std.mem.Allocator, location: []const u8) ![]u8 {
+fn fetchJson(
+    io: std.Io,
+    arena: std.mem.Allocator,
+    location: []const u8,
+    token: ?[]const u8,
+) ![]u8 {
     var client: std.http.Client = .{ .allocator = arena, .io = io };
     defer client.deinit();
 
+    var authorization_buffer: [256]u8 = undefined;
+    var headers: [3]std.http.Header = undefined;
+    headers[0] = .{ .name = "accept", .value = "application/vnd.github+json" };
+    headers[1] = .{ .name = "user-agent", .value = "platform-version-lock" };
+    var header_count: usize = 2;
+
+    if (token) |value| {
+        if (value.len != 0 and value.len < 200) {
+            headers[2] = .{
+                .name = "authorization",
+                .value = try std.fmt.bufPrint(&authorization_buffer, "Bearer {s}", .{value}),
+            };
+            header_count = 3;
+        }
+    }
+
     var body: std.Io.Writer.Allocating = .init(arena);
-    const result = try client.fetch(.{
+    const result = client.fetch(.{
         .location = .{ .url = location },
         .response_writer = &body.writer,
-        .extra_headers = &.{
-            .{ .name = "accept", .value = "application/vnd.github+json" },
-            .{ .name = "user-agent", .value = "platform-version-lock" },
-        },
-    });
+        .extra_headers = headers[0..header_count],
+    }) catch return error.ReleaseIndexUnavailable;
     if (result.status != .ok) return error.ReleaseIndexUnavailable;
     return body.written();
 }
@@ -315,12 +371,16 @@ fn resolveCompilers(
 fn resolveComponents(
     io: std.Io,
     arena: std.mem.Allocator,
+    /// Credential for the release feed, when the host supplies one. Feeds rate
+    /// limit anonymous callers, and a gate that fails on rate limiting teaches
+    /// people to ignore it.
+    token: ?[]const u8,
     err: *std.Io.Writer,
 ) ![]const PinnedComponent {
     var pinned: std.ArrayList(PinnedComponent) = .empty;
 
     for (requested_components) |requested| {
-        const feed = try fetchJson(io, arena, requested.release_feed);
+        const feed = try fetchJson(io, arena, requested.release_feed, token);
         const parsed = try std.json.parseFromSlice(std.json.Value, arena, feed, .{
             .ignore_unknown_fields = true,
         });
@@ -639,6 +699,17 @@ fn formatRfc3339(buffer: []u8, seconds: i64) ![]const u8 {
 /// re-resolving an unchanged index does not report drift.
 fn equalIgnoringTimestamp(left: []const u8, right: []const u8) bool {
     return std.mem.eql(u8, stripTimestampLine(left), stripTimestampLine(right));
+}
+
+/// The manifest up to the component section.
+///
+/// Used when a component feed is unreachable: the compiler pins were still
+/// resolved and can still be held to the committed values, so verification
+/// checks them rather than checking nothing.
+fn upToComponents(text: []const u8) []const u8 {
+    const marker = "\"components\"";
+    const start = std.mem.indexOf(u8, text, marker) orelse return text;
+    return text[0..start];
 }
 
 fn stripTimestampLine(text: []const u8) []const u8 {
