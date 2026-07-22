@@ -42,13 +42,31 @@ call.
 **Production payments.** The capability model expresses monetary limits and
 time-boxed approval for value transfer. No payment integration exists.
 
-**Secure boot, verified boot, and atomic system updates.** The update model is
-described in the threat model and is not implemented. There is no rollback
-protection, because there is no update mechanism to protect.
+**A hardware root of trust.** The verified boot chain exists and is exercised —
+see `docs/architecture/boot.md` — but the keys each stage is verified against
+are supplied to it rather than fused into hardware. Nothing stops a caller
+supplying different ones, so the chain demonstrates that the logic is right, not
+that a device is.
 
-**Encrypted durable storage and hardware-backed keys.** State lives in memory
-within a process. Nothing is persisted, so nothing is encrypted at rest, and no
-hardware key store is used.
+**A recovery image.** `boot_recovery_image` is a decision the chain reaches. No
+image is loaded, verified, or run.
+
+**Durable anti-rollback and boot counter state.** Both are values the caller
+carries between boots rather than state held where the running system cannot
+rewrite it. A caller that forgets them loses rollback protection and attestation
+freshness together.
+
+**Encrypted durable storage.** State lives in memory within a process. Nothing
+is persisted, so nothing is encrypted at rest.
+
+**A real secure element.** The interface exists and is the shape a hardware one
+would take: no export operation, conditions enforced inside, purpose bound at
+creation. The only implementation is in software, and it says so — keys are
+readable by anything with access to process memory.
+
+**Runtime integrity measurement.** Measurement covers load time. A stage that
+verifies, runs, and is then compromised measures identically to one that was
+not, so an attestation says nothing about what happened after boot.
 
 **Persistence and crash recovery.** The task state machine is designed to
 recover from durable state, and there is no durable state yet. A restart loses
