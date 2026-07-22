@@ -85,6 +85,13 @@ structural rather than conventional:
   A single key that signs both attestations and user data lets anyone who can
   obtain one obtain the other.
 
+Substituting a stand-in is also a *gate* rather than a matter of care. The
+software element, the hand-advanced clock, and the seeded generator may not be
+named on any path a device could execute — `zig build standin-check` computes
+which lines those are, treating a private declaration that only tests refer to
+as test support, so a helper cannot be moved onto a production path by renaming
+it.
+
 `Backing` is reported, never assumed. The software element says it is software
 and always will: a stand-in that claimed to be hardware would let every layer
 above it be tested against a guarantee it was not getting. A remote verifier

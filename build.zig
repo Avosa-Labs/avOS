@@ -141,6 +141,11 @@ pub fn build(b: *std.Build) void {
             .description = "Verify authoring conventions: attribution, comments, and naming",
         },
         .{
+            .name = "standin-check",
+            .root = "tools/standin-check/main.zig",
+            .description = "Verify no stand-in reaches production code",
+        },
+        .{
             .name = "doctor",
             .root = "tools/doctor/main.zig",
             .description = "Report host, compiler, and pin health",
