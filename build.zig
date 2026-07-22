@@ -60,6 +60,12 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const runtime_android_module = b.createModule(.{
+        .root_source_file = b.path("runtimes/android/android.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const services_module = b.createModule(.{
         .root_source_file = b.path("services/services.zig"),
         .target = target,
@@ -79,6 +85,7 @@ pub fn build(b: *std.Build) void {
     });
 
     runtime_native_module.addImport("core", core_module);
+    runtime_android_module.addImport("core", core_module);
     services_module.addImport("core", core_module);
     shell_module.addImport("core", core_module);
     shell_module.addImport("design", design_module);
@@ -123,6 +130,7 @@ pub fn build(b: *std.Build) void {
     addModuleTests(b, test_step, "core", core_module);
     addModuleTests(b, test_step, "ipc", ipc_module);
     addModuleTests(b, test_step, "runtime-native", runtime_native_module);
+    addModuleTests(b, test_step, "runtime-android", runtime_android_module);
     addModuleTests(b, test_step, "services", services_module);
     addModuleTests(b, test_step, "design", design_module);
     addModuleTests(b, test_step, "shell", shell_module);
