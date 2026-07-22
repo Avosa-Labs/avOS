@@ -8,9 +8,11 @@ const formatted_paths = [_][]const u8{
     "brand",
     "compat",
     "core",
+    "design",
     "ipc",
     "runtimes",
     "services",
+    "shell",
     "simulator",
     "tools",
 };
@@ -45,6 +47,18 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const design_module = b.createModule(.{
+        .root_source_file = b.path("design/design.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const shell_module = b.createModule(.{
+        .root_source_file = b.path("shell/shell.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const services_module = b.createModule(.{
         .root_source_file = b.path("services/services.zig"),
         .target = target,
@@ -65,6 +79,8 @@ pub fn build(b: *std.Build) void {
 
     runtime_native_module.addImport("core", core_module);
     services_module.addImport("core", core_module);
+    shell_module.addImport("core", core_module);
+    shell_module.addImport("design", design_module);
     simulator_module.addImport("core", core_module);
 
     const brand_module = b.createModule(.{
@@ -107,6 +123,8 @@ pub fn build(b: *std.Build) void {
     addModuleTests(b, test_step, "ipc", ipc_module);
     addModuleTests(b, test_step, "runtime-native", runtime_native_module);
     addModuleTests(b, test_step, "services", services_module);
+    addModuleTests(b, test_step, "design", design_module);
+    addModuleTests(b, test_step, "shell", shell_module);
 
     // The component runtime links a pinned native library. It is built only
     // when that library is present, so a checkout that has not bootstrapped it
