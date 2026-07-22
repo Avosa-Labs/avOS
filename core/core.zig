@@ -16,6 +16,7 @@ pub const capability = @import("capability/capability.zig");
 pub const task = @import("task/task.zig");
 pub const audit = @import("audit/audit.zig");
 pub const policy = @import("policy/policy.zig");
+pub const package = @import("package/package.zig");
 
 test {
     _ = outcome;
@@ -27,4 +28,5 @@ test {
     _ = task;
     _ = audit;
     _ = policy;
+    _ = package;
 }
