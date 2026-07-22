@@ -9,10 +9,12 @@ pub const agent_shell = @import("agent_shell.zig");
 pub const android_compatibility = @import("android_compatibility.zig");
 pub const session_continuity = @import("session_continuity.zig");
 pub const integrated_demonstration = @import("integrated_demonstration.zig");
+pub const crash_recovery = @import("crash_recovery.zig");
 
 test {
     _ = agent_shell;
     _ = android_compatibility;
     _ = session_continuity;
     _ = integrated_demonstration;
+    _ = crash_recovery;
 }
