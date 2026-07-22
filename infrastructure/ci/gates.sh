@@ -100,6 +100,9 @@ report_device_gates() {
 
 report_device_gates || true
 
+# Budgets are only meaningful against optimized code, so the measurement runs
+# in a release build rather than reusing the debug test run above.
+run_gate 'performance budgets' zig build test -Doptimize=ReleaseSafe
 run_gate 'doctor' zig build doctor
 
 if [ "$offline" -eq 0 ]; then
