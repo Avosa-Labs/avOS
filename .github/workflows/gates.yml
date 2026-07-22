@@ -60,8 +60,13 @@ jobs:
       - name: Confirm the running compiler is the pinned one
         run: zig version
 
+      # Release feeds rate limit anonymous callers, and a gate that fails on
+      # rate limiting teaches people to ignore it. The token is read-only and
+      # scoped to this run.
       - name: Run gates
         run: infrastructure/ci/gates.sh
+        env:
+          PLATFORM_RELEASE_FEED_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   specification-exclusion:
     name: specification is not committed
