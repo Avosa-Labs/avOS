@@ -146,6 +146,21 @@ pub fn build(b: *std.Build) void {
             .description = "Verify no stand-in reaches production code",
         },
         .{
+            .name = "image-build",
+            .root = "tools/image-build/main.zig",
+            .description = "Reduce a directory to a system image digest, deterministically",
+        },
+        .{
+            .name = "image-sign",
+            .root = "tools/image-sign/main.zig",
+            .description = "Sign an image digest, or check a signature against one",
+        },
+        .{
+            .name = "source-repro",
+            .root = "tools/source-repro/main.zig",
+            .description = "Build the same source twice and compare the images",
+        },
+        .{
             .name = "doctor",
             .root = "tools/doctor/main.zig",
             .description = "Report host, compiler, and pin health",
@@ -173,6 +188,13 @@ pub fn build(b: *std.Build) void {
     });
     hardware_module.addImport("core", core_module);
     addModuleTests(b, test_step, "hardware", hardware_module);
+
+    const packaging_module = b.createModule(.{
+        .root_source_file = b.path("packaging/packaging.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    addModuleTests(b, test_step, "packaging", packaging_module);
 
     const security_module = b.createModule(.{
         .root_source_file = b.path("security/security.zig"),
@@ -214,6 +236,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "compat", .module = compat_module },
                 .{ .name = "core", .module = core_module },
                 .{ .name = "brand", .module = brand_module },
+                .{ .name = "packaging", .module = packaging_module },
             },
         });
 
