@@ -2,3 +2,22 @@
 .zig-cache/
 zig-out/
 /.tools/
+
+# A contributor's global ignore file can carry patterns that happen to match a
+# directory this repository owns, silently excluding source. Re-including the
+# source trees makes the repository's own layout authoritative regardless of
+# what a personal ignore file says.
+!brand/**
+!compat/**
+!core/**
+!design/**
+!infrastructure/**
+!ipc/**
+!runtimes/**
+!services/**
+!session/**
+!shell/**
+!simulator/**
+!test-vectors/**
+!tests/**
+!tools/**

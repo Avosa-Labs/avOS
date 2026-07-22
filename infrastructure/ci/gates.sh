@@ -79,6 +79,7 @@ run_gate 'format-check' zig build format-check
 run_gate 'build' zig build
 run_gate 'test' zig build test
 run_gate 'test (synthetic brand)' zig build test "-Dbrand=$reference_brand"
+run_gate 'source-tracked' "$repository_root/infrastructure/ci/source-tracked.sh"
 run_gate 'convention-check' zig build convention-check
 run_gate 'brand-check' zig build brand-check
 run_gate 'brand-check (synthetic brand)' zig build brand-check "-Dbrand=$reference_brand"
