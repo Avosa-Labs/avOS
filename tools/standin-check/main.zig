@@ -37,6 +37,7 @@ const production_trees = [_][]const u8{
     "kernel/",
     "media/",
     "networking/",
+    "packaging/",
     "runtimes/",
     "security/",
     "services/",

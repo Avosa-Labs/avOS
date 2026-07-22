@@ -244,8 +244,49 @@ zig build format           # apply formatting
 zig build convention-check # attribution, comment content, naming
 zig build standin-check    # a stand-in on a path a device could execute
 zig build brand-check      # product naming outside the brand layer
+zig build source-repro     # two builds of this source produce one image
 zig build version-lock -- --verify   # pins still match official sources
 zig build fuzz             # deeper decoder exploration
+```
+
+## Build and sign an image
+
+An image is what a device installs: a set of files, a version, and a device
+class, reduced to one digest that a signature covers and the boot chain
+measures.
+
+```sh
+zig build image-build -- --root=. --device-class=reference --version=1.2.3
+```
+
+```text
+image 1.2.3 for reference
+security generation 0
+753 file(s), 2431009 byte(s)
+digest 279fdae3d39ad45b5e31afa33527c162fc572e4db10810da726a0e4a6d13cb2a
+```
+
+The digest carries no timestamp, no builder identity, no host path, and no
+ordering that depends on how a directory happened to be walked. That is what
+`zig build source-repro` checks: two builds of the same source produce one
+image, so a signature says *these bytes follow from this source* rather than
+*a particular machine produced these bytes*.
+
+Signing needs a key file holding a seed as hexadecimal. This tool never writes
+one — a release key a build tool could mint is a release key anyone who can run
+the build tool can mint.
+
+```sh
+zig build image-sign -- --public-key --key=release.seed > release.pub
+zig build image-sign -- --sign --digest=<digest> --key=release.seed
+zig build image-sign -- --verify --digest=<digest> --key=release.pub --signature=<sig>
+```
+
+Change one byte of one file and the digest changes, so the signature stops
+covering it:
+
+```text
+image-sign: the signature does not cover this image
 ```
 
 ## Change the brand
