@@ -5,6 +5,7 @@ const line = @import("compat/zig/line.zig");
 /// tool directory are excluded because they are not authored source.
 const formatted_paths = [_][]const u8{
     "build.zig",
+    "boot",
     "brand",
     "compat",
     "core",
@@ -64,6 +65,12 @@ pub fn build(b: *std.Build) void {
 
     const runtime_android_module = b.createModule(.{
         .root_source_file = b.path("runtimes/android/android.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const boot_module = b.createModule(.{
+        .root_source_file = b.path("boot/boot.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -150,6 +157,8 @@ pub fn build(b: *std.Build) void {
     addModuleTests(b, test_step, "services", services_module);
     addModuleTests(b, test_step, "session", session_module);
     addModuleTests(b, test_step, "storage", storage_module);
+    boot_module.addImport("core", core_module);
+    addModuleTests(b, test_step, "boot", boot_module);
     addModuleTests(b, test_step, "design", design_module);
     addModuleTests(b, test_step, "shell", shell_module);
 
