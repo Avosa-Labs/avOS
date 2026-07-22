@@ -113,6 +113,7 @@ pub fn build(b: *std.Build) void {
     shell_module.addImport("core", core_module);
     shell_module.addImport("design", design_module);
     simulator_module.addImport("core", core_module);
+    simulator_module.addImport("boot", boot_module);
 
     const brand_module = b.createModule(.{
         .root_source_file = b.path("brand/brand.zig"),
@@ -230,6 +231,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "compat", .module = compat_module },
             .{ .name = "core", .module = core_module },
             .{ .name = "simulator", .module = simulator_module },
+            .{ .name = "boot", .module = boot_module },
         },
     });
     const inspector = b.addExecutable(.{ .name = "simulator", .root_module = inspector_module });
