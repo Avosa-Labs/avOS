@@ -10,7 +10,9 @@
 //! cannot satisfy is reported rather than stubbed.
 
 pub const permissions = @import("permissions/permissions.zig");
+pub const bridge = @import("bridge/bridge.zig");
 
 test {
     _ = permissions;
+    _ = bridge;
 }
