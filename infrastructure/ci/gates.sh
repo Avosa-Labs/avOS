@@ -38,15 +38,9 @@ for argument in "$@"; do
     case "$argument" in
         --offline) offline=1 ;;
         --list)
-            printf '%s\n' \
-                'format-check' \
-                'build' \
-                'test' \
-                'test (synthetic brand)' \
-                'brand-check' \
-                'brand-check (synthetic brand)' \
-                'doctor' \
-                'version-lock --verify (network)'
+            # Derived from the gates this script actually runs, so the listing
+            # cannot drift from them the way a hand-written one does.
+            sed -n "s/^run_gate '\\([^']*\\)'.*/\\1/p" "$0"
             exit 0
             ;;
         -h|--help) usage; exit 0 ;;
