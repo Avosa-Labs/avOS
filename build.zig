@@ -268,6 +268,20 @@ pub fn build(b: *std.Build) void {
     });
     addModuleTests(b, test_step, "acceptance", acceptance_module);
 
+    // Recovery is held apart from the acceptance suites because it asks a
+    // different question: not whether a component behaves when the medium
+    // beneath it is sound, but what happens when it is not.
+    const recovery_module = b.createModule(.{
+        .root_source_file = b.path("tests/recovery/recovery.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "core", .module = core_module },
+            .{ .name = "storage", .module = storage_module },
+        },
+    });
+    addModuleTests(b, test_step, "recovery", recovery_module);
+
     // Randomized decoder testing. Runs on every build with a fixed seed so a
     // failure reproduces; the deeper exploratory runs use the compiler's own
     // fuzzer through the `fuzz` step.
