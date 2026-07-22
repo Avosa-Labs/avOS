@@ -6,7 +6,9 @@
 //! invisible one.
 
 pub const attestation = @import("attestation/attestation.zig");
+pub const keystore = @import("keystore/keystore.zig");
 
 test {
     _ = attestation;
+    _ = keystore;
 }
