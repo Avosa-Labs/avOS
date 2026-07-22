@@ -66,9 +66,29 @@ noninteractively.
 | `tools/` | bootstrap, locking, signing, and inspection tools |
 | `docs/` | architecture, security, design, and operations documentation |
 
+## What is demonstrated
+
+The canonical sequence runs end to end, asserted step by step: a human
+authenticates, a request becomes a visible task graph, four agents work
+independent branches with different authority, an unauthorized action is denied
+and recorded, a consequential action is held for a human, approval yields a
+one-time task-bound capability, the approved action executes exactly once, the
+session moves to a second endpoint without repeating it, cancelling the root
+stops what remains and returns memory to baseline, and the execution
+reconstructs from the ledger.
+
+```sh
+zig build simulator -- --scenario=canonical-demo
+```
+
+Read `docs/public/known-limitations.md` before drawing any wider conclusion. It
+states plainly what is not implemented, what is narrower than its name suggests,
+and what has never been measured.
+
 ## Documentation
 
 - `docs/public/architecture-overview.md` — system topology and trust zones
 - `docs/operations/build.md` — compiler support, pinning, and gates
 - `docs/security/threat-model.md` — adversaries, assets, and boundaries
+- `docs/public/known-limitations.md` — what this does not do
 - `docs/decisions/` — architecture decision records
