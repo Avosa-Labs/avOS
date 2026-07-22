@@ -98,6 +98,96 @@ detect_target() {
     printf '%s-%s' "$architecture" "$operating_system"
 }
 
+# Reads one field of a component's archive entry for the given target.
+component_field() {
+    component=$1
+    target=$2
+    field=$3
+    awk -v component="\"$component\"" -v target="\"$target\"" -v field="$field" '
+        $0 ~ "\"name\": " component { in_component = 1 }
+        in_component && $0 ~ "\"target\": " target { found = 1 }
+        found && $0 ~ "\"" field "\":" {
+            line = $0
+            sub(/^[^:]*:[[:space:]]*/, "", line)
+            gsub(/[",]/, "", line)
+            print line
+            exit
+        }
+    ' "$manifest"
+}
+
+component_version() {
+    awk -v component="\"$1\"" '
+        $0 ~ "\"name\": " component { in_component = 1 }
+        in_component && $0 ~ "\"version\":" {
+            line = $0
+            sub(/^[^:]*:[[:space:]]*/, "", line)
+            gsub(/[",]/, "", line)
+            print line
+            exit
+        }
+    ' "$manifest"
+}
+
+# Fetches, verifies, and extracts one pinned component.
+install_component() {
+    name=$1
+    component_target=$2
+    version=$(component_version "$name")
+    [ -n "$version" ] || return 0
+
+    destination="$tool_root/$name-$version"
+    if [ -d "$destination" ]; then
+        say "ok    $name $version already present"
+        return 0
+    fi
+
+    url=$(component_field "$name" "$component_target" source)
+    digest=$(component_field "$name" "$component_target" sha256)
+    if [ -z "$url" ] || [ -z "$digest" ]; then
+        say "note  $name is not pinned for $component_target; skipping"
+        return 0
+    fi
+
+    [ "$offline" -eq 1 ] && fail "$name is not cached and --offline was requested"
+
+    case "$url" in
+        *.zip) suffix=zip ;;
+        *) suffix=tar.xz ;;
+    esac
+    component_archive="$download/$name-$version-$component_target.$suffix"
+
+    if [ ! -f "$component_archive" ]; then
+        say "..    downloading $url"
+        if command -v curl >/dev/null 2>&1; then
+            curl --fail --location --silent --show-error --output "$component_archive.partial" "$url" ||
+                fail "download failed"
+        else
+            wget --quiet --output-document="$component_archive.partial" "$url" || fail "download failed"
+        fi
+        mv "$component_archive.partial" "$component_archive"
+    fi
+
+    observed_digest=$(digest_of "$component_archive")
+    if [ "$observed_digest" != "$digest" ]; then
+        rm -f "$component_archive"
+        fail "digest mismatch for $name
+  expected $digest
+  observed $observed_digest
+The archive was discarded. Nothing was installed."
+    fi
+    say "ok    $name $version digest verified"
+
+    component_staging="$tool_root/staging-$name-$$"
+    rm -rf "$component_staging" && mkdir -p "$component_staging"
+    tar -xf "$component_archive" -C "$component_staging" || fail "extraction failed"
+    component_extracted=$(find "$component_staging" -maxdepth 1 -mindepth 1 -type d | head -n 1)
+    [ -n "$component_extracted" ] || fail "$name archive contained no directory"
+    mv "$component_extracted" "$destination"
+    rm -rf "$component_staging"
+    say "ok    $name installed to $destination"
+}
+
 # Reads one field of the archive entry matching the target from the manifest.
 # The manifest is generated with a fixed shape, so a line-oriented read is
 # sufficient and avoids depending on a JSON tool being installed.
@@ -165,30 +255,24 @@ fi
 say "ok    host target $target"
 say "ok    pinned compiler $version"
 
-if [ -x "$installed/zig" ]; then
-    say "ok    pinned compiler already present at $installed"
-    [ "$check_only" -eq 1 ] && exit 0
-    say ""
-    say "Add it to PATH for this shell:"
-    say "  export PATH=\"$installed:\$PATH\""
-    exit 0
-fi
-
-if [ "$check_only" -eq 1 ]; then
-    fail "pinned compiler is not installed; run bootstrap.sh without --check"
-fi
-
-if [ "$offline" -eq 1 ]; then
-    fail "pinned compiler is not cached and --offline was requested"
-fi
-
 require tar
 mkdir -p "$tool_root"
 download="$tool_root/download"
 mkdir -p "$download"
 archive="$download/zig-$version-$target.tar.xz"
 
-if [ ! -f "$archive" ]; then
+compiler_present=0
+[ -x "$installed/zig" ] && compiler_present=1
+
+if [ "$compiler_present" -eq 1 ]; then
+    say "ok    pinned compiler already present at $installed"
+elif [ "$check_only" -eq 1 ]; then
+    fail "pinned compiler is not installed; run bootstrap.sh without --check"
+elif [ "$offline" -eq 1 ]; then
+    fail "pinned compiler is not cached and --offline was requested"
+fi
+
+if [ "$compiler_present" -eq 0 ] && [ ! -f "$archive" ]; then
     say "..    downloading $archive_url"
     if command -v curl >/dev/null 2>&1; then
         curl --fail --location --silent --show-error --output "$archive.partial" "$archive_url" ||
@@ -201,6 +285,7 @@ if [ ! -f "$archive" ]; then
     mv "$archive.partial" "$archive"
 fi
 
+if [ "$compiler_present" -eq 0 ]; then
 observed=$(digest_of "$archive")
 if [ "$observed" != "$archive_digest" ]; then
     rm -f "$archive"
@@ -225,8 +310,13 @@ mv "$extracted" "$installed"
 rm -rf "$staging"
 
 [ -x "$installed/zig" ] || fail "extracted tree has no zig executable"
+fi
 
-say "ok    installed to $installed"
+# Components are pinned in the same manifest and verified the same way. A
+# component not pinned for this target is skipped rather than fatal, so a host
+# without one still gets a working checkout.
+install_component wasmtime "$target"
+
 say ""
 say "Add it to PATH for this shell:"
 say "  export PATH=\"$installed:\$PATH\""

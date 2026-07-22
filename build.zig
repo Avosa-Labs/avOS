@@ -107,6 +107,24 @@ pub fn build(b: *std.Build) void {
     addModuleTests(b, test_step, "ipc", ipc_module);
     addModuleTests(b, test_step, "runtime-native", runtime_native_module);
     addModuleTests(b, test_step, "services", services_module);
+
+    // The component runtime links a pinned native library. It is built only
+    // when that library is present, so a checkout that has not bootstrapped it
+    // still builds and tests everything else rather than failing wholesale.
+    const wasm_runtime_root = wasmRuntimeRoot(b);
+    if (wasm_runtime_root) |root| {
+        const wasm_module = b.createModule(.{
+            .root_source_file = b.path("runtimes/wasm/wasm.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        wasm_module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{root}) });
+        wasm_module.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/lib", .{root}) });
+        wasm_module.linkSystemLibrary("wasmtime", .{});
+        wasm_module.link_libc = true;
+        wasm_module.addImport("core", core_module);
+        addModuleTests(b, test_step, "runtime-wasm", wasm_module);
+    }
     addModuleTests(b, test_step, "simulator", simulator_module);
 
     for (tools) |tool| {
@@ -157,6 +175,44 @@ pub fn build(b: *std.Build) void {
 
     const format_check = b.addFmt(.{ .paths = &formatted_paths, .check = true });
     b.step("format-check", "Verify formatting without writing").dependOn(&format_check.step);
+}
+
+/// Locates the pinned component runtime, if it has been bootstrapped.
+///
+/// The version comes from the manifest rather than from a constant here, so the
+/// build always links the release the manifest pins and never a stale copy left
+/// in the tool directory.
+fn wasmRuntimeRoot(b: *std.Build) ?[]const u8 {
+    const io = b.graph.io;
+    const gpa = b.allocator;
+
+    const manifest = b.build_root.handle.readFileAlloc(io, "toolchain.lock.json", gpa, .limited(8 * 1024 * 1024)) catch return null;
+    const parsed = std.json.parseFromSlice(std.json.Value, gpa, manifest, .{}) catch return null;
+
+    const components = switch (parsed.value.object.get("components") orelse return null) {
+        .array => |array| array,
+        else => return null,
+    };
+    for (components.items) |entry| {
+        const component = switch (entry) {
+            .object => |object| object,
+            else => continue,
+        };
+        const name = switch (component.get("name") orelse continue) {
+            .string => |value| value,
+            else => continue,
+        };
+        if (!std.mem.eql(u8, name, "wasmtime")) continue;
+        const version = switch (component.get("version") orelse continue) {
+            .string => |value| value,
+            else => continue,
+        };
+        const root = b.fmt(".tools/wasmtime-{s}", .{version});
+        var directory = b.build_root.handle.openDir(io, root, .{}) catch return null;
+        directory.close(io);
+        return root;
+    }
+    return null;
 }
 
 const Tool = struct {

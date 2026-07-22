@@ -47,7 +47,9 @@ jobs:
           # "absent", so it needs real history rather than a detached blob.
           fetch-depth: 1
 
-      - name: Bootstrap the pinned compiler
+      # Installs the pinned compiler and every pinned component, each verified
+      # against the digest recorded in the manifest.
+      - name: Bootstrap the pinned toolchain
         run: tools/bootstrap/bootstrap.sh
 
       # The install location comes from bootstrap itself rather than being

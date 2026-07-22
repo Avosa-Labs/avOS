@@ -1,6 +1,6 @@
 # ADR 0001: WebAssembly component runtime
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-22
 - Affects: trust boundary, dependency, public API
 
@@ -125,22 +125,33 @@ cited as evidence for any number.
 
 ## Verification
 
-Required before this moves from proposed to accepted:
+Every criterion below passes, which is what moved this record to accepted.
 
-- a component denied filesystem, network, clock, randomness, and environment
-  access it did not declare, asserted per resource class
-- a component that never yields, interrupted by epoch and reported as
-  interrupted rather than as completed
-- a trapping component leaving the host operable, with a following component
-  running normally
-- a component exceeding its memory limit stopped at the limit
-- cancellation of the owning task interrupting the component
-- an unsigned or untrusted component package refused under policy
-- shared test vectors covering the host interface, including malformed and
-  adversarial components
+| Criterion | Where it is held |
+| --- | --- |
+| Filesystem, network, clock, randomness, and environment each denied, asserted per resource class | `runtimes/wasm/host/engine.zig` |
+| A component that never yields, interrupted by epoch and reported as interrupted | `runtimes/wasm/host/engine.zig` |
+| A trapping component leaving the host operable, with a following component running normally | `runtimes/wasm/host/engine.zig` |
+| A component exceeding its memory limit stopped at the limit | `runtimes/wasm/host/engine.zig` |
+| Cancellation of the owning task interrupting the component | `runtimes/wasm/host/component.zig` |
+| An unsigned, substituted, or untrusted component package refused | `runtimes/wasm/host/component.zig` |
+| Shared vectors covering the boundary, including malformed and adversarial components | `test-vectors/component/`, run by `runtimes/wasm/host/vectors.zig` |
 
-Until every one of these passes, the WebAssembly runtime is not implemented and
-must not be described as available.
+Denial is by construction rather than by policy: a guest reaches a host
+resource only through an import, and no import is supplied, so a module
+declaring one is refused before instantiation.
+
+Two defects in this adapter were found by these tests and are worth recording,
+because both would have produced a runtime that appeared to work. A store with
+metering enabled begins with no fuel and no epoch deadline, so a caller that
+declined to set either got a guest stopped before its first instruction; both
+are now always armed. And an epoch deadline expressed as the representable
+maximum wraps when added to an epoch that has already advanced, leaving a
+deadline in the past that interrupts every subsequent guest immediately.
+
+The runtime is available on hosts where the pinned library has been
+bootstrapped. A checkout without it builds and tests everything else, and the
+component runtime is simply absent rather than stubbed.
 
 ## Migration
 
