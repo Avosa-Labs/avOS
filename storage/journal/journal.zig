@@ -333,6 +333,44 @@ pub const Writer = struct {
         return writer;
     }
 
+    /// Reopens a journal after a restart, discarding a damaged tail.
+    ///
+    /// The device keeps what verified and drops what did not, then continues
+    /// appending from the sequence after the last intact record. Continuing to
+    /// append past a damaged tail would leave a hole a later replay stops at,
+    /// stranding everything written after the crash.
+    ///
+    /// Returns what recovery found alongside the writer, because a caller that
+    /// cannot tell a clean restart from a truncated one cannot report the
+    /// difference to anyone either.
+    pub fn recover(gpa: std.mem.Allocator, bytes: []const u8) Error!struct {
+        writer: Writer,
+        recovery: Recovery,
+    } {
+        var reader = try Reader.init(bytes);
+        var last_sequence: u64 = 0;
+        var applied: usize = 0;
+        const stopped: ?Error = found: while (true) {
+            const record = reader.next() catch |failure| break :found failure;
+            const present = record orelse break :found null;
+            last_sequence = present.sequence;
+            applied += 1;
+        } else null;
+
+        var writer: Writer = .{ .gpa = gpa, .next_sequence = last_sequence + 1 };
+        writer.bytes.appendSlice(gpa, bytes[0..reader.intact_through]) catch
+            return error.BufferTooSmall;
+
+        return .{
+            .writer = writer,
+            .recovery = .{
+                .applied = applied,
+                .intact_through = reader.intact_through,
+                .stopped_by = stopped,
+            },
+        };
+    }
+
     pub fn deinit(writer: *Writer) void {
         writer.bytes.deinit(writer.gpa);
         writer.* = undefined;
@@ -648,4 +686,91 @@ test "every record kind survives a round trip" {
         const record = (try reader.next()).?;
         try std.testing.expectEqual(expected, record.kind);
     }
+}
+
+test "a journal reopened after a clean shutdown continues where it left off" {
+    const gpa = std.testing.allocator;
+    var first = try Writer.init(gpa);
+    defer first.deinit();
+    _ = try first.append(.task_transition, 1, .fromSeconds(1_000), "running");
+    _ = try first.append(.task_transition, 2, .fromSeconds(1_001), "succeeded");
+
+    var reopened = try Writer.recover(gpa, first.written());
+    defer reopened.writer.deinit();
+
+    try std.testing.expect(reopened.recovery.wasClean());
+    try std.testing.expectEqual(@as(usize, 2), reopened.recovery.applied);
+    try std.testing.expectEqual(@as(u64, 3), try reopened.writer.append(
+        .task_transition,
+        3,
+        .fromSeconds(1_002),
+        "next",
+    ));
+}
+
+test "a damaged tail is dropped and appending resumes after the last intact record" {
+    const gpa = std.testing.allocator;
+    var first = try Writer.init(gpa);
+    defer first.deinit();
+    _ = try first.append(.task_transition, 1, .fromSeconds(1_000), "running");
+    const intact_length = first.written().len;
+    _ = try first.append(.task_transition, 2, .fromSeconds(1_001), "succeeded");
+
+    // A write that stopped part way through the second record.
+    const torn = try gpa.dupe(u8, first.written()[0 .. intact_length + 9]);
+    defer gpa.free(torn);
+
+    var reopened = try Writer.recover(gpa, torn);
+    defer reopened.writer.deinit();
+
+    try std.testing.expect(!reopened.recovery.wasClean());
+    try std.testing.expectEqual(@as(usize, 1), reopened.recovery.applied);
+    try std.testing.expectEqual(intact_length, reopened.writer.written().len);
+
+    // The next record takes the sequence the torn one never completed, so a
+    // later replay finds no gap to stop at.
+    try std.testing.expectEqual(@as(u64, 2), try reopened.writer.append(
+        .task_transition,
+        3,
+        .fromSeconds(1_002),
+        "after the crash",
+    ));
+
+    var collector: Collector = .{ .gpa = gpa };
+    defer collector.deinit();
+    const recovery = try replay(gpa, reopened.writer.written(), &collector, Collector.record);
+    try std.testing.expect(recovery.wasClean());
+    try std.testing.expectEqual(@as(usize, 2), recovery.applied);
+}
+
+test "a journal with no records reopens as an empty one" {
+    const gpa = std.testing.allocator;
+    var empty = try Writer.init(gpa);
+    defer empty.deinit();
+
+    var reopened = try Writer.recover(gpa, empty.written());
+    defer reopened.writer.deinit();
+
+    try std.testing.expect(reopened.recovery.wasClean());
+    try std.testing.expectEqual(@as(u64, 1), try reopened.writer.append(
+        .task_transition,
+        1,
+        .fromSeconds(1_000),
+        "first",
+    ));
+}
+
+test "a journal whose header is damaged does not reopen" {
+    const gpa = std.testing.allocator;
+    var first = try Writer.init(gpa);
+    defer first.deinit();
+    _ = try first.append(.task_transition, 1, .fromSeconds(1_000), "running");
+
+    const damaged = try gpa.dupe(u8, first.written());
+    defer gpa.free(damaged);
+    damaged[0] ^= 0xff;
+
+    // Truncating to a header that does not belong to this format would discard
+    // everything and call it recovery.
+    try std.testing.expectError(error.NotAJournal, Writer.recover(gpa, damaged));
 }
