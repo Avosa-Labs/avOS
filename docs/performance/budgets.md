@@ -95,11 +95,39 @@ everything the system does.
 
 ## Energy and thermal
 
-No budgets. Measuring energy needs hardware instrumentation this project does
-not have, and a figure produced without it would be a guess wearing a number.
+Still no measured budgets, and the reason is unchanged: a power number needs a
+rail sensor or an external meter, and a temperature number needs a real die on a
+real board. This project has neither, and a figure produced without them would
+be a guess wearing a number.
 
-These are Phase A exit criteria and must be filled in before that exit is
-claimed. Stating them as absent is more useful than stating them as unknown.
+What *has* been built is the boundary those measurements arrive through, so that
+the day hardware exists the numbers have somewhere to go and the policy that
+consumes them is already tested. `hardware/thermal/` holds the response ladder —
+ease, throttle, protect, shut down — with hysteresis, per-zone thresholds, and
+the rule that the device is as throttled as its hottest zone. All of that is
+logic, and all of it is tested. None of it invents a temperature: readings come
+through a `Sensor` interface, and the only implementation on a host without a
+sensor is a test sensor that reports exactly what a test sets.
+
+| Measurement | Budget | Basis | Status |
+| --- | --- | --- | --- |
+| Idle drain, screen off | — | A day of standby is the floor a phone is judged against. | not measured — needs a power rail sensor |
+| Active agent task, one minute | — | The unit of work a person waits through; its cost sets how many run before the battery notices. | not measured — needs a power rail sensor |
+| Skin temperature under sustained load | 43 °C | Above roughly this a surface held against skin becomes a burn risk over time; it is a safety limit, not a comfort one. | not measured — needs board instrumentation |
+| Compute die under sustained load | — | Sets where throttling must begin to hold the skin limit. | not measured — needs board instrumentation |
+| Time to first throttle under a fixed load | — | Too soon wastes performance; too late lets the skin limit be crossed. | not measured — needs board instrumentation |
+
+The one number with a value is the skin-temperature limit, and it is a value
+because it is a safety threshold set by human physiology rather than a figure
+measured from this device. It bounds what the thermal policy must hold, and the
+policy holds it in `hardware/thermal/`. Whether a given board's cooling actually
+keeps the die below the point where the skin limit is crossed is the thing that
+awaits instrumentation.
+
+**This remains a Phase A exit criterion and is not satisfied.** The interface and
+the policy are done; the measurements are not, and saying so is more useful than
+a table of plausible numbers nobody metered. Stating what is absent, and why, and
+what would close it, is the honest form of this row until a board exists.
 
 ## What measuring changed
 

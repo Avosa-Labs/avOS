@@ -68,6 +68,14 @@ readable by anything with access to process memory.
 verifies, runs, and is then compromised measures identically to one that was
 not, so an attestation says nothing about what happened after boot.
 
+**Measured energy and thermal figures.** The thermal *policy* exists and is
+tested — the response ladder, hysteresis, per-zone thresholds, and the rule that
+the device follows its hottest zone all live in `hardware/thermal/`. The
+*numbers* do not: a power reading needs a rail sensor and a temperature reading
+needs a real die, and this project has neither. No implementation reports a
+plausible temperature on a host without a sensor, so nothing here can be
+mistaken for a measurement that was never taken. See `docs/performance/budgets.md`.
+
 **Persistence and crash recovery.** The task state machine is designed to
 recover from durable state, and there is no durable state yet. A restart loses
 everything.

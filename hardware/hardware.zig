@@ -7,7 +7,9 @@
 //! tested.
 
 pub const secure_element = @import("secure-element/secure_element.zig");
+pub const thermal = @import("thermal/thermal.zig");
 
 test {
     _ = secure_element;
+    _ = thermal;
 }
