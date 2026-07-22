@@ -13,8 +13,12 @@ set -eu
 repository_root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repository_root"
 
-# Trees the repository authors. Generated and vendored trees are excluded.
-authored='brand compat core design infrastructure ipc runtimes services session shell simulator test-vectors tests tools'
+# Trees the repository authors, derived from the directories that exist rather
+# than listed by hand. A hand-maintained list silently stops covering a
+# directory added after it was written, which is the failure this gate exists to
+# catch.
+authored=$(find . -maxdepth 1 -type d ! -name '.*' ! -name out ! -name zig-out \
+    -exec basename {} \; | sort)
 
 # The specification is deliberately local-only and is expected to be untracked.
 specification='docs/PLATFORM_SPEC.md'
