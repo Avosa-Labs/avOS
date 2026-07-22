@@ -15,6 +15,7 @@ const formatted_paths = [_][]const u8{
     "session",
     "shell",
     "simulator",
+    "storage",
     "tests",
     "tools",
 };
@@ -67,6 +68,12 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const storage_module = b.createModule(.{
+        .root_source_file = b.path("storage/storage.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const session_module = b.createModule(.{
         .root_source_file = b.path("session/session.zig"),
         .target = target,
@@ -95,6 +102,7 @@ pub fn build(b: *std.Build) void {
     runtime_android_module.addImport("core", core_module);
     services_module.addImport("core", core_module);
     session_module.addImport("core", core_module);
+    storage_module.addImport("core", core_module);
     shell_module.addImport("core", core_module);
     shell_module.addImport("design", design_module);
     simulator_module.addImport("core", core_module);
@@ -141,6 +149,7 @@ pub fn build(b: *std.Build) void {
     addModuleTests(b, test_step, "runtime-android", runtime_android_module);
     addModuleTests(b, test_step, "services", services_module);
     addModuleTests(b, test_step, "session", session_module);
+    addModuleTests(b, test_step, "storage", storage_module);
     addModuleTests(b, test_step, "design", design_module);
     addModuleTests(b, test_step, "shell", shell_module);
 
@@ -220,6 +229,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "brand", .module = brand_module },
             .{ .name = "runtime_android", .module = runtime_android_module },
             .{ .name = "session", .module = session_module },
+            .{ .name = "storage", .module = storage_module },
         },
     });
     addModuleTests(b, test_step, "acceptance", acceptance_module);

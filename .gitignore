@@ -4,20 +4,43 @@ zig-out/
 /.tools/
 
 # A contributor's global ignore file can carry patterns that happen to match a
-# directory this repository owns, silently excluding source. Re-including the
-# source trees makes the repository's own layout authoritative regardless of
-# what a personal ignore file says.
+# directory this repository owns, silently excluding source. Re-including every
+# tree makes the repository's own layout authoritative regardless of what a
+# personal ignore file says. Kept in step with the tree by the source-tracked
+# gate, which derives its list from the directories that exist.
+
+!agents/**
+!applications/**
+!boot/**
 !brand/**
+!communications/**
 !compat/**
 !core/**
 !design/**
+!emulator/**
+!examples/**
+!graphics/**
+!hardware/**
 !infrastructure/**
+!input/**
 !ipc/**
+!kernel/**
+!media/**
+!networking/**
+!packaging/**
 !runtimes/**
+!sdk/**
+!security/**
 !services/**
 !session/**
 !shell/**
 !simulator/**
+!storage/**
+!store/**
 !test-vectors/**
 !tests/**
 !tools/**
+
+# Documentation, except the specification, which is local-only for now.
+!docs/**
+/docs/PLATFORM_SPEC.md
