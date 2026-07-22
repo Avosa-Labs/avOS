@@ -26,6 +26,11 @@ pub const State = union(enum) {
     halted: struct {
         failure: recovery.Failure,
         outcome: recovery.Outcome,
+        /// Something short a person can read out to support. Empty when the
+        /// device has nothing to identify the failure by, in which case the
+        /// screen must not ask for one: telling someone to quote a code that
+        /// is not shown sends them into a support call already stuck.
+        code: []const u8 = "",
     },
     /// A recovery image is running and doing something that takes time.
     recovering: struct {
@@ -104,7 +109,11 @@ pub fn render(state: State) Surface {
         .halted => |halted| {
             surface.write(recovery.explain(halted.outcome, halted.failure));
             surface.blank();
-            surface.write(nextStep(halted.outcome));
+            surface.write(nextStep(halted.outcome, halted.code.len > 0));
+            if (halted.outcome == .halt and halted.code.len > 0) {
+                surface.blank();
+                surface.write(halted.code);
+            }
         },
         .recovering => |progress| {
             surface.write("repairing this device");
@@ -122,14 +131,17 @@ pub fn render(state: State) Surface {
 ///
 /// Separate from the explanation of what went wrong: a person reading a failure
 /// message needs to know both, and the two answer different questions.
-fn nextStep(outcome: recovery.Outcome) []const u8 {
+fn nextStep(outcome: recovery.Outcome, has_code: bool) []const u8 {
     return switch (outcome) {
         .boot_recovery_image => "this will take a few minutes and does not erase your data",
         .previous_slot => "the device will start normally in a moment",
         // No instruction to retry: retrying does not change what failed, and
         // telling someone to try again when it cannot help wastes their time
         // before they seek help that can.
-        .halt => "contact support with the code shown on this screen",
+        .halt => if (has_code)
+            "contact support and quote the code below"
+        else
+            "contact support; this device cannot start on its own",
     };
 }
 
@@ -155,10 +167,36 @@ test "a halted device says what happened and what to do" {
     const surface = render(.{ .halted = .{
         .failure = .signature_rejected,
         .outcome = .halt,
+        .code = "8f21c4a0",
     } });
 
     try std.testing.expect(surface.contains("could not be verified"));
     try std.testing.expect(surface.contains("support"));
+    try std.testing.expect(surface.contains("8f21c4a0"));
+}
+
+test "a device with no code does not ask for one" {
+    // Telling someone to quote a code that is not shown sends them into a
+    // support call already stuck.
+    const surface = render(.{ .halted = .{
+        .failure = .signature_rejected,
+        .outcome = .halt,
+    } });
+    try std.testing.expect(surface.contains("support"));
+    try std.testing.expect(!surface.contains("code"));
+}
+
+test "a code is shown only where it can be used" {
+    // Recovery and the previous slot both continue on their own, so a code
+    // would be a number with nothing to do with what happens next.
+    for ([_]recovery.Outcome{ .boot_recovery_image, .previous_slot }) |outcome| {
+        const surface = render(.{ .halted = .{
+            .failure = .signature_rejected,
+            .outcome = outcome,
+            .code = "8f21c4a0",
+        } });
+        try std.testing.expect(!surface.contains("8f21c4a0"));
+    }
 }
 
 test "the surface never offers to continue anyway" {
@@ -190,7 +228,11 @@ test "every state renders something a person can read" {
     states[1] = .{ .recovering = .{ .progress = 0 } };
     var index: usize = 2;
     for ([_]recovery.Outcome{ .boot_recovery_image, .previous_slot, .halt }) |outcome| {
-        states[index] = .{ .halted = .{ .failure = .signature_rejected, .outcome = outcome } };
+        states[index] = .{ .halted = .{
+            .failure = .signature_rejected,
+            .outcome = outcome,
+            .code = "8f21c4a0",
+        } };
         index += 1;
     }
 
