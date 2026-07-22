@@ -17,6 +17,7 @@ const simulator = @import("simulator");
 
 const canonical = simulator.canonical;
 const boot_scenario = simulator.boot_scenario;
+const rollback_scenario = simulator.rollback_scenario;
 const Host = simulator.host.Host;
 
 const Options = struct {
@@ -28,8 +29,10 @@ const Options = struct {
     fault: boot_scenario.Fault = .none,
     /// What the device has to fall back on when a boot stops.
     available: boot_scenario.Available = .{},
+    /// What the new image does, for the rollback scenario.
+    outcome: rollback_scenario.Outcome = .hangs_on_start,
 
-    const Scenario = enum { canonical_demo, boot };
+    const Scenario = enum { canonical_demo, boot, rollback };
     const Format = enum { text, json };
 };
 
@@ -71,6 +74,18 @@ pub fn main(init: std.process.Init) !u8 {
         // than whether it booted. Exiting non-zero on a demonstrated refusal
         // would call the correct outcome a failure.
         return if (bootBehavedCorrectly(report)) 0 else 1;
+    }
+
+    if (options.scenario == .rollback) {
+        const report = try rollback_scenario.run(options.outcome);
+        switch (options.format) {
+            .text => try renderRollbackText(out, report),
+            .json => try renderRollbackJson(out, report),
+        }
+        try out.flush();
+        // The device must be bootable at every step, whatever the outcome. That
+        // is the property, not whether the update committed.
+        return if (report.never_unbootable) 0 else 1;
     }
 
     var host: Host = undefined;
@@ -172,6 +187,70 @@ fn renderText(
     } else {
         try out.writeAll("\nsimulator: the run did not meet its acceptance criteria\n");
     }
+}
+
+/// Renders an update the way an owner lives through it: what the device would
+/// boot at each step, and where it ends up.
+fn renderRollbackText(out: *std.Io.Writer, report: rollback_scenario.Report) !void {
+    try out.print("update ({s})\n\n", .{@tagName(report.outcome)});
+
+    try out.writeAll("steps\n");
+    for (report.steps[0..report.taken]) |step| {
+        try out.print("  {s: <34}  would boot {s: <10}  {s}\n", .{
+            step.label,
+            @tagName(step.boot_slot),
+            if (step.bootable) "bootable" else "UNBOOTABLE",
+        });
+    }
+
+    if (report.refused) |reason| {
+        try out.print("\ninstall refused: {s}\n", .{reason});
+    }
+
+    try out.print("\nrunning version {d}.{d}  ({s})\n", .{
+        report.running_major,
+        report.running_minor,
+        if (report.committed) "update kept" else "update not kept",
+    });
+    try out.print("the device was bootable at every step: {s}\n", .{
+        if (report.never_unbootable) "yes" else "NO",
+    });
+}
+
+fn renderRollbackJson(out: *std.Io.Writer, report: rollback_scenario.Report) !void {
+    var stringify: std.json.Stringify = .{ .writer = out, .options = .{ .whitespace = .indent_2 } };
+    try stringify.beginObject();
+    try stringify.objectField("outcome");
+    try stringify.write(@tagName(report.outcome));
+    try stringify.objectField("committed");
+    try stringify.write(report.committed);
+    try stringify.objectField("never_unbootable");
+    try stringify.write(report.never_unbootable);
+    try stringify.objectField("running_version");
+    var version_buffer: [32]u8 = undefined;
+    try stringify.write(try std.fmt.bufPrint(&version_buffer, "{d}.{d}", .{
+        report.running_major,
+        report.running_minor,
+    }));
+    if (report.refused) |reason| {
+        try stringify.objectField("refused");
+        try stringify.write(reason);
+    }
+    try stringify.objectField("steps");
+    try stringify.beginArray();
+    for (report.steps[0..report.taken]) |step| {
+        try stringify.beginObject();
+        try stringify.objectField("label");
+        try stringify.write(step.label);
+        try stringify.objectField("boot_slot");
+        try stringify.write(@tagName(step.boot_slot));
+        try stringify.objectField("bootable");
+        try stringify.write(step.bootable);
+        try stringify.endObject();
+    }
+    try stringify.endArray();
+    try stringify.endObject();
+    try out.writeByte('\n');
 }
 
 /// Whether the device did what it must, whatever the fault was.
@@ -348,6 +427,12 @@ fn parseArguments(
                 try err.print("simulator: unknown fault '{s}'\n", .{value});
                 return error.InvalidArguments;
             };
+        } else if (std.mem.startsWith(u8, argument, "--outcome=")) {
+            const value = argument["--outcome=".len..];
+            options.outcome = parseOutcome(value) orelse {
+                try err.print("simulator: unknown outcome '{s}'\n", .{value});
+                return error.InvalidArguments;
+            };
         } else if (std.mem.eql(u8, argument, "--no-recovery-image")) {
             options.available.recovery_image_verified = false;
         } else if (std.mem.eql(u8, argument, "--no-previous-slot")) {
@@ -366,6 +451,16 @@ fn parseArguments(
 fn parseScenario(value: []const u8) ?Options.Scenario {
     if (std.mem.eql(u8, value, "canonical-demo")) return .canonical_demo;
     return std.meta.stringToEnum(Options.Scenario, value);
+}
+
+/// Accepts an outcome name with either hyphens or underscores.
+fn parseOutcome(value: []const u8) ?rollback_scenario.Outcome {
+    var normalized: [32]u8 = undefined;
+    if (value.len > normalized.len) return null;
+    for (value, 0..) |character, index| {
+        normalized[index] = if (character == '-') '_' else character;
+    }
+    return std.meta.stringToEnum(rollback_scenario.Outcome, normalized[0..value.len]);
 }
 
 /// Accepts a fault name with either hyphens or underscores, because a person
@@ -388,13 +483,19 @@ fn writeUsage(out: *std.Io.Writer) !void {
         \\the run met its acceptance criteria.
         \\
         \\Options:
-        \\  --scenario=<name>  canonical-demo or boot (default: canonical-demo)
+        \\  --scenario=<name>  canonical-demo, boot, or rollback
+        \\                     (default: canonical-demo)
         \\
         \\Boot scenario options:
         \\  --fault=<name>       none, tampered-bootloader, tampered-control-plane,
         \\                       or downgraded-kernel (default: none)
         \\  --no-recovery-image  the recovery image does not verify
         \\  --no-previous-slot   there is no slot to fall back to
+        \\
+        \\Rollback scenario options:
+        \\  --outcome=<name>     boots-cleanly, hangs-on-start,
+        \\                       is-a-downgrade, or is-corrupt
+        \\                       (default: hangs-on-start)
         \\
         \\  --seed=<number>    Identifier seed; the same seed replays exactly
         \\  --format=text|json Output format (default: text)
@@ -487,4 +588,20 @@ test "a refusal is a correct outcome, not a failed run" {
 
 test "the boot scenario is reachable by name" {
     try std.testing.expectEqual(Options.Scenario.boot, parseScenario("boot").?);
+}
+
+test "an outcome name is accepted with hyphens or underscores" {
+    try std.testing.expectEqual(
+        rollback_scenario.Outcome.hangs_on_start,
+        parseOutcome("hangs-on-start").?,
+    );
+    try std.testing.expectEqual(
+        rollback_scenario.Outcome.is_a_downgrade,
+        parseOutcome("is_a_downgrade").?,
+    );
+    try std.testing.expectEqual(@as(?rollback_scenario.Outcome, null), parseOutcome("nonsense"));
+}
+
+test "the rollback scenario is reachable by name" {
+    try std.testing.expectEqual(Options.Scenario.rollback, parseScenario("rollback").?);
 }
