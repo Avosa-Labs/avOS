@@ -234,6 +234,27 @@ pub fn build(b: *std.Build) void {
     });
     addModuleTests(b, test_step, "acceptance", acceptance_module);
 
+    // Randomized decoder testing. Runs on every build with a fixed seed so a
+    // failure reproduces; the deeper exploratory runs use the compiler's own
+    // fuzzer through the `fuzz` step.
+    const fuzz_module = b.createModule(.{
+        .root_source_file = b.path("tests/fuzz/fuzz.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "core", .module = core_module },
+            .{ .name = "ipc", .module = ipc_module },
+            .{ .name = "storage", .module = storage_module },
+            .{ .name = "session", .module = session_module },
+        },
+    });
+    addModuleTests(b, test_step, "fuzz", fuzz_module);
+
+    const fuzz_tests = b.addTest(.{ .name = "fuzz-explore", .root_module = fuzz_module });
+    const run_fuzz = b.addRunArtifact(fuzz_tests);
+    if (b.args) |forwarded| run_fuzz.addArgs(forwarded);
+    b.step("fuzz", "Explore the decoders with the compiler's fuzzer").dependOn(&run_fuzz.step);
+
     const format = b.addFmt(.{ .paths = &formatted_paths });
     b.step("format", "Apply canonical formatting").dependOn(&format.step);
 
