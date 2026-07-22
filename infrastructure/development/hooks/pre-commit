@@ -1,8 +1,9 @@
 #!/usr/bin/env sh
-# Refuses a commit that would introduce a convention or brand violation.
+# Refuses a commit that would introduce a convention violation, a brand leak, or
+# a stand-in on a production path.
 #
-# These two checks are fast and catch what is expensive to remove from history.
-# The full gate set runs separately; this hook is not a substitute for it.
+# These three checks are fast and catch what is expensive to remove from
+# history. The full gate set runs separately; this hook is not a substitute.
 
 set -eu
 
@@ -21,5 +22,10 @@ zig build convention-check || {
 
 zig build brand-check || {
     printf '\npre-commit: product naming outside the brand layer; commit refused\n' >&2
+    exit 1
+}
+
+zig build standin-check || {
+    printf '\npre-commit: a stand-in reaches production code; commit refused\n' >&2
     exit 1
 }

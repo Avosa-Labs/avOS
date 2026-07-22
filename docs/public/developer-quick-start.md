@@ -242,6 +242,7 @@ one.
 zig build format-check     # formatting, no writes
 zig build format           # apply formatting
 zig build convention-check # attribution, comment content, naming
+zig build standin-check    # a stand-in on a path a device could execute
 zig build brand-check      # product naming outside the brand layer
 zig build version-lock -- --verify   # pins still match official sources
 zig build fuzz             # deeper decoder exploration
