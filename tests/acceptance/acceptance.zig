@@ -6,7 +6,9 @@
 //! nothing else uses.
 
 pub const agent_shell = @import("agent_shell.zig");
+pub const android_compatibility = @import("android_compatibility.zig");
 
 test {
     _ = agent_shell;
+    _ = android_compatibility;
 }
