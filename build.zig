@@ -12,6 +12,7 @@ const formatted_paths = [_][]const u8{
     "ipc",
     "runtimes",
     "services",
+    "session",
     "shell",
     "simulator",
     "tests",
@@ -66,6 +67,12 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const session_module = b.createModule(.{
+        .root_source_file = b.path("session/session.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const services_module = b.createModule(.{
         .root_source_file = b.path("services/services.zig"),
         .target = target,
@@ -87,6 +94,7 @@ pub fn build(b: *std.Build) void {
     runtime_native_module.addImport("core", core_module);
     runtime_android_module.addImport("core", core_module);
     services_module.addImport("core", core_module);
+    session_module.addImport("core", core_module);
     shell_module.addImport("core", core_module);
     shell_module.addImport("design", design_module);
     simulator_module.addImport("core", core_module);
@@ -132,6 +140,7 @@ pub fn build(b: *std.Build) void {
     addModuleTests(b, test_step, "runtime-native", runtime_native_module);
     addModuleTests(b, test_step, "runtime-android", runtime_android_module);
     addModuleTests(b, test_step, "services", services_module);
+    addModuleTests(b, test_step, "session", session_module);
     addModuleTests(b, test_step, "design", design_module);
     addModuleTests(b, test_step, "shell", shell_module);
 
