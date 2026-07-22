@@ -12,8 +12,10 @@
 //! would become the most valuable target on the device while adding nothing to
 //! the explanation it exists to give.
 //!
-//! Appends are amortized constant time. Recording is on the path of every
-//! privileged operation, so it cannot be proportional to history.
+//! Appending is bounded, not merely amortized. Recording sits on the path of
+//! every privileged operation, so its cost must not depend on how much history
+//! precedes it — an append that occasionally copies the whole ledger is a
+//! latency spike that grows the longer the system runs.
 
 const std = @import("std");
 const identity = @import("../identity/identity.zig");
@@ -162,17 +164,39 @@ pub const Record = struct {
     parent: identity.AuditEventId = .none,
 };
 
+/// How many events one segment holds.
+///
+/// The ledger grows by adding segments rather than by growing one array,
+/// because growing an array copies every event already in it. On a path every
+/// privileged operation takes, that copy is a latency spike proportional to the
+/// whole history — the longer the system runs, the worse it gets.
+const segment_capacity: usize = 1024;
+
 /// Append-only record of privileged activity.
 ///
-/// Ownership: the ledger owns its events and the target-kind strings it copies.
-/// `deinit` releases both. Events are never mutated after append and never
-/// removed, so a reader holding an index sees a stable record.
+/// Ownership: the ledger owns its segments and the target-kind strings it
+/// copies. `deinit` releases both. Events are never mutated after append and
+/// never removed, so a reader holding an index sees a stable record.
+///
+/// Appending is bounded rather than merely amortized: an event is written into
+/// a segment that already exists, or into a newly allocated one, and nothing
+/// already recorded is touched either way.
 pub const Ledger = struct {
     gpa: std.mem.Allocator,
     ids: *identity.Source,
     clock: time.Clock,
-    events: std.ArrayList(Event) = .empty,
-    owned_text: std.ArrayList([]const u8) = .empty,
+    /// Segments in order. The index grows, but a thousand times less often and
+    /// copying only pointers.
+    segments: std.ArrayList([]Event) = .empty,
+    /// Events written into the final segment.
+    filled_in_last: usize = 0,
+    total: usize = 0,
+    /// Target kinds, stored once each.
+    ///
+    /// A ledger records the same few kinds over and over. Copying the string
+    /// per event costs an allocation on the recording path and stores the same
+    /// bytes thousands of times.
+    kinds: std.StringHashMapUnmanaged(void) = .empty,
     next_sequence: u64 = 1,
 
     pub fn init(gpa: std.mem.Allocator, ids: *identity.Source, clock: time.Clock) Ledger {
@@ -180,10 +204,40 @@ pub const Ledger = struct {
     }
 
     pub fn deinit(ledger: *Ledger) void {
-        for (ledger.owned_text.items) |text| ledger.gpa.free(text);
-        ledger.owned_text.deinit(ledger.gpa);
-        ledger.events.deinit(ledger.gpa);
+        var kinds = ledger.kinds.keyIterator();
+        while (kinds.next()) |kind| ledger.gpa.free(kind.*);
+        ledger.kinds.deinit(ledger.gpa);
+        for (ledger.segments.items) |segment| ledger.gpa.free(segment);
+        ledger.segments.deinit(ledger.gpa);
         ledger.* = undefined;
+    }
+
+    /// Returns the ledger's single copy of a target kind, storing it the first
+    /// time it is seen.
+    fn internKind(ledger: *Ledger, kind: []const u8) ![]const u8 {
+        if (kind.len == 0) return "";
+        if (ledger.kinds.getKey(kind)) |existing| return existing;
+
+        const owned = try ledger.gpa.dupe(u8, kind);
+        errdefer ledger.gpa.free(owned);
+        try ledger.kinds.put(ledger.gpa, owned, {});
+        return owned;
+    }
+
+    /// Writes one event into the ledger's storage.
+    ///
+    /// Allocates a segment only when the last one is full, so the cost of an
+    /// append does not depend on how much history precedes it.
+    fn place(ledger: *Ledger, event: Event) !void {
+        if (ledger.segments.items.len == 0 or ledger.filled_in_last == segment_capacity) {
+            const segment = try ledger.gpa.alloc(Event, segment_capacity);
+            errdefer ledger.gpa.free(segment);
+            try ledger.segments.append(ledger.gpa, segment);
+            ledger.filled_in_last = 0;
+        }
+        ledger.segments.items[ledger.segments.items.len - 1][ledger.filled_in_last] = event;
+        ledger.filled_in_last += 1;
+        ledger.total += 1;
     }
 
     /// Appends an event and returns its identifier.
@@ -194,16 +248,9 @@ pub const Ledger = struct {
     pub fn append(ledger: *Ledger, record: Record) !identity.AuditEventId {
         const id = ledger.ids.next(identity.AuditEventId);
 
-        const target_kind = if (record.target_kind.len == 0)
-            ""
-        else blk: {
-            const copy = try ledger.gpa.dupe(u8, record.target_kind);
-            errdefer ledger.gpa.free(copy);
-            try ledger.owned_text.append(ledger.gpa, copy);
-            break :blk copy;
-        };
+        const target_kind = try ledger.internKind(record.target_kind);
 
-        try ledger.events.append(ledger.gpa, .{
+        try ledger.place(.{
             .id = id,
             .sequence = ledger.next_sequence,
             .timestamp = ledger.clock.wall(),
@@ -226,16 +273,20 @@ pub const Ledger = struct {
     }
 
     pub fn count(ledger: Ledger) usize {
-        return ledger.events.items.len;
+        return ledger.total;
     }
 
+    /// The event at `index`, in the order recorded.
+    ///
+    /// Constant time: the segment and the offset within it are both arithmetic.
     pub fn at(ledger: Ledger, index: usize) ?Event {
-        if (index >= ledger.events.items.len) return null;
-        return ledger.events.items[index];
+        if (index >= ledger.total) return null;
+        return ledger.segments.items[index / segment_capacity][index % segment_capacity];
     }
 
     pub fn find(ledger: Ledger, id: identity.AuditEventId) ?Event {
-        for (ledger.events.items) |event| {
+        for (0..ledger.total) |index| {
+            const event = ledger.at(index).?;
             if (event.id.eql(id)) return event;
         }
         return null;
@@ -251,7 +302,8 @@ pub const Ledger = struct {
     ) ![]Event {
         var collected: std.ArrayList(Event) = .empty;
         errdefer collected.deinit(gpa);
-        for (ledger.events.items) |event| {
+        for (0..ledger.total) |index| {
+            const event = ledger.at(index).?;
             if (event.task.eql(task)) try collected.append(gpa, event);
         }
         return collected.toOwnedSlice(gpa);
@@ -265,7 +317,8 @@ pub const Ledger = struct {
     ) ![]Event {
         var collected: std.ArrayList(Event) = .empty;
         errdefer collected.deinit(gpa);
-        for (ledger.events.items) |event| {
+        for (0..ledger.total) |index| {
+            const event = ledger.at(index).?;
             if (event.actor.eql(actor)) try collected.append(gpa, event);
         }
         return collected.toOwnedSlice(gpa);
@@ -275,7 +328,8 @@ pub const Ledger = struct {
     pub fn denials(ledger: Ledger, gpa: std.mem.Allocator) ![]Event {
         var collected: std.ArrayList(Event) = .empty;
         errdefer collected.deinit(gpa);
-        for (ledger.events.items) |event| {
+        for (0..ledger.total) |index| {
+            const event = ledger.at(index).?;
             if (event.outcome == .denied) try collected.append(gpa, event);
         }
         return collected.toOwnedSlice(gpa);
@@ -283,8 +337,8 @@ pub const Ledger = struct {
 
     /// Whether anything recorded here left the device.
     pub fn anyDataLeftDevice(ledger: Ledger) bool {
-        for (ledger.events.items) |event| {
-            if (event.data_movement == .left_device) return true;
+        for (0..ledger.total) |index| {
+            if (ledger.at(index).?.data_movement == .left_device) return true;
         }
         return false;
     }
@@ -294,8 +348,8 @@ pub const Ledger = struct {
     /// A ledger that fails this has lost events, whatever else it contains.
     pub fn verifySequence(ledger: Ledger) bool {
         var expected: u64 = 1;
-        for (ledger.events.items) |event| {
-            if (event.sequence != expected) return false;
+        for (0..ledger.total) |index| {
+            if (ledger.at(index).?.sequence != expected) return false;
             expected += 1;
         }
         return true;
@@ -315,7 +369,7 @@ pub const Ledger = struct {
         var current = id;
         // The chain cannot be longer than the ledger, which bounds the walk
         // even if a parent reference were ever to form a cycle.
-        var remaining = ledger.events.items.len + 1;
+        var remaining = ledger.total + 1;
         while (!current.isNone() and remaining > 0) : (remaining -= 1) {
             const event = ledger.find(current) orelse break;
             try reversed.append(gpa, event);
@@ -388,8 +442,9 @@ test "a truncated ledger fails sequence verification" {
         });
     }
 
-    // Removing a middle event leaves a gap that verification must notice.
-    _ = fixture.ledger.events.orderedRemove(1);
+    // Renumbering an event leaves a gap that verification must notice, the way
+    // a lost record would.
+    fixture.ledger.segments.items[0][1].sequence = 99;
     try std.testing.expect(!fixture.ledger.verifySequence());
 }
 
@@ -625,7 +680,7 @@ test "a chain walk terminates even if a parent reference forms a cycle" {
         .parent = first,
     });
     // Forge a cycle directly in storage; the walk must still terminate.
-    fixture.ledger.events.items[0].parent = second;
+    fixture.ledger.segments.items[0][0].parent = second;
 
     const chain = try fixture.ledger.causalChain(gpa, second);
     defer gpa.free(chain);

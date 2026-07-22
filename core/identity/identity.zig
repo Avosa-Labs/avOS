@@ -66,8 +66,20 @@ pub const ApprovalId = Identifier("approval");
 /// exactly, while a real host requires unpredictable ones so a holder cannot
 /// guess an identifier it was never given. Both are the same type with
 /// different seeding, so no domain code branches on which is in use.
+/// Identifiers drawn from the generator per refill.
+const buffer_length: usize = 64;
+
 pub const Source = struct {
     state: std.Random.DefaultCsprng,
+    /// Identifiers drawn in advance.
+    ///
+    /// The generator is asked for a block at a time rather than once per
+    /// identifier. Identity is issued on the path of every privileged
+    /// operation, and a cipher invocation per issue makes that path cost more
+    /// than the operation it identifies. The generator, the entropy, and the
+    /// unpredictability are unchanged; only the number of calls is.
+    buffered: [buffer_length]u128 = undefined,
+    remaining: usize = 0,
 
     /// Deterministic source. Two sources created with the same seed issue the
     /// same sequence, which is what makes a replayed scenario comparable.
@@ -90,11 +102,18 @@ pub const Source = struct {
     /// Never returns `none`: the reserved zero value would otherwise compare
     /// equal to an uninitialized field.
     pub fn next(source: *Source, comptime Id: type) Id {
-        var random = source.state.random();
         while (true) {
-            const value = random.int(u128);
+            if (source.remaining == 0) source.refill();
+            source.remaining -= 1;
+            const value = source.buffered[source.remaining];
             if (value != 0) return .{ .value = value };
         }
+    }
+
+    fn refill(source: *Source) void {
+        var random = source.state.random();
+        random.bytes(std.mem.sliceAsBytes(source.buffered[0..]));
+        source.remaining = buffer_length;
     }
 };
 
