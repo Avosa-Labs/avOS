@@ -398,8 +398,8 @@ test "cancellation cost follows the subtree, not the whole graph" {
     // exists elsewhere on the host. This is a shape check rather than a
     // threshold: what matters is that the second figure does not track the
     // first.
-    var small = try cancellationCost(gpa, 8, 0);
-    var with_unrelated = try cancellationCost(gpa, 8, 2_000);
+    var small = try fastestOf(gpa, 8, 0, cancellationCost);
+    var with_unrelated = try fastestOf(gpa, 8, 2_000, cancellationCost);
 
     // Allow generous headroom; the assertion is that unrelated tasks do not
     // multiply the cost, not that the two are identical.
@@ -455,8 +455,8 @@ fn cancellationCost(gpa: std.mem.Allocator, descendants: usize, unrelated: usize
 test "journal replay cost is proportional to what it replays" {
     const gpa = std.testing.allocator;
 
-    const small = try replayCost(gpa, 100);
-    const large = try replayCost(gpa, 1_000);
+    const small = try fastestOf(gpa, 100, 0, replayOf);
+    const large = try fastestOf(gpa, 1_000, 0, replayOf);
 
     // Ten times the records should cost roughly ten times as much, not a
     // hundred. Generous headroom, because the assertion is about the shape.
@@ -466,6 +466,38 @@ test "journal replay cost is proportional to what it replays" {
         "  ok    journal replay                       100 records {d} ns   1000 records {d} ns\n",
         .{ small, large },
     );
+}
+
+/// How many times a shape check is repeated.
+///
+/// A single reading is a reading of whatever else the machine was doing at that
+/// moment. Shared runners interleave other work, and a shape check that fails
+/// on one unlucky sample reports a scheduling hiccup as a regression, which
+/// costs more attention than it ever saves.
+const repetitions: usize = 7;
+
+/// The fastest of several readings.
+///
+/// The minimum is the right statistic here: interference can only add time, so
+/// the smallest reading is the one closest to what the operation actually
+/// costs. An average carries every hiccup into the result.
+fn fastestOf(
+    gpa: std.mem.Allocator,
+    first: usize,
+    second: usize,
+    comptime reading: fn (std.mem.Allocator, usize, usize) anyerror!u64,
+) !u64 {
+    var best: u64 = std.math.maxInt(u64);
+    for (0..repetitions) |_| {
+        best = @min(best, try reading(gpa, first, second));
+    }
+    return best;
+}
+
+/// Adapts the replay measurement to the shape `fastestOf` calls.
+fn replayOf(gpa: std.mem.Allocator, records: usize, unused: usize) !u64 {
+    std.debug.assert(unused == 0);
+    return replayCost(gpa, records);
 }
 
 fn replayCost(gpa: std.mem.Allocator, records: usize) !u64 {
