@@ -211,6 +211,11 @@ pub const Updater = struct {
         return updater;
     }
 
+    /// Which stage the update is in.
+    pub fn currentStage(updater: Updater) Stage {
+        return updater.current_stage;
+    }
+
     pub fn slotState(updater: Updater, slot: Slot) SlotState {
         return updater.slots[@intFromEnum(slot)];
     }
