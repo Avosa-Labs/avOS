@@ -91,9 +91,14 @@ pub const Source = struct {
 
     /// Unpredictable source seeded from the host. Used outside the simulator so
     /// identifiers cannot be guessed or enumerated.
-    pub fn initFromEntropy() Source {
+    ///
+    /// The entropy is passed in rather than reached for. Whether a source is
+    /// unpredictable depends on where its seed came from, and a function that
+    /// took that from ambient state would hide the one thing a reader needs to
+    /// check.
+    pub fn initFromEntropy(entropy: std.Random) Source {
         var seed: [32]u8 = undefined;
-        std.crypto.random.bytes(&seed);
+        entropy.bytes(&seed);
         return .{ .state = .init(seed) };
     }
 
@@ -192,4 +197,22 @@ test "the short form is fixed width and never used for comparison" {
         second.shortForm(&buffer_second),
     );
     try std.testing.expect(!first.eql(second));
+}
+
+test "a source seeded from entropy issues usable identifiers" {
+    // The seed is supplied, so this exercises the same path a host takes rather
+    // than a path only the test can reach.
+    var entropy: std.Random.DefaultCsprng = .init(@splat(21));
+    var source: Source = .initFromEntropy(entropy.random());
+    for (0..64) |_| {
+        try std.testing.expect(!source.next(PrincipalId).isNone());
+    }
+}
+
+test "two sources seeded from different entropy diverge" {
+    var first_entropy: std.Random.DefaultCsprng = .init(@splat(1));
+    var second_entropy: std.Random.DefaultCsprng = .init(@splat(2));
+    var first: Source = .initFromEntropy(first_entropy.random());
+    var second: Source = .initFromEntropy(second_entropy.random());
+    try std.testing.expect(!first.next(TaskId).eql(second.next(TaskId)));
 }

@@ -159,6 +159,15 @@ pub fn build(b: *std.Build) void {
     addModuleTests(b, test_step, "storage", storage_module);
     boot_module.addImport("core", core_module);
     addModuleTests(b, test_step, "boot", boot_module);
+
+    const security_module = b.createModule(.{
+        .root_source_file = b.path("security/security.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    security_module.addImport("core", core_module);
+    security_module.addImport("boot", boot_module);
+    addModuleTests(b, test_step, "security", security_module);
     addModuleTests(b, test_step, "design", design_module);
     addModuleTests(b, test_step, "shell", shell_module);
 
