@@ -8,6 +8,7 @@ const formatted_paths = [_][]const u8{
     "brand",
     "compat",
     "core",
+    "ipc",
     "simulator",
     "tools",
 };
@@ -26,6 +27,12 @@ pub fn build(b: *std.Build) void {
 
     const compat_module = b.createModule(.{
         .root_source_file = b.path("compat/zig/compat.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const ipc_module = b.createModule(.{
+        .root_source_file = b.path("ipc/ipc.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -81,6 +88,7 @@ pub fn build(b: *std.Build) void {
     addModuleTests(b, test_step, "brand", brand_module);
     addModuleTests(b, test_step, "compat", compat_module);
     addModuleTests(b, test_step, "core", core_module);
+    addModuleTests(b, test_step, "ipc", ipc_module);
     addModuleTests(b, test_step, "simulator", simulator_module);
 
     for (tools) |tool| {
