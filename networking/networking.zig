@@ -6,10 +6,14 @@
 //! below these; what lives here is the policy that governs it, testable without
 //! a network.
 
+pub const dns = @import("dns/dns.zig");
 pub const firewall = @import("firewall/firewall.zig");
 pub const reachability = @import("reachability/reachability.zig");
+pub const stack = @import("stack/stack.zig");
 
 test {
+    _ = dns;
     _ = firewall;
     _ = reachability;
+    _ = stack;
 }
