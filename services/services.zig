@@ -19,6 +19,8 @@ pub const location = @import("location/location.zig");
 pub const sensor = @import("sensor/sensor.zig");
 pub const diagnostics = @import("diagnostics/diagnostics.zig");
 pub const account = @import("account/account.zig");
+pub const connectivity = @import("connectivity/connectivity.zig");
+pub const device_posture = @import("device/posture.zig");
 
 test {
     _ = background_work;
@@ -35,4 +37,6 @@ test {
     _ = sensor;
     _ = diagnostics;
     _ = account;
+    _ = connectivity;
+    _ = device_posture;
 }
