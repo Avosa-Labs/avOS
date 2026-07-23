@@ -23,6 +23,8 @@ pub const connectivity = @import("connectivity/connectivity.zig");
 pub const device_posture = @import("device/posture.zig");
 pub const session_lock = @import("session/lock.zig");
 pub const application_install = @import("application/install.zig");
+pub const search = @import("search/search.zig");
+pub const window_overlay = @import("window/overlay.zig");
 
 test {
     _ = background_work;
@@ -43,4 +45,6 @@ test {
     _ = device_posture;
     _ = session_lock;
     _ = application_install;
+    _ = search;
+    _ = window_overlay;
 }
