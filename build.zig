@@ -189,6 +189,13 @@ pub fn build(b: *std.Build) void {
     hardware_module.addImport("core", core_module);
     addModuleTests(b, test_step, "hardware", hardware_module);
 
+    const networking_module = b.createModule(.{
+        .root_source_file = b.path("networking/networking.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    addModuleTests(b, test_step, "networking", networking_module);
+
     const kernel_module = b.createModule(.{
         .root_source_file = b.path("kernel/kernel.zig"),
         .target = target,
