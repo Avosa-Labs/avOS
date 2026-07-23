@@ -6,9 +6,13 @@
 //! invisible one.
 
 pub const attestation = @import("attestation/attestation.zig");
+pub const integrity = @import("integrity/integrity.zig");
 pub const keystore = @import("keystore/keystore.zig");
+pub const secret_memory = @import("secret-memory/secret_memory.zig");
 
 test {
     _ = attestation;
+    _ = integrity;
     _ = keystore;
+    _ = secret_memory;
 }
