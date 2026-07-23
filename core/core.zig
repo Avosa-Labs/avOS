@@ -18,9 +18,11 @@ pub const resource = @import("resource/resource.zig");
 pub const principal = @import("principal/principal.zig");
 pub const capability = @import("capability/capability.zig");
 pub const task = @import("task/task.zig");
+pub const accessibility = @import("accessibility/accessibility.zig");
 pub const audit = @import("audit/audit.zig");
 pub const policy = @import("policy/policy.zig");
 pub const provenance = @import("provenance/provenance.zig");
+pub const recovery = @import("recovery/recovery.zig");
 pub const package = @import("package/package.zig");
 pub const update = @import("update/update.zig");
 
@@ -36,9 +38,11 @@ test {
     _ = principal;
     _ = capability;
     _ = task;
+    _ = accessibility;
     _ = audit;
     _ = policy;
     _ = provenance;
+    _ = recovery;
     _ = package;
     _ = update;
 }
