@@ -7,6 +7,8 @@
 //! tested.
 
 pub const abstraction = @import("abstraction/abstraction.zig");
+pub const battery = @import("battery/battery.zig");
+pub const charging = @import("charging/charging.zig");
 pub const emulator_board = @import("boards/emulator/emulator.zig");
 pub const reference_board = @import("boards/reference/reference.zig");
 pub const secure_element = @import("secure-element/secure_element.zig");
@@ -14,6 +16,8 @@ pub const thermal = @import("thermal/thermal.zig");
 
 test {
     _ = abstraction;
+    _ = battery;
+    _ = charging;
     _ = emulator_board;
     _ = reference_board;
     _ = secure_element;
