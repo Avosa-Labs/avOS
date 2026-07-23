@@ -194,6 +194,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    kernel_module.addImport("core", core_module);
     addModuleTests(b, test_step, "kernel", kernel_module);
 
     const packaging_module = b.createModule(.{
