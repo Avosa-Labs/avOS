@@ -9,10 +9,14 @@ pub const background_work = @import("background-work/background_work.zig");
 pub const notification = @import("notification/notification.zig");
 pub const supervisor = @import("supervisor/supervisor.zig");
 pub const restart_policy = @import("supervisor/policy.zig");
+pub const policy = @import("policy/policy.zig");
+pub const secret = @import("secret/secret.zig");
 
 test {
     _ = background_work;
     _ = notification;
     _ = supervisor;
     _ = restart_policy;
+    _ = policy;
+    _ = secret;
 }
