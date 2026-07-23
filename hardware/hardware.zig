@@ -14,6 +14,8 @@ pub const charging = @import("charging/charging.zig");
 pub const display = @import("display/display.zig");
 pub const haptics = @import("haptics/haptics.zig");
 pub const modem = @import("modem/modem.zig");
+pub const nfc = @import("nfc/nfc.zig");
+pub const wifi = @import("wifi/wifi.zig");
 pub const sensors = @import("sensors/sensors.zig");
 pub const emulator_board = @import("boards/emulator/emulator.zig");
 pub const reference_board = @import("boards/reference/reference.zig");
@@ -29,6 +31,8 @@ test {
     _ = display;
     _ = haptics;
     _ = modem;
+    _ = nfc;
+    _ = wifi;
     _ = sensors;
     _ = emulator_board;
     _ = reference_board;
