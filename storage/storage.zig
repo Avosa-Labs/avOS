@@ -11,9 +11,13 @@
 //! twice and an external effect is performed once.
 
 pub const journal = @import("journal/journal.zig");
+pub const object = @import("object/object.zig");
+pub const quota = @import("quota/quota.zig");
 pub const encryption = @import("encryption/encryption.zig");
 
 test {
     _ = journal;
+    _ = object;
+    _ = quota;
     _ = encryption;
 }
