@@ -8,11 +8,15 @@
 pub const attestation = @import("attestation/attestation.zig");
 pub const integrity = @import("integrity/integrity.zig");
 pub const keystore = @import("keystore/keystore.zig");
+pub const privacy_indicators = @import("privacy-indicators/privacy_indicators.zig");
+pub const redaction = @import("redaction/redaction.zig");
 pub const secret_memory = @import("secret-memory/secret_memory.zig");
 
 test {
     _ = attestation;
     _ = integrity;
     _ = keystore;
+    _ = privacy_indicators;
+    _ = redaction;
     _ = secret_memory;
 }
