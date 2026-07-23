@@ -15,6 +15,8 @@ pub const update_rollout = @import("update/rollout.zig");
 pub const power = @import("power/power.zig");
 pub const emergency = @import("emergency/emergency.zig");
 pub const clipboard = @import("clipboard/clipboard.zig");
+pub const location = @import("location/location.zig");
+pub const sensor = @import("sensor/sensor.zig");
 
 test {
     _ = background_work;
@@ -27,4 +29,6 @@ test {
     _ = power;
     _ = emergency;
     _ = clipboard;
+    _ = location;
+    _ = sensor;
 }
