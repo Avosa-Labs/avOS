@@ -96,6 +96,26 @@ A red gate is never committed. Further gates arrive with the milestones that
 introduce them: integration, security, adversarial, recovery, compatibility,
 simulator, and image.
 
+### Performance budgets
+
+The performance suite runs as part of `zig build test`. Its budget and
+correctness assertions always hold, but the budgets are only checked in an
+optimized build — timing debug output against a shipped-system budget measures
+the compiler, not the system. Enforce them with:
+
+```sh
+zig build test -Doptimize=ReleaseSafe
+```
+
+Printing the measured figures is opt-in and off by default. They go to stderr,
+and under the build's test runner that races the progress rendering and is
+reported as a failed command even though every test passes — so the default run
+stays quiet and clean. To see the numbers, add the flag:
+
+```sh
+zig build test -Doptimize=ReleaseSafe -Dbench-report=true
+```
+
 ### Checks that need a reference device
 
 Some Android compatibility checks need a booted reference device, which needs
