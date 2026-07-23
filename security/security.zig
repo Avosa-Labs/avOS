@@ -10,6 +10,7 @@ pub const integrity = @import("integrity/integrity.zig");
 pub const keystore = @import("keystore/keystore.zig");
 pub const privacy_indicators = @import("privacy-indicators/privacy_indicators.zig");
 pub const redaction = @import("redaction/redaction.zig");
+pub const sandbox = @import("sandbox/sandbox.zig");
 pub const secret_memory = @import("secret-memory/secret_memory.zig");
 
 test {
@@ -18,5 +19,6 @@ test {
     _ = keystore;
     _ = privacy_indicators;
     _ = redaction;
+    _ = sandbox;
     _ = secret_memory;
 }
