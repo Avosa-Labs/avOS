@@ -13,6 +13,8 @@ pub const policy = @import("policy/policy.zig");
 pub const secret = @import("secret/secret.zig");
 pub const update_rollout = @import("update/rollout.zig");
 pub const power = @import("power/power.zig");
+pub const emergency = @import("emergency/emergency.zig");
+pub const clipboard = @import("clipboard/clipboard.zig");
 
 test {
     _ = background_work;
@@ -23,4 +25,6 @@ test {
     _ = secret;
     _ = update_rollout;
     _ = power;
+    _ = emergency;
+    _ = clipboard;
 }
