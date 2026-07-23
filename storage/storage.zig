@@ -16,6 +16,8 @@ pub const quota = @import("quota/quota.zig");
 pub const encryption = @import("encryption/encryption.zig");
 pub const block = @import("block/block.zig");
 pub const integrity = @import("integrity/integrity.zig");
+pub const path = @import("filesystem/path.zig");
+pub const concurrency = @import("database/concurrency.zig");
 
 test {
     _ = journal;
@@ -24,4 +26,6 @@ test {
     _ = encryption;
     _ = block;
     _ = integrity;
+    _ = path;
+    _ = concurrency;
 }
