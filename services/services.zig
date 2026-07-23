@@ -28,6 +28,9 @@ pub const window_overlay = @import("window/overlay.zig");
 pub const telephony_screening = @import("telephony/screening.zig");
 pub const voice_wake = @import("voice/wake.zig");
 pub const share = @import("share/share.zig");
+pub const accessibility = @import("accessibility/accessibility.zig");
+pub const text_learning = @import("text/learning.zig");
+pub const scene_capture = @import("scene/capture.zig");
 
 test {
     _ = background_work;
@@ -53,4 +56,7 @@ test {
     _ = telephony_screening;
     _ = voice_wake;
     _ = share;
+    _ = accessibility;
+    _ = text_learning;
+    _ = scene_capture;
 }
