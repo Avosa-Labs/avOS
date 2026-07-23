@@ -189,6 +189,14 @@ pub fn build(b: *std.Build) void {
     hardware_module.addImport("core", core_module);
     addModuleTests(b, test_step, "hardware", hardware_module);
 
+    const agents_module = b.createModule(.{
+        .root_source_file = b.path("agents/agents.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    agents_module.addImport("core", core_module);
+    addModuleTests(b, test_step, "agents", agents_module);
+
     const networking_module = b.createModule(.{
         .root_source_file = b.path("networking/networking.zig"),
         .target = target,
