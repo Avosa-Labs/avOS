@@ -18,6 +18,7 @@ pub const capability = @import("capability/capability.zig");
 pub const task = @import("task/task.zig");
 pub const audit = @import("audit/audit.zig");
 pub const policy = @import("policy/policy.zig");
+pub const provenance = @import("provenance/provenance.zig");
 pub const package = @import("package/package.zig");
 pub const update = @import("update/update.zig");
 
@@ -33,6 +34,7 @@ test {
     _ = task;
     _ = audit;
     _ = policy;
+    _ = provenance;
     _ = package;
     _ = update;
 }
