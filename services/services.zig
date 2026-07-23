@@ -17,6 +17,8 @@ pub const emergency = @import("emergency/emergency.zig");
 pub const clipboard = @import("clipboard/clipboard.zig");
 pub const location = @import("location/location.zig");
 pub const sensor = @import("sensor/sensor.zig");
+pub const diagnostics = @import("diagnostics/diagnostics.zig");
+pub const account = @import("account/account.zig");
 
 test {
     _ = background_work;
@@ -31,4 +33,6 @@ test {
     _ = clipboard;
     _ = location;
     _ = sensor;
+    _ = diagnostics;
+    _ = account;
 }
