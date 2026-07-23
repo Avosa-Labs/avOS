@@ -9,6 +9,9 @@
 pub const abstraction = @import("abstraction/abstraction.zig");
 pub const battery = @import("battery/battery.zig");
 pub const charging = @import("charging/charging.zig");
+pub const display = @import("display/display.zig");
+pub const haptics = @import("haptics/haptics.zig");
+pub const sensors = @import("sensors/sensors.zig");
 pub const emulator_board = @import("boards/emulator/emulator.zig");
 pub const reference_board = @import("boards/reference/reference.zig");
 pub const secure_element = @import("secure-element/secure_element.zig");
@@ -18,6 +21,9 @@ test {
     _ = abstraction;
     _ = battery;
     _ = charging;
+    _ = display;
+    _ = haptics;
+    _ = sensors;
     _ = emulator_board;
     _ = reference_board;
     _ = secure_element;
