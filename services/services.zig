@@ -5,10 +5,14 @@
 //! address space with it and nothing else, which is what makes a service
 //! boundary a trust boundary rather than a naming convention.
 
+pub const background_work = @import("background-work/background_work.zig");
+pub const notification = @import("notification/notification.zig");
 pub const supervisor = @import("supervisor/supervisor.zig");
 pub const restart_policy = @import("supervisor/policy.zig");
 
 test {
+    _ = background_work;
+    _ = notification;
     _ = supervisor;
     _ = restart_policy;
 }
