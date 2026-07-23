@@ -35,6 +35,15 @@ zig build test                                            # run the tests
 infrastructure/ci/gates.sh                                # run every gate
 ```
 
+Three scenarios run against real code, not mocks, and print what a person would
+see:
+
+```sh
+zig build simulator -- --scenario=canonical-demo                     # the agent control plane
+zig build simulator -- --scenario=boot --fault=tampered-control-plane  # a boot refused, with the recovery screen
+zig build simulator -- --scenario=rollback --outcome=hangs-on-start    # a bad update rolled back
+```
+
 Bootstrap installs nothing system-wide. It resolves the exact compiler and
 components pinned in `toolchain.lock.json`, verifies each digest before
 extracting, and places them in a project-local ignored tool directory.
@@ -50,6 +59,9 @@ zig build format          # apply canonical formatting
 zig build format-check    # verify formatting without writing
 zig build test            # unit tests
 zig build brand-check     # verify no brand leak outside the brand layer
+zig build standin-check   # verify no test stand-in reaches production code
+zig build source-repro    # build twice and confirm one identical image
+zig build image-build     # reduce a directory to a signed-ready image digest
 zig build version-lock    # re-resolve the toolchain manifest for review
 ```
 
