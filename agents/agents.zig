@@ -9,8 +9,12 @@
 
 pub const approvals = @import("approvals/approvals.zig");
 pub const injection_defense = @import("injection-defense/injection_defense.zig");
+pub const planner = @import("planner/planner.zig");
+pub const router = @import("router/router.zig");
 
 test {
     _ = approvals;
     _ = injection_defense;
+    _ = planner;
+    _ = router;
 }
