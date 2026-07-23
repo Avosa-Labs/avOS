@@ -39,6 +39,12 @@ pub const package_verify = @import("package/verify.zig");
 pub const recovery_ladder = @import("recovery/ladder.zig");
 pub const backup_schedule = @import("backup/schedule.zig");
 pub const restore_eligibility = @import("restore/eligibility.zig");
+pub const principal_enrollment = @import("principal/enrollment.zig");
+pub const capability_delegation = @import("capability/delegation.zig");
+pub const task_admission = @import("task/admission.zig");
+pub const resource_admission = @import("resource/admission.zig");
+pub const audit_append = @import("audit/append.zig");
+pub const provenance_flow = @import("provenance/flow.zig");
 
 test {
     _ = background_work;
@@ -75,4 +81,10 @@ test {
     _ = recovery_ladder;
     _ = backup_schedule;
     _ = restore_eligibility;
+    _ = principal_enrollment;
+    _ = capability_delegation;
+    _ = task_admission;
+    _ = resource_admission;
+    _ = audit_append;
+    _ = provenance_flow;
 }
