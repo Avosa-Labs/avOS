@@ -6,6 +6,8 @@
 //! invisible one.
 
 pub const attestation = @import("attestation/attestation.zig");
+pub const exploit_mitigation = @import("exploit-mitigation/exploit_mitigation.zig");
+pub const incident = @import("incident/incident.zig");
 pub const integrity = @import("integrity/integrity.zig");
 pub const keystore = @import("keystore/keystore.zig");
 pub const privacy_indicators = @import("privacy-indicators/privacy_indicators.zig");
@@ -15,6 +17,8 @@ pub const secret_memory = @import("secret-memory/secret_memory.zig");
 
 test {
     _ = attestation;
+    _ = exploit_mitigation;
+    _ = incident;
     _ = integrity;
     _ = keystore;
     _ = privacy_indicators;
