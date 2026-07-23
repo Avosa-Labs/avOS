@@ -8,6 +8,8 @@
 //! Services compose these types. Nothing here reaches back into a service.
 
 pub const outcome = @import("base/outcome.zig");
+pub const collections = @import("collections/collections.zig");
+pub const encoding = @import("encoding/encoding.zig");
 pub const identity = @import("identity/identity.zig");
 pub const time = @import("time/time.zig");
 pub const resource = @import("resource/resource.zig");
@@ -21,6 +23,8 @@ pub const update = @import("update/update.zig");
 
 test {
     _ = outcome;
+    _ = collections;
+    _ = encoding;
     _ = identity;
     _ = time;
     _ = resource;
