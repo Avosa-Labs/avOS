@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-22T16:06:45Z",
+  "generated_at": "2026-07-23T08:16:40Z",
   "selection_rule": "latest stable release, resolved from official sources, pinned exactly",
   "zig": {
     "version": "0.16.0",
