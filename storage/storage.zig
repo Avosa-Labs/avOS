@@ -20,6 +20,8 @@ pub const path = @import("filesystem/path.zig");
 pub const concurrency = @import("database/concurrency.zig");
 pub const backup = @import("backup/backup.zig");
 pub const restore = @import("restore/restore.zig");
+pub const migration = @import("migration/migration.zig");
+pub const reconcile = @import("synchronization/reconcile.zig");
 
 test {
     _ = journal;
@@ -32,4 +34,6 @@ test {
     _ = concurrency;
     _ = backup;
     _ = restore;
+    _ = migration;
+    _ = reconcile;
 }
