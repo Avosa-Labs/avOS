@@ -6,10 +6,16 @@
 //! code tested against a guarantee it was not getting is code that has not been
 //! tested.
 
+pub const abstraction = @import("abstraction/abstraction.zig");
+pub const emulator_board = @import("boards/emulator/emulator.zig");
+pub const reference_board = @import("boards/reference/reference.zig");
 pub const secure_element = @import("secure-element/secure_element.zig");
 pub const thermal = @import("thermal/thermal.zig");
 
 test {
+    _ = abstraction;
+    _ = emulator_board;
+    _ = reference_board;
     _ = secure_element;
     _ = thermal;
 }
