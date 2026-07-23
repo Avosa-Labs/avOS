@@ -10,12 +10,14 @@
 //! the two apart is what lets the rules that matter be verified in isolation
 //! from the platform they eventually run on.
 
+pub const adapters = @import("adapters/adapters.zig");
 pub const scheduler_policy = @import("scheduler-policy/scheduler_policy.zig");
 pub const memory_policy = @import("memory-policy/memory_policy.zig");
 pub const device_policy = @import("device-policy/device_policy.zig");
 pub const security_hooks = @import("security-hooks/security_hooks.zig");
 
 test {
+    _ = adapters;
     _ = scheduler_policy;
     _ = memory_policy;
     _ = device_policy;
