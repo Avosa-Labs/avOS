@@ -352,6 +352,21 @@ pub fn build(b: *std.Build) void {
     // Measurements against the budgets in docs/performance/budgets.md. Part of
     // the ordinary test run, so a regression is caught by the change that
     // introduces it rather than by whoever next remembers to benchmark.
+    //
+    // The measurements always run and their budget and correctness assertions
+    // always hold; printing the human-readable figures is opt-in. Off by default
+    // because the figures go to stderr, and under the build's test runner that
+    // races the progress rendering and is reported as a failed command even though
+    // every test passes. A developer who wants the numbers builds with
+    // -Dbench-report=true.
+    const bench_report = b.option(
+        bool,
+        "bench-report",
+        "Print benchmark measurements to stderr (off by default; see docs/operations/build.md)",
+    ) orelse false;
+    const bench_options = b.addOptions();
+    bench_options.addOption(bool, "report", bench_report);
+
     const performance_module = b.createModule(.{
         .root_source_file = b.path("tests/performance/performance.zig"),
         .target = target,
@@ -360,6 +375,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "core", .module = core_module },
             .{ .name = "ipc", .module = ipc_module },
             .{ .name = "storage", .module = storage_module },
+            .{ .name = "bench_options", .module = bench_options.createModule() },
         },
     });
     addModuleTests(b, test_step, "performance", performance_module);
