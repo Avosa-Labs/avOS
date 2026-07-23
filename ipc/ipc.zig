@@ -14,6 +14,8 @@ pub const envelope = @import("schema/envelope.zig");
 pub const authenticator = @import("authentication/authenticator.zig");
 pub const routing = @import("routing/routing.zig");
 pub const cancellation = @import("cancellation/cancellation.zig");
+pub const capability_binding = @import("capability-binding/capability_binding.zig");
+pub const framing = @import("transport/framing.zig");
 
 test {
     _ = wire;
@@ -21,4 +23,6 @@ test {
     _ = authenticator;
     _ = routing;
     _ = cancellation;
+    _ = capability_binding;
+    _ = framing;
 }
