@@ -14,10 +14,14 @@ pub const journal = @import("journal/journal.zig");
 pub const object = @import("object/object.zig");
 pub const quota = @import("quota/quota.zig");
 pub const encryption = @import("encryption/encryption.zig");
+pub const block = @import("block/block.zig");
+pub const integrity = @import("integrity/integrity.zig");
 
 test {
     _ = journal;
     _ = object;
     _ = quota;
     _ = encryption;
+    _ = block;
+    _ = integrity;
 }
