@@ -11,9 +11,11 @@ pub const dns = @import("dns/dns.zig");
 pub const firewall = @import("firewall/firewall.zig");
 pub const hotspot = @import("hotspot/hotspot.zig");
 pub const http = @import("http/http.zig");
+pub const quic = @import("quic/quic.zig");
 pub const reachability = @import("reachability/reachability.zig");
 pub const stack = @import("stack/stack.zig");
 pub const vpn = @import("vpn/vpn.zig");
+pub const websocket = @import("websocket/websocket.zig");
 
 test {
     _ = captive_portal;
@@ -21,7 +23,9 @@ test {
     _ = firewall;
     _ = hotspot;
     _ = http;
+    _ = quic;
     _ = reachability;
     _ = stack;
     _ = vpn;
+    _ = websocket;
 }
