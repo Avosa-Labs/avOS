@@ -145,6 +145,34 @@ Supported development hosts: macOS on Apple Silicon and x86_64, Linux on x86_64
 and aarch64, and Windows 10 or later for the host tools available there.
 Production image building may later require Linux; the simulator must not.
 
+## CI caching
+
+Continuous integration caches two things to turn a from-scratch build into an
+incremental one, and neither can weaken a single check.
+
+**The pinned toolchain archive** is cached, keyed on the content of
+`toolchain.lock.json`. What is cached is the downloaded archive, never the
+extracted compiler, because bootstrap re-hashes the archive against the pinned
+digest on every run before extracting it and skips that check only when the
+extracted tree is already present. Caching the archive rather than the tree
+keeps the digest verification on the path of every run: a cache hit is verified
+exactly as a fresh download is, and a poisoned cache fails the check and stops
+the build. A different pin is a different key, so a stale archive is never used
+for a changed pin.
+
+**Zig's content-addressed compiler cache** (`~/.cache/zig` and `.zig-cache`) is
+cached and is safe by construction. Every entry is keyed by the hash of its
+inputs, so a cache hit is by definition the correct output for those inputs and
+a tampered entry has a mismatched key that is never read. This is where the
+compile-time saving comes from.
+
+The reproducibility gate is unaffected: `source-repro` hashes the source tree
+twice within one job rather than recompiling, so caching cannot make a
+non-deterministic build appear to agree with itself. The synthetic-brand build
+is unaffected too, because a different brand is a different input and so a
+different cache entry. In short, caching changes how fast the checks run, never
+what they accept.
+
 ## Local working policy
 
 `docs/PLATFORM_SPEC.md` is local-only during the private implementation stage.

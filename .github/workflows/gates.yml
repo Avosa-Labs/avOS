@@ -53,8 +53,49 @@ jobs:
           # "absent", so it needs real history rather than a detached blob.
           fetch-depth: 1
 
+      # Cache the downloaded toolchain archive, not the extracted compiler.
+      #
+      # This is the whole security argument for the cache. Bootstrap re-hashes
+      # the archive against the digest pinned in toolchain.lock.json on every
+      # run, before extracting it, and skips that check only when the extracted
+      # compiler is already present. So we cache the archive and never the
+      # extracted tree: a cache hit still passes through the digest verification,
+      # and a poisoned cache fails it and stops the build. The key is the
+      # manifest's own content, so a different pin is a different cache entry.
+      - name: Cache the pinned toolchain archive
+        uses: actions/cache@v4
+        with:
+          path: .tools/download
+          key: toolchain-${{ matrix.host }}-${{ hashFiles('toolchain.lock.json') }}
+
+      # Cache Zig's content-addressed compiler caches.
+      #
+      # Safe by construction: every entry is keyed by the hash of its inputs, so
+      # a cache hit is by definition the correct output for those inputs and a
+      # tampered entry has a mismatched key that is never read. This is what
+      # turns a from-scratch compile into an incremental one. The reproducibility
+      # gate is unaffected — it hashes the source tree twice within one job
+      # rather than recompiling, so caching cannot make a non-deterministic build
+      # falsely agree with itself.
+      #
+      # The key rotates on the build files and the source hash; restore-keys let
+      # an unrelated change reuse the nearest prior cache rather than starting
+      # cold.
+      - name: Cache the Zig compiler cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/zig
+            .zig-cache
+          key: zig-cache-${{ matrix.host }}-${{ hashFiles('build.zig', 'build.zig.zon') }}-${{ github.sha }}
+          restore-keys: |
+            zig-cache-${{ matrix.host }}-${{ hashFiles('build.zig', 'build.zig.zon') }}-
+            zig-cache-${{ matrix.host }}-
+
       # Installs the pinned compiler and every pinned component, each verified
-      # against the digest recorded in the manifest.
+      # against the digest recorded in the manifest. Even on a cache hit the
+      # archive digest is re-verified before extraction, so the cache never
+      # substitutes for the verification.
       - name: Bootstrap the pinned toolchain
         run: tools/bootstrap/bootstrap.sh
 
