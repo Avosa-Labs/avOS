@@ -18,6 +18,8 @@ pub const block = @import("block/block.zig");
 pub const integrity = @import("integrity/integrity.zig");
 pub const path = @import("filesystem/path.zig");
 pub const concurrency = @import("database/concurrency.zig");
+pub const backup = @import("backup/backup.zig");
+pub const restore = @import("restore/restore.zig");
 
 test {
     _ = journal;
@@ -28,4 +30,6 @@ test {
     _ = integrity;
     _ = path;
     _ = concurrency;
+    _ = backup;
+    _ = restore;
 }
