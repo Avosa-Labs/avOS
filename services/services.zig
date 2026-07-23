@@ -21,6 +21,8 @@ pub const diagnostics = @import("diagnostics/diagnostics.zig");
 pub const account = @import("account/account.zig");
 pub const connectivity = @import("connectivity/connectivity.zig");
 pub const device_posture = @import("device/posture.zig");
+pub const session_lock = @import("session/lock.zig");
+pub const application_install = @import("application/install.zig");
 
 test {
     _ = background_work;
@@ -39,4 +41,6 @@ test {
     _ = account;
     _ = connectivity;
     _ = device_posture;
+    _ = session_lock;
+    _ = application_install;
 }
