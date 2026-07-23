@@ -11,6 +11,8 @@ pub const supervisor = @import("supervisor/supervisor.zig");
 pub const restart_policy = @import("supervisor/policy.zig");
 pub const policy = @import("policy/policy.zig");
 pub const secret = @import("secret/secret.zig");
+pub const update_rollout = @import("update/rollout.zig");
+pub const power = @import("power/power.zig");
 
 test {
     _ = background_work;
@@ -19,4 +21,6 @@ test {
     _ = restart_policy;
     _ = policy;
     _ = secret;
+    _ = update_rollout;
+    _ = power;
 }
