@@ -31,6 +31,14 @@ pub const share = @import("share/share.zig");
 pub const accessibility = @import("accessibility/accessibility.zig");
 pub const text_learning = @import("text/learning.zig");
 pub const scene_capture = @import("scene/capture.zig");
+pub const file_access = @import("file/access.zig");
+pub const index = @import("index/index.zig");
+pub const media_focus = @import("media/focus.zig");
+pub const locale = @import("localization/locale.zig");
+pub const package_verify = @import("package/verify.zig");
+pub const recovery_ladder = @import("recovery/ladder.zig");
+pub const backup_schedule = @import("backup/schedule.zig");
+pub const restore_eligibility = @import("restore/eligibility.zig");
 
 test {
     _ = background_work;
@@ -59,4 +67,12 @@ test {
     _ = accessibility;
     _ = text_learning;
     _ = scene_capture;
+    _ = file_access;
+    _ = index;
+    _ = media_focus;
+    _ = locale;
+    _ = package_verify;
+    _ = recovery_ladder;
+    _ = backup_schedule;
+    _ = restore_eligibility;
 }
