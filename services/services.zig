@@ -25,6 +25,9 @@ pub const session_lock = @import("session/lock.zig");
 pub const application_install = @import("application/install.zig");
 pub const search = @import("search/search.zig");
 pub const window_overlay = @import("window/overlay.zig");
+pub const telephony_screening = @import("telephony/screening.zig");
+pub const voice_wake = @import("voice/wake.zig");
+pub const share = @import("share/share.zig");
 
 test {
     _ = background_work;
@@ -47,4 +50,7 @@ test {
     _ = application_install;
     _ = search;
     _ = window_overlay;
+    _ = telephony_screening;
+    _ = voice_wake;
+    _ = share;
 }
