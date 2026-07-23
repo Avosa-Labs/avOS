@@ -7,6 +7,7 @@
 //! tested.
 
 pub const abstraction = @import("abstraction/abstraction.zig");
+pub const audio = @import("audio/audio.zig");
 pub const battery = @import("battery/battery.zig");
 pub const charging = @import("charging/charging.zig");
 pub const display = @import("display/display.zig");
@@ -19,6 +20,7 @@ pub const thermal = @import("thermal/thermal.zig");
 
 test {
     _ = abstraction;
+    _ = audio;
     _ = battery;
     _ = charging;
     _ = display;
