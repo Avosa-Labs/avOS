@@ -16,6 +16,8 @@ pub const routing = @import("routing/routing.zig");
 pub const cancellation = @import("cancellation/cancellation.zig");
 pub const capability_binding = @import("capability-binding/capability_binding.zig");
 pub const framing = @import("transport/framing.zig");
+pub const descriptor = @import("codegen/descriptor.zig");
+pub const vectors = @import("test-vectors/vectors.zig");
 
 test {
     _ = wire;
@@ -25,4 +27,6 @@ test {
     _ = cancellation;
     _ = capability_binding;
     _ = framing;
+    _ = descriptor;
+    _ = vectors;
 }
