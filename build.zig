@@ -175,6 +175,20 @@ pub fn build(b: *std.Build) void {
     addModuleTests(b, test_step, "ipc", ipc_module);
     addModuleTests(b, test_step, "runtime-native", runtime_native_module);
     addModuleTests(b, test_step, "runtime-android", runtime_android_module);
+
+    const runtime_web_module = b.createModule(.{
+        .root_source_file = b.path("runtimes/web/web.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    addModuleTests(b, test_step, "runtime-web", runtime_web_module);
+
+    const runtime_apple_module = b.createModule(.{
+        .root_source_file = b.path("runtimes/apple-portability/apple_portability.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    addModuleTests(b, test_step, "runtime-apple-portability", runtime_apple_module);
     addModuleTests(b, test_step, "services", services_module);
     addModuleTests(b, test_step, "session", session_module);
     addModuleTests(b, test_step, "storage", storage_module);
