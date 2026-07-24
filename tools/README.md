@@ -22,6 +22,7 @@ planned tools are listed but not stubbed.
 | `license` | Check third-party dependency license compliance | — |
 | `rollback` | Decide whether a rollback to an earlier version is permitted | — |
 | `package-sign` | Decide whether a signed application package may be distributed | — |
+| `release` | Drive a release through the rollout rings, one promotion at a time | — |
 
 ## Planned
 
@@ -31,7 +32,6 @@ empty imitation of the tree.
 
 | Tool | Purpose |
 | --- | --- |
-| `release` | Drive a release through the rollout rings |
 | `crash-symbols` | Symbolicate a crash report against a build |
 | `certification` | Assemble certification evidence for a market |
 | `accessibility-audit` | Check surfaces against the accessibility baseline |

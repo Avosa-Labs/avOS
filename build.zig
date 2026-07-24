@@ -192,6 +192,11 @@ pub fn build(b: *std.Build) void {
             .root = "tools/package-sign/main.zig",
             .description = "Decide whether a signed application package may be distributed",
         },
+        .{
+            .name = "release",
+            .root = "tools/release/main.zig",
+            .description = "Drive a release through the rollout rings, one promotion at a time",
+        },
     };
 
     const test_step = b.step("test", "Run unit tests");
