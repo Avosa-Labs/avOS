@@ -35,6 +35,8 @@ pub const apps = @import("paint/apps.zig");
 // pointer hit-testing that routes a tap to the topmost target for the input decision layer.
 pub const backend = @import("paint/backend.zig");
 pub const pointer = @import("paint/pointer.zig");
+pub const anim = @import("paint/anim.zig");
+pub const motion = @import("paint/motion.zig");
 
 test {
     _ = color;
@@ -60,4 +62,6 @@ test {
     _ = apps;
     _ = backend;
     _ = pointer;
+    _ = anim;
+    _ = motion;
 }
