@@ -26,6 +26,7 @@ planned tools are listed but not stubbed.
 | `crash-symbols` | Symbolicate a fault address against a build's symbols | — |
 | `accessibility-audit` | Audit surfaces against the accessibility baseline | — |
 | `localization` | Verify localization completeness and fallback coverage | — |
+| `performance-check` | Check performance measurements against their budgets | — |
 
 ## Planned
 
@@ -36,7 +37,6 @@ empty imitation of the tree.
 | Tool | Purpose |
 | --- | --- |
 | `certification` | Assemble certification evidence for a market |
-| `performance` | Run and compare against the performance budgets |
 | `power`, `test-vector`, `protocol-codegen`, `icon-build`, `audit-inspect`, `zig-version` | Development and diagnostic utilities |
 
 The distinction between the two tables is the point: what is claimed as working is
