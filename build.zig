@@ -544,6 +544,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "simulator", .module = simulator_module },
             .{ .name = "graphics", .module = graphics_module },
             .{ .name = "design", .module = design_module },
+            .{ .name = "applications", .module = applications_module },
         },
     });
     const live_exe = b.addExecutable(.{ .name = "shell", .root_module = live_module });

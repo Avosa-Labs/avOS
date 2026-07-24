@@ -17,6 +17,7 @@ const io_adapters = compat.io;
 const simulator = @import("simulator");
 const graphics = @import("graphics");
 const design = @import("design");
+const applications = @import("applications");
 
 const Host = simulator.host.Host;
 const canonical = simulator.canonical;
@@ -83,6 +84,31 @@ fn surfaced(action: anytype) bool {
 
 const max_rows: usize = 7;
 
+/// A short role phrase for a principal kind, shown in the inspector.
+fn roleText(kind: anytype) []const u8 {
+    return switch (kind) {
+        .human => "Full authority",
+        .agent => "Scoped, revocable",
+        .application => "Sandboxed",
+        .service => "Reached via bridge",
+        .organization => "Managed policy",
+        .device => "Trusted endpoint",
+        .session => "Ephemeral, isolated",
+    };
+}
+
+fn kindName(kind: anytype) []const u8 {
+    return switch (kind) {
+        .human => "Human",
+        .agent => "Agent",
+        .application => "Application",
+        .service => "Service",
+        .organization => "Organization",
+        .device => "Device",
+        .session => "Session",
+    };
+}
+
 pub fn main(init: std.process.Init) !u8 {
     const io = init.io;
     const gpa = init.gpa;
@@ -93,7 +119,9 @@ pub fn main(init: std.process.Init) !u8 {
     const err = &err_file.interface;
 
     const args = try io_adapters.args(init, arena);
-    const output = if (args.len > 1) args[1] else "shell.png";
+    // shell <activity|principals|store> [out.png]
+    const which = if (args.len > 1) args[1] else "activity";
+    const output = if (args.len > 2) args[2] else "shell.png";
 
     // Run the real scenario: the agents act, one action is denied, one is held and approved.
     var host: Host = undefined;
@@ -101,7 +129,29 @@ pub fn main(init: std.process.Init) !u8 {
     defer host.deinit();
     _ = try canonical.run(&host);
 
-    // Build the activity rows from the actual audit ledger this run produced.
+    var target = try Framebuffer.init(gpa, screens.width, screens.height, .{ .r = theme.base.red, .g = theme.base.green, .b = theme.base.blue, .a = 255 });
+    defer target.deinit();
+
+    if (std.mem.eql(u8, which, "principals")) {
+        try renderLivePrincipals(gpa, &target, &host);
+    } else if (std.mem.eql(u8, which, "store")) {
+        renderLiveStore(&target);
+    } else {
+        try renderLiveActivity(gpa, &target, &host);
+    }
+
+    const png = try target.encodePng(gpa);
+    defer gpa.free(png);
+    io_adapters.writeFile(io_adapters.cwd(), io, output, png) catch {
+        try err.print("shell: cannot write '{s}'\n", .{output});
+        try err.flush();
+        return 1;
+    };
+    return 0;
+}
+
+/// Renders the activity screen from the run's real audit ledger.
+fn renderLiveActivity(gpa: std.mem.Allocator, target: *Framebuffer, host: *Host) !void {
     var rows: std.ArrayList(screens.LedgerRow) = .empty;
     defer rows.deinit(gpa);
 
@@ -123,19 +173,58 @@ pub fn main(init: std.process.Init) !u8 {
             .denied = outcome.denied,
         });
     }
-    // The ledger was read newest-first; present it oldest-first as the screen reads top to bottom.
     std.mem.reverse(screens.LedgerRow, rows.items);
+    screens.renderActivity(target, rows.items);
+}
 
-    var target = try Framebuffer.init(gpa, screens.width, screens.height, .{ .r = theme.base.red, .g = theme.base.green, .b = theme.base.blue, .a = 255 });
-    defer target.deinit();
-    screens.renderActivity(&target, rows.items);
+/// Renders the principals inspector from the run's real registry — the human and each enrolled agent.
+fn renderLivePrincipals(gpa: std.mem.Allocator, target: *Framebuffer, host: *Host) !void {
+    var list: std.ArrayList(screens.Principal) = .empty;
+    defer list.deinit(gpa);
 
-    const png = try target.encodePng(gpa);
-    defer gpa.free(png);
-    io_adapters.writeFile(io_adapters.cwd(), io, output, png) catch {
-        try err.print("shell: cannot write '{s}'\n", .{output});
-        try err.flush();
-        return 1;
+    if (host.registry.lookup(host.human)) |human| {
+        try list.append(gpa, .{ .kind = kindName(human.kind), .name = "You", .role = roleText(human.kind), .colour = kindColour(human.kind) });
+    }
+    for (host.agents.items) |agent| {
+        const principal = host.registry.lookup(agent.id) orelse continue;
+        try list.append(gpa, .{
+            .kind = kindName(principal.kind),
+            .name = principal.display_name,
+            .role = roleText(principal.kind),
+            .colour = kindColour(principal.kind),
+        });
+    }
+    screens.renderPrincipalsScreen(target, list.items);
+}
+
+/// Renders the store catalog, each entry's install action decided by the real store decision module.
+fn renderLiveStore(target: *Framebuffer) void {
+    const install_source = applications.store;
+    // Each catalog entry carries a real source; the action shown is the real install decision.
+    const Catalog = struct { name: []const u8, publisher: []const u8, source: install_source.Source, acknowledged: bool, colour: design.theme.Colour };
+    const catalog = [_]Catalog{
+        .{ .name = "Itinerary", .publisher = "Reviewed \u{00B7} signed", .source = .store, .acknowledged = false, .colour = theme.teal },
+        .{ .name = "Ledger Notes", .publisher = "Reviewed \u{00B7} signed", .source = .store, .acknowledged = false, .colour = theme.agent },
+        .{ .name = "Field Tools", .publisher = "Outside source", .source = .external, .acknowledged = true, .colour = theme.amber },
+        .{ .name = "Unknown Build", .publisher = "Unreviewed source", .source = .external, .acknowledged = false, .colour = theme.denied },
+        .{ .name = "Trip Planner", .publisher = "Reviewed \u{00B7} signed", .source = .store, .acknowledged = false, .colour = theme.coral },
     };
-    return 0;
+
+    var entries: [catalog.len]screens.StoreEntry = undefined;
+    for (catalog, 0..) |item, i| {
+        // The real decision: store apps proceed, an acknowledged external source proceeds, an
+        // unacknowledged external one is held for acknowledgement.
+        const decision = install_source.decide(item.source, item.acknowledged);
+        const action: screens.StoreAction = switch (decision) {
+            .proceed => .get,
+            .require_acknowledgement => .acknowledge,
+            .refuse => .blocked,
+        };
+        const badge: []const u8 = switch (item.source) {
+            .store => "Reviewed",
+            .external => if (item.acknowledged) "Acknowledged" else "Sideload",
+        };
+        entries[i] = .{ .name = item.name, .publisher = item.publisher, .badge = badge, .action = action, .colour = item.colour };
+    }
+    screens.renderStoreScreen(target, &entries);
 }
