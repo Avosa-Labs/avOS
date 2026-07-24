@@ -499,6 +499,23 @@ pub fn build(b: *std.Build) void {
     if (b.args) |forwarded| run_home.addArgs(forwarded);
     b.step("home", "Render the home screen to a PNG").dependOn(&run_home.step);
 
+    // The motion demo: the agent-card entrance as a sequence of animation frames.
+    const motion_module = b.createModule(.{
+        .root_source_file = b.path("graphics/paint/motion_main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "compat", .module = compat_module },
+            .{ .name = "design", .module = design_module },
+        },
+    });
+    const motion_exe = b.addExecutable(.{ .name = "motion", .root_module = motion_module });
+    b.installArtifact(motion_exe);
+    const run_motion = b.addRunArtifact(motion_exe);
+    run_motion.step.dependOn(b.getInstallStep());
+    if (b.args) |forwarded| run_motion.addArgs(forwarded);
+    b.step("motion", "Render the agent-card entrance as animation frames").dependOn(&run_motion.step);
+
     // A named shell screen rendered to a PNG.
     const screen_module = b.createModule(.{
         .root_source_file = b.path("graphics/paint/screen_main.zig"),
