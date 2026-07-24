@@ -385,6 +385,34 @@ pub fn build(b: *std.Build) void {
     });
     addModuleTests(b, test_step, "acceptance", acceptance_module);
 
+    // Adversarial and property suites exercise the pure decision modules from outside, phrasing each
+    // security invariant as an attack that must fail or a property that must hold across its input space.
+    const adversarial_module = b.createModule(.{
+        .root_source_file = b.path("tests/adversarial/adversarial.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "applications", .module = applications_module },
+            .{ .name = "session", .module = session_module },
+            .{ .name = "emulator", .module = emulator_module },
+            .{ .name = "shell", .module = shell_module },
+        },
+    });
+    addModuleTests(b, test_step, "adversarial", adversarial_module);
+
+    const property_module = b.createModule(.{
+        .root_source_file = b.path("tests/property/property.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "applications", .module = applications_module },
+            .{ .name = "session", .module = session_module },
+            .{ .name = "emulator", .module = emulator_module },
+            .{ .name = "shell", .module = shell_module },
+        },
+    });
+    addModuleTests(b, test_step, "property", property_module);
+
     // Recovery is held apart from the acceptance suites because it asks a
     // different question: not whether a component behaves when the medium
     // beneath it is sound, but what happens when it is not.
