@@ -132,10 +132,22 @@ pub fn main(init: std.process.Init) !u8 {
     var target = try Framebuffer.init(gpa, screens.width, screens.height, .{ .r = theme.base.red, .g = theme.base.green, .b = theme.base.blue, .a = 255 });
     defer target.deinit();
 
+    // Session mode: render the whole live session as a numbered sequence of frames, from one run.
+    if (std.mem.eql(u8, which, "session")) {
+        const prefix = if (args.len > 2) args[2] else "session_";
+        return renderSession(gpa, io, err, &host, prefix);
+    }
+
     if (std.mem.eql(u8, which, "principals")) {
         try renderLivePrincipals(gpa, &target, &host);
     } else if (std.mem.eql(u8, which, "store")) {
         renderLiveStore(&target);
+    } else if (std.mem.eql(u8, which, "home")) {
+        graphics.home.render(&target);
+    } else if (std.mem.eql(u8, which, "boot")) {
+        renderBoot(&target);
+    } else if (std.mem.eql(u8, which, "rest")) {
+        renderRest(&target);
     } else {
         try renderLiveActivity(gpa, &target, &host);
     }
@@ -147,6 +159,64 @@ pub fn main(init: std.process.Init) !u8 {
         try err.flush();
         return 1;
     };
+    return 0;
+}
+
+const paint = graphics.paint;
+const vector = graphics.vector;
+const text = graphics.text;
+const w: u32 = screens.width;
+const h: u32 = screens.height;
+
+fn renderBoot(target: *Framebuffer) void {
+    paint.paint(target, &.{.{ .solid = .{ .rect = .{ .x = 0, .y = 0, .w = w, .h = h }, .colour = paint.sample(theme.base) } }});
+    var g: u8 = 0;
+    while (g < 4) : (g += 1) {
+        const r = @as(f32, @floatFromInt(260 - @as(u32, g) * 50));
+        vector.fillDisc(target, @floatFromInt(w / 2), @floatFromInt(h / 2), r, .{ .r = theme.agent.red, .g = theme.agent.green, .b = theme.agent.blue, .a = 18 });
+    }
+    text.drawCentred(target, @floatFromInt(w / 2), @floatFromInt(h / 2 + 6), "Starting your world", 16, paint.sample(theme.text_primary));
+}
+
+fn renderRest(target: *Framebuffer) void {
+    paint.paint(target, &.{.{ .vgradient = .{ .rect = .{ .x = 0, .y = 0, .w = w, .h = h }, .top = paint.sample(theme.panel), .bottom = paint.sample(theme.base) } }});
+    text.drawCentred(target, @floatFromInt(w / 2), @floatFromInt(h / 2 - 8), "Everything handled.", 18, paint.sample(theme.text_primary));
+    text.drawCentred(target, @floatFromInt(w / 2), @floatFromInt(h / 2 + 24), "Hello, world.", 14, paint.sample(theme.text_secondary));
+}
+
+/// The session, as the actual OS plays it: boot, home, then the live agent-native surfaces produced by
+/// this run, then rest — each written as a numbered frame under `prefix`.
+fn renderSession(gpa: std.mem.Allocator, io: anytype, err: anytype, host: *Host, prefix: []const u8) !u8 {
+    const Frame = struct { name: []const u8, kind: enum { boot, home, activity, principals, store, rest } };
+    const frames = [_]Frame{
+        .{ .name = "00_boot", .kind = .boot },
+        .{ .name = "01_home", .kind = .home },
+        .{ .name = "02_activity", .kind = .activity },
+        .{ .name = "03_principals", .kind = .principals },
+        .{ .name = "04_store", .kind = .store },
+        .{ .name = "05_rest", .kind = .rest },
+    };
+    for (frames) |frame| {
+        var target = try Framebuffer.init(gpa, w, h, paint.sample(theme.base));
+        defer target.deinit();
+        switch (frame.kind) {
+            .boot => renderBoot(&target),
+            .home => graphics.home.render(&target),
+            .activity => try renderLiveActivity(gpa, &target, host),
+            .principals => try renderLivePrincipals(gpa, &target, host),
+            .store => renderLiveStore(&target),
+            .rest => renderRest(&target),
+        }
+        const png = try target.encodePng(gpa);
+        defer gpa.free(png);
+        const path = try std.fmt.allocPrint(gpa, "{s}{s}.png", .{ prefix, frame.name });
+        defer gpa.free(path);
+        io_adapters.writeFile(io_adapters.cwd(), io, path, png) catch {
+            try err.print("shell: cannot write '{s}'\n", .{path});
+            try err.flush();
+            return 1;
+        };
+    }
     return 0;
 }
 
