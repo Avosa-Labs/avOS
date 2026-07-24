@@ -197,6 +197,11 @@ pub fn build(b: *std.Build) void {
             .root = "tools/release/main.zig",
             .description = "Drive a release through the rollout rings, one promotion at a time",
         },
+        .{
+            .name = "crash-symbols",
+            .root = "tools/crash-symbols/main.zig",
+            .description = "Symbolicate a fault address against a build's symbols",
+        },
     };
 
     const test_step = b.step("test", "Run unit tests");

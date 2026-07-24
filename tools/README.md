@@ -23,6 +23,7 @@ planned tools are listed but not stubbed.
 | `rollback` | Decide whether a rollback to an earlier version is permitted | — |
 | `package-sign` | Decide whether a signed application package may be distributed | — |
 | `release` | Drive a release through the rollout rings, one promotion at a time | — |
+| `crash-symbols` | Symbolicate a fault address against a build's symbols | — |
 
 ## Planned
 
@@ -32,7 +33,6 @@ empty imitation of the tree.
 
 | Tool | Purpose |
 | --- | --- |
-| `crash-symbols` | Symbolicate a crash report against a build |
 | `certification` | Assemble certification evidence for a market |
 | `accessibility-audit` | Check surfaces against the accessibility baseline |
 | `localization` | Verify localization completeness and fallback |
