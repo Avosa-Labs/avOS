@@ -87,30 +87,64 @@ fn dot(target: *Framebuffer, cx: f32, cy: f32, colour: theme.Colour) void {
 
 // --- Approval ---
 
+/// A consequential action held for a person's decision, as the approval screen shows it. The live
+/// shell populates this from the real approval the run held; the demo has the same shape.
+pub const ApprovalView = struct {
+    /// The requesting agent.
+    agent: []const u8,
+    /// The headline of what it wants to do.
+    title: []const u8,
+    /// A secondary line under the title, shown in the attention colour (an amount, or a qualifier).
+    subtitle: []const u8,
+    keys: [3][]const u8,
+    values: [3][]const u8,
+    footer: []const u8,
+};
+
+pub const demo_approval = ApprovalView{
+    .agent = "Travel agent",
+    .title = "Pay hotel deposit",
+    .subtitle = "420.00 EUR",
+    .keys = .{ "Capability", "To", "Once" },
+    .values = .{ "payments.charge", "Hotel, Lisbon", "Cannot repeat" },
+    .footer = "Nothing spends without you.",
+};
+
+/// Renders the full approval screen from a view — the entry point the live shell calls with the real
+/// held action.
+pub fn renderApprovalScreen(target: *Framebuffer, view: ApprovalView) void {
+    wallpaper(target);
+    statusBar(target);
+    approvalContent(target, view);
+}
+
 fn renderApproval(target: *Framebuffer) void {
+    approvalContent(target, demo_approval);
+}
+
+fn approvalContent(target: *Framebuffer, view: ApprovalView) void {
     header(target, "Approval", "Nothing consequential happens silently");
 
     const c: Rect = .{ .x = 20, .y = 200, .w = width - 40, .h = 380 };
     card(target, c, theme.surface);
 
-    // Requesting agent.
     dot(target, 46, 246, theme.agent);
-    _ = text.draw(target, 62, 251, "Travel agent wants to", 13, s(theme.text_secondary));
+    var buf: [96]u8 = undefined;
+    const wants = std.fmt.bufPrint(&buf, "{s} wants to", .{view.agent}) catch view.agent;
+    _ = text.draw(target, 62, 251, wants, 13, s(theme.text_secondary));
 
-    _ = text.draw(target, 40, 300, "Pay hotel deposit", 22, s(theme.text_primary));
-    const amount_end = text.draw(target, 40, 348, "420.00", 36, s(theme.coral));
-    _ = text.draw(target, amount_end + 8, 344, "EUR", 15, s(theme.text_secondary));
+    _ = text.draw(target, 40, 300, view.title, 22, s(theme.text_primary));
+    _ = text.draw(target, 40, 348, view.subtitle, 22, s(theme.coral));
 
     line(target, 40, 384, (width - 40));
-    field(target, 404, "Capability", "payments.charge");
-    field(target, 440, "To", "Hotel, Lisbon");
-    field(target, 476, "Once", "Cannot repeat");
+    field(target, 404, view.keys[0], view.values[0]);
+    field(target, 440, view.keys[1], view.values[1]);
+    field(target, 476, view.keys[2], view.values[2]);
 
-    // Buttons.
     button(target, .{ .x = 40, .y = 520, .w = 150, .h = 44 }, "Deny", false, theme.agent);
     button(target, .{ .x = 200, .y = 520, .w = 150, .h = 44 }, "Approve", true, theme.agent);
 
-    _ = text.draw(target, 24, 620, "Nothing spends without you.", 13, s(theme.text_secondary));
+    _ = text.draw(target, 24, 620, view.footer, 13, s(theme.text_secondary));
 }
 
 fn field(target: *Framebuffer, y: i32, key: []const u8, value: []const u8) void {
