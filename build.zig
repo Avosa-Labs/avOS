@@ -203,6 +203,13 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     addModuleTests(b, test_step, "input", input_module);
+
+    const communications_module = b.createModule(.{
+        .root_source_file = b.path("communications/communications.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    addModuleTests(b, test_step, "communications", communications_module);
     addModuleTests(b, test_step, "services", services_module);
     addModuleTests(b, test_step, "session", session_module);
     addModuleTests(b, test_step, "storage", storage_module);
