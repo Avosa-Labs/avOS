@@ -24,7 +24,7 @@ pub const width: u32 = 390;
 pub const height: u32 = 844;
 
 /// The shell screens this module can render.
-pub const Screen = enum { approval, ledger, principals };
+pub const Screen = enum { approval, ledger, principals, settings };
 
 fn s(colour: theme.Colour) fb.Rgba {
     return paint.sample(colour);
@@ -37,6 +37,7 @@ pub fn render(target: *Framebuffer, screen: Screen) void {
         .approval => renderApproval(target),
         .ledger => renderLedger(target),
         .principals => renderPrincipals(target),
+        .settings => renderSettings(target),
     }
 }
 
@@ -198,6 +199,44 @@ fn renderPrincipals(target: *Framebuffer) void {
         _ = text.draw(target, 92, @floatFromInt(y + 54), p.role, 12, s(theme.text_secondary));
         _ = text.draw(target, rightAlign(p.kind, 11), @floatFromInt(y + 32), p.kind, 11, s(theme.text_tertiary));
         y += 86;
+    }
+}
+
+// --- Settings ---
+
+const Section = struct { title: []const u8, subtitle: []const u8, colour: theme.Colour };
+
+const sections = [_]Section{
+    .{ .title = "Identity", .subtitle = "Who you are to the system", .colour = theme.human },
+    .{ .title = "Privacy & data", .subtitle = "Nothing leaves without a reason", .colour = theme.teal },
+    .{ .title = "Capabilities & grants", .subtitle = "Scoped and revocable", .colour = theme.agent },
+    .{ .title = "Endpoints & devices", .subtitle = "Trusted screens for your world", .colour = theme.human },
+    .{ .title = "Apps & compatibility", .subtitle = "Everything runs contained", .colour = theme.coral },
+    .{ .title = "Appearance", .subtitle = "Yours to tune", .colour = theme.agent_soft },
+    .{ .title = "Accessibility", .subtitle = "Built in, never bolted on", .colour = theme.teal_bright },
+    .{ .title = "Software & updates", .subtitle = "Atomic and reversible", .colour = theme.amber },
+    .{ .title = "Security", .subtitle = "Keys and attestation", .colour = theme.denied },
+    .{ .title = "Agent policy", .subtitle = "How agents may act", .colour = theme.agent },
+};
+
+fn renderSettings(target: *Framebuffer) void {
+    header(target, "Settings", "Yours, and only where you allow");
+
+    var y: i32 = 158;
+    for (sections) |section| {
+        const c: Rect = .{ .x = 20, .y = y, .w = width - 40, .h = 58 };
+        card(target, c, theme.surface);
+        // A rounded colour chip marking the section.
+        paint.paint(target, &.{.{ .rounded = .{ .rect = .{ .x = 36, .y = y + 15, .w = 28, .h = 28 }, .radius = 9, .colour = s(section.colour) } }});
+        _ = text.draw(target, 80, @floatFromInt(y + 26), section.title, 14, s(theme.text_primary));
+        _ = text.draw(target, 80, @floatFromInt(y + 46), section.subtitle, 11, s(theme.text_secondary));
+        // Chevron.
+        vector.strokePolyline(target, &.{
+            .{ .x = @floatFromInt(@as(i32, @intCast(width)) - 44), .y = @floatFromInt(y + 22) },
+            .{ .x = @floatFromInt(@as(i32, @intCast(width)) - 38), .y = @floatFromInt(y + 29) },
+            .{ .x = @floatFromInt(@as(i32, @intCast(width)) - 44), .y = @floatFromInt(y + 36) },
+        }, 2, s(theme.text_tertiary), false);
+        y += 66;
     }
 }
 
