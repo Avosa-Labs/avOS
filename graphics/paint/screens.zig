@@ -24,7 +24,7 @@ pub const width: u32 = 390;
 pub const height: u32 = 844;
 
 /// The shell screens this module can render.
-pub const Screen = enum { approval, ledger, principals, settings };
+pub const Screen = enum { approval, ledger, principals, settings, store };
 
 fn s(colour: theme.Colour) fb.Rgba {
     return paint.sample(colour);
@@ -38,6 +38,7 @@ pub fn render(target: *Framebuffer, screen: Screen) void {
         .ledger => renderLedger(target),
         .principals => renderPrincipals(target),
         .settings => renderSettings(target),
+        .store => renderStore(target),
     }
 }
 
@@ -195,9 +196,11 @@ fn chip(target: *Framebuffer, rect: Rect, label: []const u8, active: bool) void 
 
 // --- Principals ---
 
-const Principal = struct { kind: []const u8, name: []const u8, role: []const u8, colour: theme.Colour };
+/// One principal as the inspector shows it — a view model the live shell populates from the real
+/// registry.
+pub const Principal = struct { kind: []const u8, name: []const u8, role: []const u8, colour: theme.Colour };
 
-const principals = [_]Principal{
+pub const demo_principals = [_]Principal{
     .{ .kind = "Human", .name = "You", .role = "Full authority", .colour = theme.human },
     .{ .kind = "Agent", .name = "Planner", .role = "Scoped, revocable", .colour = theme.agent },
     .{ .kind = "Application", .name = "Itinerary", .role = "Sandboxed", .colour = theme.teal },
@@ -207,11 +210,22 @@ const principals = [_]Principal{
     .{ .kind = "Session", .name = "Focus", .role = "Ephemeral, isolated", .colour = theme.agent_soft },
 };
 
+/// Renders the full principals screen from a set of principals — the entry point the live shell calls.
+pub fn renderPrincipalsScreen(target: *Framebuffer, list: []const Principal) void {
+    wallpaper(target);
+    statusBar(target);
+    principalsContent(target, list);
+}
+
 fn renderPrincipals(target: *Framebuffer) void {
+    principalsContent(target, &demo_principals);
+}
+
+fn principalsContent(target: *Framebuffer, list: []const Principal) void {
     header(target, "Principals", "First-class citizens");
 
     var y: i32 = 168;
-    for (principals) |p| {
+    for (list) |p| {
         const c: Rect = .{ .x = 20, .y = y, .w = width - 40, .h = 76 };
         card(target, c, theme.surface);
         // A larger principal chip on the left.
@@ -261,7 +275,101 @@ fn renderSettings(target: *Framebuffer) void {
     }
 }
 
+// --- Store ---
+
+/// What a store catalog entry may offer, mirroring the store's install decision: an app that passed
+/// review installs directly, an external source must be acknowledged first, an unreviewed one is
+/// blocked.
+pub const StoreAction = enum { get, acknowledge, blocked };
+
+/// One store catalog entry as the screen shows it — a view model the live shell populates from the
+/// real store decision modules.
+pub const StoreEntry = struct {
+    name: []const u8,
+    publisher: []const u8,
+    badge: []const u8,
+    action: StoreAction,
+    colour: theme.Colour,
+};
+
+pub const demo_store_entries = [_]StoreEntry{
+    .{ .name = "Itinerary", .publisher = "Reviewed \u{00B7} signed", .badge = "Reviewed", .action = .get, .colour = theme.teal },
+    .{ .name = "Ledger Notes", .publisher = "Reviewed \u{00B7} signed", .badge = "Reviewed", .action = .get, .colour = theme.agent },
+    .{ .name = "Field Tools", .publisher = "Outside source", .badge = "Sideload", .action = .acknowledge, .colour = theme.amber },
+    .{ .name = "Unknown Build", .publisher = "Unreviewed source", .badge = "Blocked", .action = .blocked, .colour = theme.denied },
+    .{ .name = "Trip Planner", .publisher = "Reviewed \u{00B7} signed", .badge = "Reviewed", .action = .get, .colour = theme.coral },
+};
+
+fn actionLabel(action: StoreAction) []const u8 {
+    return switch (action) {
+        .get => "Get",
+        .acknowledge => "Review",
+        .blocked => "Blocked",
+    };
+}
+
+fn actionColour(action: StoreAction) theme.Colour {
+    return switch (action) {
+        .get => theme.agent,
+        .acknowledge => theme.amber,
+        .blocked => theme.surface_raised,
+    };
+}
+
+/// Renders the full store screen from a set of catalog entries — the entry point the live shell calls
+/// with entries whose install action came from the real store decision modules.
+pub fn renderStoreScreen(target: *Framebuffer, entries: []const StoreEntry) void {
+    wallpaper(target);
+    statusBar(target);
+    storeContent(target, entries);
+}
+
+fn renderStore(target: *Framebuffer) void {
+    storeContent(target, &demo_store_entries);
+}
+
+fn storeContent(target: *Framebuffer, entries: []const StoreEntry) void {
+    header(target, "Store", "Reviewed, signed, contained");
+
+    var y: i32 = 168;
+    for (entries) |entry| {
+        const c: Rect = .{ .x = 20, .y = y, .w = width - 40, .h = 78 };
+        card(target, c, theme.surface);
+        // App tile chip.
+        paint.paint(target, &.{.{ .rounded = .{ .rect = .{ .x = 36, .y = y + 17, .w = 44, .h = 44 }, .radius = 12, .colour = s(entry.colour) } }});
+        _ = text.draw(target, 96, @floatFromInt(y + 32), entry.name, 15, s(theme.text_primary));
+        _ = text.draw(target, 96, @floatFromInt(y + 54), entry.publisher, 12, s(theme.text_secondary));
+        // Install action pill on the right.
+        const label = actionLabel(entry.action);
+        const pill_w: u32 = 84;
+        const pill: Rect = .{ .x = @as(i32, @intCast(width)) - 20 - @as(i32, @intCast(pill_w)), .y = y + 22, .w = pill_w, .h = 34 };
+        const filled = entry.action == .get;
+        button(target, pill, label, filled, actionColour(entry.action));
+        y += 88;
+    }
+}
+
 const testing = std.testing;
+
+test "the store screen renders a catalog with an install action" {
+    var target = try Framebuffer.init(testing.allocator, width, height, s(theme.base));
+    defer target.deinit();
+    render(&target, .store);
+    // A get pill is filled with the agent accent somewhere on screen.
+    var found = false;
+    var y: u32 = 168;
+    while (y < 700 and !found) : (y += 1) {
+        var x: u32 = @intCast(width - 100);
+        while (x < width - 20) : (x += 1) {
+            const p = target.get(x, y);
+            if (p.b > p.r and p.b > 150) {
+                found = true;
+                break;
+            }
+        }
+    }
+    try testing.expect(found);
+}
 
 test "each shell screen fills the frame and draws content" {
     for (std.enums.values(Screen)) |screen| {
