@@ -29,6 +29,7 @@ pub const vector = @import("paint/vector.zig");
 pub const iconography = @import("paint/iconography.zig");
 pub const text = @import("paint/text.zig");
 pub const home = @import("paint/home.zig");
+pub const screens = @import("paint/screens.zig");
 
 test {
     _ = color;
@@ -50,4 +51,5 @@ test {
     _ = iconography;
     _ = text;
     _ = home;
+    _ = screens;
 }
