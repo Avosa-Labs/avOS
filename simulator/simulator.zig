@@ -12,10 +12,19 @@ pub const canonical = @import("scenarios/canonical.zig");
 pub const boot_scenario = @import("scenarios/boot.zig");
 pub const rollback_scenario = @import("scenarios/rollback.zig");
 
+// Deterministic core: the virtual clock, task scheduling order, and fault timing that make every
+// run reproducible.
+pub const clock = @import("clock/virtual.zig");
+pub const scheduler = @import("scheduler/ordering.zig");
+pub const failure = @import("failure/injection.zig");
+
 test {
     _ = host;
     _ = model;
     _ = canonical;
     _ = boot_scenario;
     _ = rollback_scenario;
+    _ = clock;
+    _ = scheduler;
+    _ = failure;
 }

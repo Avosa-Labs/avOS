@@ -115,6 +115,12 @@ pub fn build(b: *std.Build) void {
     simulator_module.addImport("core", core_module);
     simulator_module.addImport("boot", boot_module);
 
+    const emulator_module = b.createModule(.{
+        .root_source_file = b.path("emulator/emulator.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const brand_module = b.createModule(.{
         .root_source_file = b.path("brand/brand.zig"),
         .target = target,
@@ -312,6 +318,7 @@ pub fn build(b: *std.Build) void {
         addModuleTests(b, test_step, "runtime-wasm", wasm_module);
     }
     addModuleTests(b, test_step, "simulator", simulator_module);
+    addModuleTests(b, test_step, "emulator", emulator_module);
 
     for (tools) |tool| {
         const module = b.createModule(.{
