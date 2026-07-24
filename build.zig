@@ -237,6 +237,11 @@ pub fn build(b: *std.Build) void {
             .root = "tools/test-vector/main.zig",
             .description = "Validate a test-vector manifest for uniqueness and known outcomes",
         },
+        .{
+            .name = "audit-inspect",
+            .root = "tools/audit-inspect/main.zig",
+            .description = "Inspect an audit ledger for an unbroken sequence and intact hash chain",
+        },
     };
 
     const test_step = b.step("test", "Run unit tests");
