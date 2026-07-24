@@ -23,7 +23,7 @@ const Point = vector.Point;
 const white = Rgba{ .r = 255, .g = 255, .b = 255, .a = 255 };
 
 /// The apps whose icons this module can draw.
-pub const App = enum { phone, messages, calendar, camera, health, agents, files, settings };
+pub const App = enum { phone, messages, calendar, camera, health, agents, files, settings, mail, weather, notes, maps };
 
 /// The gradient a given app's tile uses.
 pub fn gradientFor(app: App) theme.Gradient {
@@ -36,6 +36,10 @@ pub fn gradientFor(app: App) theme.Gradient {
         .agents => theme.icon_agents,
         .files => theme.icon_files,
         .settings => theme.icon_settings,
+        .mail => theme.icon_mail,
+        .weather => theme.icon_weather,
+        .notes => theme.icon_notes,
+        .maps => theme.icon_maps,
     };
 }
 
@@ -76,6 +80,10 @@ pub fn draw(target: *Framebuffer, rect: paint.Rect, app: App) void {
         .agents => drawAgents(target, rect, w),
         .files => drawFiles(target, rect, w),
         .settings => drawSettings(target, rect, w),
+        .mail => drawMail(target, rect, w),
+        .weather => drawWeather(target, rect, w),
+        .notes => drawNotes(target, rect, w),
+        .maps => drawMaps(target, rect, w),
     }
 }
 
@@ -131,6 +139,45 @@ fn drawFiles(target: *Framebuffer, rect: paint.Rect, w: f32) void {
         .{ 0.34, 0.30 }, .{ 0.58, 0.30 }, .{ 0.66, 0.38 }, .{ 0.66, 0.70 }, .{ 0.34, 0.70 },
     }, w, true);
     stroke(target, rect, &.{ .{ 0.58, 0.30 }, .{ 0.58, 0.38 }, .{ 0.66, 0.38 } }, w, false); // fold
+}
+
+fn drawMail(target: *Framebuffer, rect: paint.Rect, w: f32) void {
+    // An envelope: a rounded rectangle body with a V flap.
+    stroke(target, rect, &.{ .{ 0.26, 0.36 }, .{ 0.74, 0.36 }, .{ 0.74, 0.64 }, .{ 0.26, 0.64 } }, w, true);
+    stroke(target, rect, &.{ .{ 0.26, 0.38 }, .{ 0.50, 0.54 }, .{ 0.74, 0.38 } }, w, false);
+}
+
+fn drawWeather(target: *Framebuffer, rect: paint.Rect, w: f32) void {
+    // A sun: a small disc with rays around it.
+    const cx = map(rect, 0.50, 0.50).x;
+    const cy = map(rect, 0.50, 0.50).y;
+    const r = @as(f32, @floatFromInt(rect.w)) * 0.11;
+    vector.fillDisc(target, cx, cy, r, white);
+    const rays = [_][2]f32{ .{ 0.50, 0.24 }, .{ 0.50, 0.76 }, .{ 0.24, 0.50 }, .{ 0.76, 0.50 }, .{ 0.32, 0.32 }, .{ 0.68, 0.68 }, .{ 0.32, 0.68 }, .{ 0.68, 0.32 } };
+    for (rays) |ray| {
+        const inner = mixToCentre(ray, 0.30);
+        stroke(target, rect, &.{ inner, ray }, w * 0.8, false);
+    }
+}
+
+fn mixToCentre(p: [2]f32, t: f32) [2]f32 {
+    return .{ p[0] + (0.50 - p[0]) * t, p[1] + (0.50 - p[1]) * t };
+}
+
+fn drawNotes(target: *Framebuffer, rect: paint.Rect, w: f32) void {
+    // A page with three text lines.
+    stroke(target, rect, &.{ .{ 0.30, 0.30 }, .{ 0.70, 0.30 }, .{ 0.70, 0.70 }, .{ 0.30, 0.70 } }, w, true);
+    stroke(target, rect, &.{ .{ 0.38, 0.42 }, .{ 0.62, 0.42 } }, w * 0.7, false);
+    stroke(target, rect, &.{ .{ 0.38, 0.50 }, .{ 0.62, 0.50 } }, w * 0.7, false);
+    stroke(target, rect, &.{ .{ 0.38, 0.58 }, .{ 0.54, 0.58 } }, w * 0.7, false);
+}
+
+fn drawMaps(target: *Framebuffer, rect: paint.Rect, w: f32) void {
+    // A location pin: a teardrop with a hollow centre.
+    stroke(target, rect, &.{
+        .{ 0.50, 0.72 }, .{ 0.34, 0.50 }, .{ 0.36, 0.38 }, .{ 0.50, 0.30 }, .{ 0.64, 0.38 }, .{ 0.66, 0.50 }, .{ 0.50, 0.72 },
+    }, w, true);
+    vector.fillDisc(target, map(rect, 0.50, 0.44).x, map(rect, 0.50, 0.44).y, w * 0.9, white);
 }
 
 fn drawSettings(target: *Framebuffer, rect: paint.Rect, w: f32) void {
