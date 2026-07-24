@@ -217,6 +217,11 @@ pub fn build(b: *std.Build) void {
             .root = "tools/performance/main.zig",
             .description = "Check performance measurements against their budgets",
         },
+        .{
+            .name = "certification",
+            .root = "tools/certification/main.zig",
+            .description = "Assemble launch-readiness criteria into a go/no-go decision",
+        },
     };
 
     const test_step = b.step("test", "Run unit tests");
