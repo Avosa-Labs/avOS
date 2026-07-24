@@ -232,6 +232,11 @@ pub fn build(b: *std.Build) void {
             .root = "tools/power/main.zig",
             .description = "Check power-draw measurements against their budgets",
         },
+        .{
+            .name = "test-vector",
+            .root = "tools/test-vector/main.zig",
+            .description = "Validate a test-vector manifest for uniqueness and known outcomes",
+        },
     };
 
     const test_step = b.step("test", "Run unit tests");
