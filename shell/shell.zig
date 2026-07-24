@@ -22,6 +22,18 @@ pub const settings = @import("settings/settings.zig");
 pub const quick_controls = @import("quick-controls/quick_controls.zig");
 pub const multitasking = @import("multitasking/recents.zig");
 
+// Form-factor adaptations: identity and task graphs move across endpoints, but each form factor's
+// capabilities are its own — a deliberate reduction from, or extension of, the phone baseline.
+pub const phone = @import("phone/adaptation.zig");
+pub const tablet = @import("tablet/adaptation.zig");
+pub const desktop = @import("desktop/adaptation.zig");
+pub const wearable = @import("wearable/adaptation.zig");
+pub const spatial = @import("spatial/adaptation.zig");
+pub const vehicle = @import("vehicle/adaptation.zig");
+pub const room = @import("room/adaptation.zig");
+pub const robot = @import("robot/adaptation.zig");
+pub const screenless = @import("screenless/adaptation.zig");
+
 test {
     _ = surfaces;
     _ = command;
@@ -39,4 +51,13 @@ test {
     _ = settings;
     _ = quick_controls;
     _ = multitasking;
+    _ = phone;
+    _ = tablet;
+    _ = desktop;
+    _ = wearable;
+    _ = spatial;
+    _ = vehicle;
+    _ = room;
+    _ = robot;
+    _ = screenless;
 }
