@@ -30,6 +30,7 @@ planned tools are listed but not stubbed.
 | `certification` | Assemble launch-readiness criteria into a go/no-go decision | — |
 | `zig-version` | Decide whether a compiler version is the pinned canonical one | — |
 | `power` | Check power-draw measurements against their budgets | — |
+| `test-vector` | Validate a test-vector manifest for uniqueness and known outcomes | — |
 
 ## Planned
 
@@ -39,7 +40,7 @@ empty imitation of the tree.
 
 | Tool | Purpose |
 | --- | --- |
-| `test-vector`, `protocol-codegen`, `icon-build`, `audit-inspect` | Development and diagnostic utilities |
+| `protocol-codegen`, `icon-build`, `audit-inspect` | Development and diagnostic utilities |
 
 The distinction between the two tables is the point: what is claimed as working is
 working, and what is not is named as not-yet, never disguised.
