@@ -516,6 +516,23 @@ pub fn build(b: *std.Build) void {
     if (b.args) |forwarded| run_screen.addArgs(forwarded);
     b.step("screen", "Render a named shell screen to a PNG").dependOn(&run_screen.step);
 
+    // A named app screen rendered to a PNG.
+    const app_module = b.createModule(.{
+        .root_source_file = b.path("graphics/paint/app_main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "compat", .module = compat_module },
+            .{ .name = "design", .module = design_module },
+        },
+    });
+    const app_exe = b.addExecutable(.{ .name = "app", .root_module = app_module });
+    b.installArtifact(app_exe);
+    const run_app = b.addRunArtifact(app_exe);
+    run_app.step.dependOn(b.getInstallStep());
+    if (b.args) |forwarded| run_app.addArgs(forwarded);
+    b.step("app", "Render a named app screen to a PNG").dependOn(&run_app.step);
+
     // Acceptance tests hold a milestone to what it must demonstrate. They sit
     // outside the modules they exercise, so they can only use the interfaces a
     // real caller has.
