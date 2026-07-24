@@ -413,6 +413,47 @@ pub fn build(b: *std.Build) void {
     });
     addModuleTests(b, test_step, "property", property_module);
 
+    // The security floor, contract-vector conformance, and integration flows compose several modules
+    // per test, so they import the packaging modules as well.
+    const security_floor_module = b.createModule(.{
+        .root_source_file = b.path("tests/security/floor.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "applications", .module = applications_module },
+            .{ .name = "session", .module = session_module },
+            .{ .name = "emulator", .module = emulator_module },
+            .{ .name = "shell", .module = shell_module },
+            .{ .name = "packaging", .module = packaging_module },
+        },
+    });
+    addModuleTests(b, test_step, "security-floor", security_floor_module);
+
+    const contract_module = b.createModule(.{
+        .root_source_file = b.path("tests/contract/vectors.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "session", .module = session_module },
+            .{ .name = "packaging", .module = packaging_module },
+            .{ .name = "emulator", .module = emulator_module },
+        },
+    });
+    addModuleTests(b, test_step, "contract", contract_module);
+
+    const integration_module = b.createModule(.{
+        .root_source_file = b.path("tests/integration/flows.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "applications", .module = applications_module },
+            .{ .name = "session", .module = session_module },
+            .{ .name = "shell", .module = shell_module },
+            .{ .name = "packaging", .module = packaging_module },
+        },
+    });
+    addModuleTests(b, test_step, "integration", integration_module);
+
     // Recovery is held apart from the acceptance suites because it asks a
     // different question: not whether a component behaves when the medium
     // beneath it is sound, but what happens when it is not.
