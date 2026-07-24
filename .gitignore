@@ -47,3 +47,9 @@ zig-out/
 
 # External design reference — never commit
 *Tour.html
+
+# Rendered frames written to the repo root by the render steps are build output
+/home.png
+/frame.png
+/icons.png
+/screen.png
