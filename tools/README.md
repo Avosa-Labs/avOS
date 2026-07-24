@@ -20,6 +20,7 @@ planned tools are listed but not stubbed.
 | `source-repro` | Build the same source twice and compare the images | yes |
 | `sbom` | Emit a software bill of materials for the source tree | — |
 | `license` | Check third-party dependency license compliance | — |
+| `rollback` | Decide whether a rollback to an earlier version is permitted | — |
 
 ## Planned
 
@@ -31,7 +32,6 @@ empty imitation of the tree.
 | --- | --- |
 | `package-sign` | Sign an application package for store distribution |
 | `release` | Drive a release through the rollout rings |
-| `rollback` | Issue and verify a rollback to a known-good version |
 | `crash-symbols` | Symbolicate a crash report against a build |
 | `certification` | Assemble certification evidence for a market |
 | `accessibility-audit` | Check surfaces against the accessibility baseline |
