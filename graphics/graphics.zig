@@ -30,6 +30,7 @@ pub const iconography = @import("paint/iconography.zig");
 pub const text = @import("paint/text.zig");
 pub const home = @import("paint/home.zig");
 pub const screens = @import("paint/screens.zig");
+pub const apps = @import("paint/apps.zig");
 
 test {
     _ = color;
@@ -52,4 +53,5 @@ test {
     _ = text;
     _ = home;
     _ = screens;
+    _ = apps;
 }
