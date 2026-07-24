@@ -145,7 +145,7 @@ pub fn main(init: std.process.Init) !u8 {
     } else if (std.mem.eql(u8, which, "approval")) {
         renderLiveApproval(&target, &host);
     } else if (std.mem.eql(u8, which, "home")) {
-        graphics.home.render(&target);
+        renderLiveHome(&target, &host);
     } else if (std.mem.eql(u8, which, "boot")) {
         renderBoot(&target);
     } else if (std.mem.eql(u8, which, "rest")) {
@@ -204,7 +204,7 @@ fn renderSession(gpa: std.mem.Allocator, io: anytype, err: anytype, host: *Host,
         defer target.deinit();
         switch (frame.kind) {
             .boot => renderBoot(&target),
-            .home => graphics.home.render(&target),
+            .home => renderLiveHome(&target, host),
             .activity => try renderLiveActivity(gpa, &target, host),
             .approval => renderLiveApproval(&target, host),
             .principals => try renderLivePrincipals(gpa, &target, host),
@@ -269,6 +269,25 @@ fn renderLivePrincipals(gpa: std.mem.Allocator, target: *Framebuffer, host: *Hos
         });
     }
     screens.renderPrincipalsScreen(target, list.items);
+}
+
+/// Renders the home screen with its agent-activity card drawn from real agent state — the agent that
+/// requested a decision in this run, so home names what an agent actually did.
+fn renderLiveHome(target: *Framebuffer, host: *Host) void {
+    var title: []const u8 = "Your agents are at work";
+    var subtitle: []const u8 = "Everything in the open. Tap to review.";
+    var buf: [96]u8 = undefined;
+    var index: usize = 0;
+    while (index < host.ledger.count()) : (index += 1) {
+        const event = host.ledger.at(index) orelse continue;
+        if (event.action != .approval_requested) continue;
+        if (host.registry.lookup(event.actor)) |actor| {
+            title = std.fmt.bufPrint(&buf, "{s} needs a decision", .{actor.display_name}) catch title;
+            subtitle = "Held for your approval. Tap to review.";
+        }
+        break;
+    }
+    graphics.home.renderWith(target, .{ .title = title, .subtitle = subtitle });
 }
 
 /// Renders the approval screen from the real action this run held for a human decision — the travel
