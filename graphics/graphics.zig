@@ -27,6 +27,7 @@ pub const framebuffer = @import("paint/framebuffer.zig");
 pub const paint = @import("paint/paint.zig");
 pub const vector = @import("paint/vector.zig");
 pub const iconography = @import("paint/iconography.zig");
+pub const text = @import("paint/text.zig");
 
 test {
     _ = color;
@@ -46,4 +47,5 @@ test {
     _ = paint;
     _ = vector;
     _ = iconography;
+    _ = text;
 }
