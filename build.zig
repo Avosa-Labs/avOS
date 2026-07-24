@@ -227,6 +227,11 @@ pub fn build(b: *std.Build) void {
             .root = "tools/zig-version/main.zig",
             .description = "Decide whether a compiler version is the pinned canonical one",
         },
+        .{
+            .name = "power",
+            .root = "tools/power/main.zig",
+            .description = "Check power-draw measurements against their budgets",
+        },
     };
 
     const test_step = b.step("test", "Run unit tests");
