@@ -53,3 +53,7 @@ zig-out/
 /frame.png
 /icons.png
 /screen.png
+
+# Live session frames written by `zig build run`
+/session_*.png
+/shell.png

@@ -554,6 +554,13 @@ pub fn build(b: *std.Build) void {
     if (b.args) |forwarded| run_live.addArgs(forwarded);
     b.step("shell", "Run the canonical scenario and render the designed UI from its real state").dependOn(&run_live.step);
 
+    // `run`: play the whole live OS session as a numbered sequence of frames, from one real run.
+    const run_session = b.addRunArtifact(live_exe);
+    run_session.step.dependOn(b.getInstallStep());
+    run_session.addArg("session");
+    if (b.args) |forwarded| run_session.addArgs(forwarded);
+    b.step("run", "Play the live OS session (boot to rest) as a sequence of frames").dependOn(&run_session.step);
+
     // Acceptance tests hold a milestone to what it must demonstrate. They sit
     // outside the modules they exercise, so they can only use the interfaces a
     // real caller has.
