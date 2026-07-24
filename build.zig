@@ -189,6 +189,13 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     addModuleTests(b, test_step, "runtime-apple-portability", runtime_apple_module);
+
+    const graphics_module = b.createModule(.{
+        .root_source_file = b.path("graphics/graphics.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    addModuleTests(b, test_step, "graphics", graphics_module);
     addModuleTests(b, test_step, "services", services_module);
     addModuleTests(b, test_step, "session", session_module);
     addModuleTests(b, test_step, "storage", storage_module);
