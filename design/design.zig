@@ -17,9 +17,11 @@ pub const components = @import("components/components.zig");
 pub const layouts = @import("layouts/layouts.zig");
 pub const icons = @import("icons/icons.zig");
 pub const materials = @import("materials/materials.zig");
+pub const theme = @import("theme/theme.zig");
 
 test {
     _ = tokens;
+    _ = theme;
     _ = accessibility;
     _ = contrast;
     _ = typography;

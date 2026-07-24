@@ -21,6 +21,11 @@ pub const video_pacing = @import("video/pacing.zig");
 pub const privacy = @import("privacy/privacy.zig");
 pub const capture = @import("capture/capture.zig");
 
+// The concrete render layer: the framebuffer the pipeline draws onto, and the painter that executes a
+// display list into pixels. Where the modules above decide, these produce.
+pub const framebuffer = @import("paint/framebuffer.zig");
+pub const paint = @import("paint/paint.zig");
+
 test {
     _ = color;
     _ = compositor;
@@ -35,4 +40,6 @@ test {
     _ = video_pacing;
     _ = privacy;
     _ = capture;
+    _ = framebuffer;
+    _ = paint;
 }
