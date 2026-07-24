@@ -182,6 +182,11 @@ pub fn build(b: *std.Build) void {
             .root = "tools/license/main.zig",
             .description = "Check third-party dependency license compliance",
         },
+        .{
+            .name = "rollback",
+            .root = "tools/rollback/main.zig",
+            .description = "Decide whether a rollback to an earlier version is permitted",
+        },
     };
 
     const test_step = b.step("test", "Run unit tests");
