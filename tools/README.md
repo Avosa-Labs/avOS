@@ -21,6 +21,7 @@ planned tools are listed but not stubbed.
 | `sbom` | Emit a software bill of materials for the source tree | — |
 | `license` | Check third-party dependency license compliance | — |
 | `rollback` | Decide whether a rollback to an earlier version is permitted | — |
+| `package-sign` | Decide whether a signed application package may be distributed | — |
 
 ## Planned
 
@@ -30,7 +31,6 @@ empty imitation of the tree.
 
 | Tool | Purpose |
 | --- | --- |
-| `package-sign` | Sign an application package for store distribution |
 | `release` | Drive a release through the rollout rings |
 | `crash-symbols` | Symbolicate a crash report against a build |
 | `certification` | Assemble certification evidence for a market |
