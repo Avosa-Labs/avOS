@@ -42,8 +42,23 @@ fn s(colour: theme.Colour) fb.Rgba {
     return paint.sample(colour);
 }
 
+/// The agent-activity card at the top of home — what an agent just did, in a line the person can act
+/// on. The live shell fills this from real agent state; the demo has the same shape.
+pub const AgentCard = struct { title: []const u8, subtitle: []const u8 };
+
+pub const demo_card = AgentCard{ .title = "Planner arranged your day", .subtitle = "Held your afternoon. Tap to review." };
+
+/// Renders the home screen with a given agent-activity card.
+pub fn renderWith(target: *Framebuffer, agent_card: AgentCard) void {
+    renderHome(target, agent_card);
+}
+
 /// Renders the home screen into a framebuffer sized `width` x `height`.
 pub fn render(target: *Framebuffer) void {
+    renderHome(target, demo_card);
+}
+
+fn renderHome(target: *Framebuffer, agent_card: AgentCard) void {
     // Wallpaper: a vertical gradient from the base to the panel tone.
     paint.paint(target, &.{.{ .vgradient = .{
         .rect = .{ .x = 0, .y = 0, .w = width, .h = height },
@@ -72,8 +87,8 @@ pub fn render(target: *Framebuffer) void {
     const card: paint.Rect = .{ .x = 24, .y = 150, .w = width - 48, .h = 74 };
     paint.paint(target, &.{.{ .rounded = .{ .rect = card, .radius = theme.radius_lg, .colour = s(theme.surface) } }});
     vector.fillDisc(target, 52, 187, 8, s(theme.agent)); // agent presence dot
-    _ = text.draw(target, 74, 183, "Planner arranged your day", 13, s(theme.text_primary));
-    _ = text.draw(target, 74, 204, "Held your afternoon. Tap to review.", 11, s(theme.text_secondary));
+    _ = text.draw(target, 74, 183, agent_card.title, 13, s(theme.text_primary));
+    _ = text.draw(target, 74, 204, agent_card.subtitle, 11, s(theme.text_secondary));
     // Chevron on the right.
     vector.strokePolyline(target, &.{ .{ .x = width - 44, .y = 180 }, .{ .x = width - 38, .y = 187 }, .{ .x = width - 44, .y = 194 } }, 2, s(theme.text_secondary), false);
 
