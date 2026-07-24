@@ -32,6 +32,8 @@ pub fn main(init: std.process.Init) !u8 {
         .ledger
     else if (std.mem.eql(u8, args[1], "principals"))
         .principals
+    else if (std.mem.eql(u8, args[1], "settings"))
+        .settings
     else {
         try err.print("screen: unknown screen '{s}'\n", .{args[1]});
         try err.flush();
