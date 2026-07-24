@@ -129,9 +129,19 @@ fn line(target: *Framebuffer, x0: i32, y: i32, x1: i32) void {
 
 // --- Activity ledger ---
 
-const LedgerRow = struct { actor: []const u8, action: []const u8, capability: []const u8, outcome: []const u8, colour: theme.Colour, denied: bool };
+/// One activity-ledger row as the screen consumes it — a view model, not a control-plane type. The
+/// live shell populates these from the real audit ledger; the demo data is the same shape.
+pub const LedgerRow = struct {
+    actor: []const u8,
+    action: []const u8,
+    capability: []const u8,
+    outcome: []const u8,
+    colour: theme.Colour,
+    denied: bool,
+};
 
-const ledger_rows = [_]LedgerRow{
+/// Demonstration rows used when the ledger is rendered standalone, without a running control plane.
+pub const demo_ledger_rows = [_]LedgerRow{
     .{ .actor = "Planner", .action = "read calendar", .capability = "calendar.read", .outcome = "ok", .colour = theme.agent, .denied = false },
     .{ .actor = "You", .action = "approved a payment", .capability = "payments", .outcome = "once", .colour = theme.human, .denied = false },
     .{ .actor = "Travel agent", .action = "confirm venue", .capability = "network.call", .outcome = "approved", .colour = theme.agent, .denied = false },
@@ -139,7 +149,19 @@ const ledger_rows = [_]LedgerRow{
     .{ .actor = "Planner", .action = "arrange focus", .capability = "calendar.write", .outcome = "ok", .colour = theme.agent, .denied = false },
 };
 
+/// Renders the full activity screen from a set of rows — the wallpaper, status bar, header, filter
+/// chips, and one card per row. This is the entry point the live shell calls with real ledger data.
+pub fn renderActivity(target: *Framebuffer, rows: []const LedgerRow) void {
+    wallpaper(target);
+    statusBar(target);
+    activityContent(target, rows);
+}
+
 fn renderLedger(target: *Framebuffer) void {
+    activityContent(target, &demo_ledger_rows);
+}
+
+fn activityContent(target: *Framebuffer, rows: []const LedgerRow) void {
     header(target, "Activity", "Who acted, under which capability");
 
     // Filter chips.
@@ -148,13 +170,12 @@ fn renderLedger(target: *Framebuffer) void {
     chip(target, .{ .x = 184, .y = 150, .w = 80, .h = 30 }, "Denied", false);
 
     var y: i32 = 200;
-    for (ledger_rows) |r| {
+    for (rows) |r| {
         const c: Rect = .{ .x = 20, .y = y, .w = width - 40, .h = 64 };
-        card(target, c, if (r.denied) theme.surface else theme.surface);
+        card(target, c, theme.surface);
         dot(target, 44, @floatFromInt(y + 24), r.colour);
         _ = text.draw(target, 62, @floatFromInt(y + 28), r.actor, 14, s(theme.text_primary));
         _ = text.draw(target, 62, @floatFromInt(y + 50), r.action, 12, s(theme.text_secondary));
-        // Outcome badge on the right.
         const badge_colour = if (r.denied) theme.denied else theme.teal;
         _ = text.draw(target, rightAlign(r.outcome, 12), @floatFromInt(y + 28), r.outcome, 12, s(badge_colour));
         _ = text.draw(target, rightAlign(r.capability, 11), @floatFromInt(y + 50), r.capability, 11, s(theme.text_tertiary));
