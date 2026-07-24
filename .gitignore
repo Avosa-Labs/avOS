@@ -44,3 +44,6 @@ zig-out/
 # Documentation, except the specification, which is local-only for now.
 !docs/**
 /docs/PLATFORM_SPEC.md
+
+# External design reference — never commit
+*Tour.html

@@ -282,6 +282,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    graphics_module.addImport("design", design_module);
     addModuleTests(b, test_step, "graphics", graphics_module);
 
     const input_module = b.createModule(.{
@@ -445,6 +446,24 @@ pub fn build(b: *std.Build) void {
     b.step("simulator", "Run a scenario against the control plane").dependOn(&run_simulator.step);
 
     addModuleTests(b, test_step, "inspector", inspector_module);
+
+    // The frame renderer: paints a demonstration display list to a PNG, the render pipeline's first
+    // viewable output.
+    const frame_module = b.createModule(.{
+        .root_source_file = b.path("graphics/paint/frame_main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "compat", .module = compat_module },
+            .{ .name = "design", .module = design_module },
+        },
+    });
+    const frame_exe = b.addExecutable(.{ .name = "frame", .root_module = frame_module });
+    b.installArtifact(frame_exe);
+    const run_frame = b.addRunArtifact(frame_exe);
+    run_frame.step.dependOn(b.getInstallStep());
+    if (b.args) |forwarded| run_frame.addArgs(forwarded);
+    b.step("frame", "Render a demonstration frame to a PNG").dependOn(&run_frame.step);
 
     // Acceptance tests hold a milestone to what it must demonstrate. They sit
     // outside the modules they exercise, so they can only use the interfaces a
