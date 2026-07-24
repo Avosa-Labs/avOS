@@ -15,6 +15,17 @@ pub const planner = @import("planner/planner.zig");
 pub const router = @import("router/router.zig");
 pub const scheduler = @import("scheduler/scheduler.zig");
 pub const tool_registry = @import("tool-registry/tool_registry.zig");
+pub const host = @import("host/host.zig");
+pub const lifecycle = @import("lifecycle/lifecycle.zig");
+pub const graph_compiler = @import("graph-compiler/compiler.zig");
+pub const policy = @import("policy/policy.zig");
+pub const provenance = @import("provenance/propagation.zig");
+pub const memory = @import("memory/memory.zig");
+pub const retrieval = @import("retrieval/retrieval.zig");
+pub const knowledge = @import("knowledge/knowledge.zig");
+pub const model_interface = @import("model/interface/interface.zig");
+pub const model_local = @import("model/local/local.zig");
+pub const model_remote = @import("model/remote/remote.zig");
 
 test {
     _ = approvals;
@@ -25,4 +36,15 @@ test {
     _ = router;
     _ = scheduler;
     _ = tool_registry;
+    _ = host;
+    _ = lifecycle;
+    _ = graph_compiler;
+    _ = policy;
+    _ = provenance;
+    _ = memory;
+    _ = retrieval;
+    _ = knowledge;
+    _ = model_interface;
+    _ = model_local;
+    _ = model_remote;
 }
