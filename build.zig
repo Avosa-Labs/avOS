@@ -224,6 +224,13 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     addModuleTests(b, test_step, "store", store_module);
+
+    const sdk_module = b.createModule(.{
+        .root_source_file = b.path("sdk/sdk.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    addModuleTests(b, test_step, "sdk", sdk_module);
     addModuleTests(b, test_step, "services", services_module);
     addModuleTests(b, test_step, "session", session_module);
     addModuleTests(b, test_step, "storage", storage_module);
