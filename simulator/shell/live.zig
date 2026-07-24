@@ -142,6 +142,8 @@ pub fn main(init: std.process.Init) !u8 {
         try renderLivePrincipals(gpa, &target, &host);
     } else if (std.mem.eql(u8, which, "store")) {
         renderLiveStore(&target);
+    } else if (std.mem.eql(u8, which, "approval")) {
+        renderLiveApproval(&target, &host);
     } else if (std.mem.eql(u8, which, "home")) {
         graphics.home.render(&target);
     } else if (std.mem.eql(u8, which, "boot")) {
@@ -187,14 +189,15 @@ fn renderRest(target: *Framebuffer) void {
 /// The session, as the actual OS plays it: boot, home, then the live agent-native surfaces produced by
 /// this run, then rest — each written as a numbered frame under `prefix`.
 fn renderSession(gpa: std.mem.Allocator, io: anytype, err: anytype, host: *Host, prefix: []const u8) !u8 {
-    const Frame = struct { name: []const u8, kind: enum { boot, home, activity, principals, store, rest } };
+    const Frame = struct { name: []const u8, kind: enum { boot, home, activity, approval, principals, store, rest } };
     const frames = [_]Frame{
         .{ .name = "00_boot", .kind = .boot },
         .{ .name = "01_home", .kind = .home },
         .{ .name = "02_activity", .kind = .activity },
-        .{ .name = "03_principals", .kind = .principals },
-        .{ .name = "04_store", .kind = .store },
-        .{ .name = "05_rest", .kind = .rest },
+        .{ .name = "03_approval", .kind = .approval },
+        .{ .name = "04_principals", .kind = .principals },
+        .{ .name = "05_store", .kind = .store },
+        .{ .name = "06_rest", .kind = .rest },
     };
     for (frames) |frame| {
         var target = try Framebuffer.init(gpa, w, h, paint.sample(theme.base));
@@ -203,6 +206,7 @@ fn renderSession(gpa: std.mem.Allocator, io: anytype, err: anytype, host: *Host,
             .boot => renderBoot(&target),
             .home => graphics.home.render(&target),
             .activity => try renderLiveActivity(gpa, &target, host),
+            .approval => renderLiveApproval(&target, host),
             .principals => try renderLivePrincipals(gpa, &target, host),
             .store => renderLiveStore(&target),
             .rest => renderRest(&target),
@@ -265,6 +269,29 @@ fn renderLivePrincipals(gpa: std.mem.Allocator, target: *Framebuffer, host: *Hos
         });
     }
     screens.renderPrincipalsScreen(target, list.items);
+}
+
+/// Renders the approval screen from the real action this run held for a human decision — the travel
+/// agent's consequential external confirmation, found in the audit ledger as an awaiting-approval event.
+fn renderLiveApproval(target: *Framebuffer, host: *Host) void {
+    var agent: []const u8 = "An agent";
+    var reaches: []const u8 = "an external destination";
+    var index: usize = 0;
+    while (index < host.ledger.count()) : (index += 1) {
+        const event = host.ledger.at(index) orelse continue;
+        if (event.action != .approval_requested) continue;
+        if (host.registry.lookup(event.actor)) |actor| agent = actor.display_name;
+        if (event.target_kind.len > 0) reaches = event.target_kind;
+        break;
+    }
+    screens.renderApprovalScreen(target, .{
+        .agent = agent,
+        .title = "Confirm the venue",
+        .subtitle = "Reaches outside",
+        .keys = .{ "Action", "Reaches", "Once" },
+        .values = .{ "confirm attendance", reaches, "Cannot repeat" },
+        .footer = "Nothing consequential without you.",
+    });
 }
 
 /// Renders the store catalog, each entry's install action decided by the real store decision module.
