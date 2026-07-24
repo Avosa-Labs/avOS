@@ -247,6 +247,11 @@ pub fn build(b: *std.Build) void {
             .root = "tools/icon-build/main.zig",
             .description = "Reduce an icon set to a single deterministic digest",
         },
+        .{
+            .name = "protocol-codegen",
+            .root = "tools/protocol-codegen/main.zig",
+            .description = "Validate a protocol definition and emit a deterministic binding signature",
+        },
     };
 
     const test_step = b.step("test", "Run unit tests");

@@ -33,16 +33,13 @@ planned tools are listed but not stubbed.
 | `test-vector` | Validate a test-vector manifest for uniqueness and known outcomes | — |
 | `audit-inspect` | Inspect an audit ledger for an unbroken sequence and intact hash chain | — |
 | `icon-build` | Reduce an icon set to a single deterministic digest | — |
+| `protocol-codegen` | Validate a protocol definition and emit a deterministic binding signature | — |
 
 ## Planned
 
-These directories are prepared integration points, not stubs. Each will be
-introduced when its first complete, tested implementation exists — never as an
-empty imitation of the tree.
+Every tool the platform planned is now implemented and tested; the planned table
+is empty. New tools are added here only when their first complete, tested
+implementation exists — never as an empty imitation of the tree.
 
-| Tool | Purpose |
-| --- | --- |
-| `protocol-codegen` | Development and diagnostic utilities |
-
-The distinction between the two tables is the point: what is claimed as working is
-working, and what is not is named as not-yet, never disguised.
+The principle that governed the split still holds: what is claimed as working is
+working, never disguised.
