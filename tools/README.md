@@ -32,6 +32,7 @@ planned tools are listed but not stubbed.
 | `power` | Check power-draw measurements against their budgets | — |
 | `test-vector` | Validate a test-vector manifest for uniqueness and known outcomes | — |
 | `audit-inspect` | Inspect an audit ledger for an unbroken sequence and intact hash chain | — |
+| `icon-build` | Reduce an icon set to a single deterministic digest | — |
 
 ## Planned
 
@@ -41,7 +42,7 @@ empty imitation of the tree.
 
 | Tool | Purpose |
 | --- | --- |
-| `protocol-codegen`, `icon-build` | Development and diagnostic utilities |
+| `protocol-codegen` | Development and diagnostic utilities |
 
 The distinction between the two tables is the point: what is claimed as working is
 working, and what is not is named as not-yet, never disguised.

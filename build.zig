@@ -242,6 +242,11 @@ pub fn build(b: *std.Build) void {
             .root = "tools/audit-inspect/main.zig",
             .description = "Inspect an audit ledger for an unbroken sequence and intact hash chain",
         },
+        .{
+            .name = "icon-build",
+            .root = "tools/icon-build/main.zig",
+            .description = "Reduce an icon set to a single deterministic digest",
+        },
     };
 
     const test_step = b.step("test", "Run unit tests");
