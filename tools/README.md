@@ -25,6 +25,7 @@ planned tools are listed but not stubbed.
 | `release` | Drive a release through the rollout rings, one promotion at a time | — |
 | `crash-symbols` | Symbolicate a fault address against a build's symbols | — |
 | `accessibility-audit` | Audit surfaces against the accessibility baseline | — |
+| `localization` | Verify localization completeness and fallback coverage | — |
 
 ## Planned
 
@@ -35,7 +36,6 @@ empty imitation of the tree.
 | Tool | Purpose |
 | --- | --- |
 | `certification` | Assemble certification evidence for a market |
-| `localization` | Verify localization completeness and fallback |
 | `performance` | Run and compare against the performance budgets |
 | `power`, `test-vector`, `protocol-codegen`, `icon-build`, `audit-inspect`, `zig-version` | Development and diagnostic utilities |
 

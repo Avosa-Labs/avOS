@@ -207,6 +207,11 @@ pub fn build(b: *std.Build) void {
             .root = "tools/accessibility-audit/main.zig",
             .description = "Audit surfaces against the accessibility baseline",
         },
+        .{
+            .name = "localization",
+            .root = "tools/localization/main.zig",
+            .description = "Verify localization completeness and fallback coverage",
+        },
     };
 
     const test_step = b.step("test", "Run unit tests");
