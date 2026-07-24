@@ -533,22 +533,25 @@ pub fn build(b: *std.Build) void {
     if (b.args) |forwarded| run_app.addArgs(forwarded);
     b.step("app", "Render a named app screen to a PNG").dependOn(&run_app.step);
 
-    // The whole tour contact sheet rendered to a PNG.
-    const tour_module = b.createModule(.{
-        .root_source_file = b.path("graphics/paint/tour_main.zig"),
+    // The live shell: runs the canonical scenario and renders the designed activity screen from the
+    // real audit ledger it produces — the design driven by real agents.
+    const live_module = b.createModule(.{
+        .root_source_file = b.path("simulator/shell/live.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
             .{ .name = "compat", .module = compat_module },
+            .{ .name = "simulator", .module = simulator_module },
+            .{ .name = "graphics", .module = graphics_module },
             .{ .name = "design", .module = design_module },
         },
     });
-    const tour_exe = b.addExecutable(.{ .name = "tour", .root_module = tour_module });
-    b.installArtifact(tour_exe);
-    const run_tour = b.addRunArtifact(tour_exe);
-    run_tour.step.dependOn(b.getInstallStep());
-    if (b.args) |forwarded| run_tour.addArgs(forwarded);
-    b.step("tour", "Render the whole tour contact sheet to a PNG").dependOn(&run_tour.step);
+    const live_exe = b.addExecutable(.{ .name = "shell", .root_module = live_module });
+    b.installArtifact(live_exe);
+    const run_live = b.addRunArtifact(live_exe);
+    run_live.step.dependOn(b.getInstallStep());
+    if (b.args) |forwarded| run_live.addArgs(forwarded);
+    b.step("shell", "Run the canonical scenario and render the designed UI from its real state").dependOn(&run_live.step);
 
     // Acceptance tests hold a milestone to what it must demonstrate. They sit
     // outside the modules they exercise, so they can only use the interfaces a
