@@ -31,6 +31,7 @@ pub const text = @import("paint/text.zig");
 pub const home = @import("paint/home.zig");
 pub const screens = @import("paint/screens.zig");
 pub const apps = @import("paint/apps.zig");
+pub const tour = @import("paint/tour.zig");
 
 test {
     _ = color;
@@ -54,4 +55,5 @@ test {
     _ = home;
     _ = screens;
     _ = apps;
+    _ = tour;
 }
