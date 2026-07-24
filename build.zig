@@ -10,6 +10,7 @@ const formatted_paths = [_][]const u8{
     "compat",
     "core",
     "design",
+    "emulator",
     "ipc",
     "runtimes",
     "services",
