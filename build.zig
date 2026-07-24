@@ -222,6 +222,11 @@ pub fn build(b: *std.Build) void {
             .root = "tools/certification/main.zig",
             .description = "Assemble launch-readiness criteria into a go/no-go decision",
         },
+        .{
+            .name = "zig-version",
+            .root = "tools/zig-version/main.zig",
+            .description = "Decide whether a compiler version is the pinned canonical one",
+        },
     };
 
     const test_step = b.step("test", "Run unit tests");
