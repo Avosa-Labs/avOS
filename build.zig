@@ -177,6 +177,11 @@ pub fn build(b: *std.Build) void {
             .root = "tools/sbom/main.zig",
             .description = "Emit a software bill of materials for the source tree",
         },
+        .{
+            .name = "license",
+            .root = "tools/license/main.zig",
+            .description = "Check third-party dependency license compliance",
+        },
     };
 
     const test_step = b.step("test", "Run unit tests");

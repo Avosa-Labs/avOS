@@ -19,6 +19,7 @@ planned tools are listed but not stubbed.
 | `image-sign` | Sign an image digest, or check a signature against one | — |
 | `source-repro` | Build the same source twice and compare the images | yes |
 | `sbom` | Emit a software bill of materials for the source tree | — |
+| `license` | Check third-party dependency license compliance | — |
 
 ## Planned
 
@@ -29,7 +30,6 @@ empty imitation of the tree.
 | Tool | Purpose |
 | --- | --- |
 | `package-sign` | Sign an application package for store distribution |
-| `license` | Check third-party license compliance across the tree |
 | `release` | Drive a release through the rollout rings |
 | `rollback` | Issue and verify a rollback to a known-good version |
 | `crash-symbols` | Symbolicate a crash report against a build |
