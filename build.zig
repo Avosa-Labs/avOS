@@ -202,6 +202,11 @@ pub fn build(b: *std.Build) void {
             .root = "tools/crash-symbols/main.zig",
             .description = "Symbolicate a fault address against a build's symbols",
         },
+        .{
+            .name = "accessibility-audit",
+            .root = "tools/accessibility-audit/main.zig",
+            .description = "Audit surfaces against the accessibility baseline",
+        },
     };
 
     const test_step = b.step("test", "Run unit tests");
