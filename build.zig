@@ -212,6 +212,11 @@ pub fn build(b: *std.Build) void {
             .root = "tools/localization/main.zig",
             .description = "Verify localization completeness and fallback coverage",
         },
+        .{
+            .name = "performance-check",
+            .root = "tools/performance/main.zig",
+            .description = "Check performance measurements against their budgets",
+        },
     };
 
     const test_step = b.step("test", "Run unit tests");
