@@ -32,6 +32,10 @@ pub const home = @import("paint/home.zig");
 pub const screens = @import("paint/screens.zig");
 pub const apps = @import("paint/apps.zig");
 pub const tour = @import("paint/tour.zig");
+// The GPU backend: the same display list encoded to an instance buffer a GPU draws in one pass, and
+// pointer hit-testing that routes a tap to the topmost target for the input decision layer.
+pub const backend = @import("paint/backend.zig");
+pub const pointer = @import("paint/pointer.zig");
 
 test {
     _ = color;
@@ -56,4 +60,6 @@ test {
     _ = screens;
     _ = apps;
     _ = tour;
+    _ = backend;
+    _ = pointer;
 }
