@@ -25,6 +25,8 @@ pub const capture = @import("capture/capture.zig");
 // display list into pixels. Where the modules above decide, these produce.
 pub const framebuffer = @import("paint/framebuffer.zig");
 pub const paint = @import("paint/paint.zig");
+pub const vector = @import("paint/vector.zig");
+pub const iconography = @import("paint/iconography.zig");
 
 test {
     _ = color;
@@ -42,4 +44,6 @@ test {
     _ = capture;
     _ = framebuffer;
     _ = paint;
+    _ = vector;
+    _ = iconography;
 }
