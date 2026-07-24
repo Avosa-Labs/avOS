@@ -18,6 +18,7 @@ planned tools are listed but not stubbed.
 | `image-build` | Reduce a directory to a system image digest, deterministically | yes |
 | `image-sign` | Sign an image digest, or check a signature against one | — |
 | `source-repro` | Build the same source twice and compare the images | yes |
+| `sbom` | Emit a software bill of materials for the source tree | — |
 
 ## Planned
 
@@ -28,7 +29,6 @@ empty imitation of the tree.
 | Tool | Purpose |
 | --- | --- |
 | `package-sign` | Sign an application package for store distribution |
-| `sbom` | Emit a software bill of materials for a build |
 | `license` | Check third-party license compliance across the tree |
 | `release` | Drive a release through the rollout rings |
 | `rollback` | Issue and verify a rollback to a known-good version |

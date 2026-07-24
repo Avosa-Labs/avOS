@@ -172,6 +172,11 @@ pub fn build(b: *std.Build) void {
             .root = "tools/doctor/main.zig",
             .description = "Report host, compiler, and pin health",
         },
+        .{
+            .name = "sbom",
+            .root = "tools/sbom/main.zig",
+            .description = "Emit a software bill of materials for the source tree",
+        },
     };
 
     const test_step = b.step("test", "Run unit tests");
