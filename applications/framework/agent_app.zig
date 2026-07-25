@@ -56,17 +56,27 @@ pub const DomainResult = union(enum) {
     failed,
 };
 
+/// The input to an operation: the operation name and its argument bytes, the same for
+/// both doors. The argument shape is the app's own — a setting key, a file path, a
+/// message body — which the domain interprets; the framework passes it through
+/// unread, so an agent's input and a person's input reach the domain identically.
+pub const Input = struct {
+    operation: []const u8,
+    args: []const u8 = "",
+};
+
 /// The app's domain: the shared logic and state behind both doors. An app implements
 /// one of these; the framework never inspects what it does, only that both doors reach
 /// it through the same call.
 pub const Domain = struct {
     context: *anyopaque,
-    /// Executes an operation. `key` is the idempotency key: a domain records applied
-    /// keys so a re-driven or re-approved operation runs its effect exactly once.
-    execute_fn: *const fn (context: *anyopaque, operation: []const u8, actor: Actor, key: u128) DomainResult,
+    /// Executes an operation with its arguments. `key` is the idempotency key: a domain
+    /// records applied keys so a re-driven or re-approved operation runs its effect
+    /// exactly once.
+    execute_fn: *const fn (context: *anyopaque, input: Input, actor: Actor, key: u128) DomainResult,
 
-    fn execute(domain: Domain, operation: []const u8, actor: Actor, key: u128) DomainResult {
-        return domain.execute_fn(domain.context, operation, actor, key);
+    fn execute(domain: Domain, input: Input, actor: Actor, key: u128) DomainResult {
+        return domain.execute_fn(domain.context, input, actor, key);
     }
 };
 
@@ -112,11 +122,12 @@ pub const App = struct {
     pub fn invoke(
         app: *App,
         actor: Actor,
-        operation: []const u8,
+        input: Input,
         presented_capability: []const u8,
         holds_capability: bool,
         key: u128,
     ) !Outcome {
+        const operation = input.operation;
         // The registry decides discovery and the capability-name match, and returns
         // whether a permitted call is consequential. A hallucinated operation or a
         // mismatched capability is denied here.
@@ -139,14 +150,14 @@ pub const App = struct {
                     _ = try app.record(actor, operation, .approval_requested, .awaiting_approval, key);
                     return .held;
                 }
-                return app.executeAndRecord(actor, operation, key);
+                return app.executeAndRecord(actor, input, key);
             },
             .invoke => {
                 if (!holds_capability) {
                     _ = try app.record(actor, operation, .action_denied, .denied, key);
                     return .{ .denied = .capability_mismatch };
                 }
-                return app.executeAndRecord(actor, operation, key);
+                return app.executeAndRecord(actor, input, key);
             },
         }
     }
@@ -154,19 +165,19 @@ pub const App = struct {
     /// Completes a previously held operation on a person's decision. The domain keys
     /// the effect by `key`, so approving is exactly-once even if the person taps twice
     /// or the process restarted between the hold and the approval.
-    pub fn approve(app: *App, approver: Actor, operation: []const u8, key: u128) !Outcome {
-        _ = try app.record(approver, operation, .approval_decided, .succeeded, key);
-        return app.executeAndRecord(approver, operation, key);
+    pub fn approve(app: *App, approver: Actor, input: Input, key: u128) !Outcome {
+        _ = try app.record(approver, input.operation, .approval_decided, .succeeded, key);
+        return app.executeAndRecord(approver, input, key);
     }
 
-    fn executeAndRecord(app: *App, actor: Actor, operation: []const u8, key: u128) !Outcome {
-        switch (app.domain.execute(operation, actor, key)) {
+    fn executeAndRecord(app: *App, actor: Actor, input: Input, key: u128) !Outcome {
+        switch (app.domain.execute(input, actor, key)) {
             .ok => |result| {
-                _ = try app.record(actor, operation, .tool_invoked, .succeeded, key);
+                _ = try app.record(actor, input.operation, .tool_invoked, .succeeded, key);
                 return .{ .executed = result };
             },
             .failed => {
-                _ = try app.record(actor, operation, .tool_invoked, .failed, key);
+                _ = try app.record(actor, input.operation, .tool_invoked, .failed, key);
                 return .failed;
             },
         }

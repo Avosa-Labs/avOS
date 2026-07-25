@@ -15,6 +15,7 @@ const framework = @import("../framework/agent_app.zig");
 
 pub const Actor = framework.Actor;
 pub const DomainResult = framework.DomainResult;
+pub const Input = framework.Input;
 
 const Applied = struct { key: u128, result: []const u8 };
 
@@ -47,9 +48,10 @@ pub const Store = struct {
     }
 
     /// The one entry point both doors reach.
-    pub fn execute(context: *anyopaque, operation: []const u8, actor: Actor, key: u128) DomainResult {
+    pub fn execute(context: *anyopaque, input: Input, actor: Actor, key: u128) DomainResult {
         _ = actor;
         const store: *Store = @ptrCast(@alignCast(context));
+        const operation = input.operation;
         if (std.mem.eql(u8, operation, "store.browse")) return .{ .ok = "read" };
         if (std.mem.eql(u8, operation, "store.details")) return .{ .ok = "read" };
         if (std.mem.eql(u8, operation, "store.install")) return store.applyKeyed(key, "install");
@@ -70,9 +72,9 @@ test "a mutating operation is exactly-once by key; a read changes nothing" {
     defer store.deinit();
     const actor: Actor = .{ .kind = .agent, .principal = .{ .value = 0xA } };
     const first_mutate = "store.install";
-    _ = Store.execute(&store, first_mutate, actor, 0x7);
-    _ = Store.execute(&store, first_mutate, actor, 0x7);
+    _ = Store.execute(&store, .{ .operation = first_mutate }, actor, 0x7);
+    _ = Store.execute(&store, .{ .operation = first_mutate }, actor, 0x7);
     try testing.expectEqual(@as(usize, 1), store.changes());
-    _ = Store.execute(&store, "store.browse", actor, 0);
+    _ = Store.execute(&store, .{ .operation = "store.browse" }, actor, 0);
     try testing.expectEqual(@as(usize, 1), store.changes());
 }

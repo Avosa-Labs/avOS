@@ -20,6 +20,7 @@ const framework = @import("../framework/agent_app.zig");
 
 pub const Actor = framework.Actor;
 pub const DomainResult = framework.DomainResult;
+pub const Input = framework.Input;
 
 const Message = struct {
     from: u128,
@@ -72,8 +73,9 @@ pub const Store = struct {
 
     /// The one entry point both doors reach. Dispatches an operation to its logic; the
     /// framework has already gated and will record it.
-    pub fn execute(context: *anyopaque, operation: []const u8, actor: Actor, key: u128) DomainResult {
+    pub fn execute(context: *anyopaque, input: Input, actor: Actor, key: u128) DomainResult {
         const store: *Store = @ptrCast(@alignCast(context));
+        const operation = input.operation;
 
         if (std.mem.eql(u8, operation, "message.search")) {
             // A read: return a small result. No state changes, no key needed.
@@ -114,8 +116,8 @@ test "sending twice with the same key sends once" {
     defer store.deinit();
 
     const agent: Actor = .{ .kind = .agent, .principal = .{ .value = 0xA } };
-    _ = Store.execute(&store, "message.send", agent, 0x7);
-    _ = Store.execute(&store, "message.send", agent, 0x7); // same key: exactly once
+    _ = Store.execute(&store, .{ .operation = "message.send" }, agent, 0x7);
+    _ = Store.execute(&store, .{ .operation = "message.send" }, agent, 0x7); // same key: exactly once
     try testing.expectEqual(@as(usize, 1), store.sent());
 }
 
@@ -124,9 +126,9 @@ test "drafting is idempotent by key and search changes nothing" {
     var store = Store.init(gpa);
     defer store.deinit();
     const agent: Actor = .{ .kind = .agent, .principal = .{ .value = 0xA } };
-    _ = Store.execute(&store, "message.draft", agent, 0x1);
-    _ = Store.execute(&store, "message.draft", agent, 0x1);
+    _ = Store.execute(&store, .{ .operation = "message.draft" }, agent, 0x1);
+    _ = Store.execute(&store, .{ .operation = "message.draft" }, agent, 0x1);
     try testing.expectEqual(@as(usize, 1), store.drafts.items.len);
-    _ = Store.execute(&store, "message.search", agent, 0);
+    _ = Store.execute(&store, .{ .operation = "message.search" }, agent, 0);
     try testing.expectEqual(@as(usize, 0), store.sent());
 }

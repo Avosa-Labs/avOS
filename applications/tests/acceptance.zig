@@ -57,8 +57,8 @@ test "an agent works Messages and the person watches it from the ledger" {
     defer fixture.deinit();
 
     // The agent searches and drafts — safe operations it completes on its own.
-    try testing.expect((try fixture.app.invoke(fixture.agent(), "message.search", "messages.read", true, 1)).ran());
-    try testing.expect((try fixture.app.invoke(fixture.agent(), "message.draft", "messages.compose", true, 2)).ran());
+    try testing.expect((try fixture.app.invoke(fixture.agent(), .{ .operation = "message.search" }, "messages.read", true, 1)).ran());
+    try testing.expect((try fixture.app.invoke(fixture.agent(), .{ .operation = "message.draft" }, "messages.compose", true, 2)).ran());
 
     // The person's live view is derived from the ledger — not from anything the agent
     // said — and shows exactly what the agent did.
@@ -76,14 +76,14 @@ test "a consequential agent operation is held, then approved, and runs exactly o
     defer fixture.deinit();
 
     // The agent proposes a send: it is held, not run.
-    const proposal = try fixture.app.invoke(fixture.agent(), "message.send", "messages.send", true, 7);
+    const proposal = try fixture.app.invoke(fixture.agent(), .{ .operation = "message.send" }, "messages.send", true, 7);
     try testing.expectEqual(framework.Outcome.held, proposal);
     try testing.expectEqual(@as(usize, 0), fixture.store.sent());
 
     // The person approves it — twice, as a double tap or a retry after a restart would.
     // The keyed effect applies once.
-    _ = try fixture.app.approve(fixture.human(), "message.send", 7);
-    _ = try fixture.app.approve(fixture.human(), "message.send", 7);
+    _ = try fixture.app.approve(fixture.human(), .{ .operation = "message.send" }, 7);
+    _ = try fixture.app.approve(fixture.human(), .{ .operation = "message.send" }, 7);
     try testing.expectEqual(@as(usize, 1), fixture.store.sent());
 }
 
@@ -94,7 +94,7 @@ test "an unauthorized agent operation is denied, recorded, and visible in the fe
     defer fixture.deinit();
 
     // The agent presents the wrong capability for send — denied, fail-closed.
-    const outcome = try fixture.app.invoke(fixture.agent(), "message.send", "messages.read", false, 3);
+    const outcome = try fixture.app.invoke(fixture.agent(), .{ .operation = "message.send" }, "messages.read", false, 3);
     switch (outcome) {
         .denied => {},
         else => return error.TestExpectedDenial,
@@ -115,7 +115,7 @@ test "the person's own send runs the identical domain path as the agent's" {
     defer fixture.deinit();
 
     // A person performs the consequential op directly — same invoke, same domain.
-    const outcome = try fixture.app.invoke(fixture.human(), "message.send", "messages.send", true, 9);
+    const outcome = try fixture.app.invoke(fixture.human(), .{ .operation = "message.send" }, "messages.send", true, 9);
     try testing.expect(outcome.ran());
     try testing.expectEqual(@as(usize, 1), fixture.store.sent());
 }

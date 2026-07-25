@@ -15,6 +15,7 @@ const framework = @import("../framework/agent_app.zig");
 
 pub const Actor = framework.Actor;
 pub const DomainResult = framework.DomainResult;
+pub const Input = framework.Input;
 
 const Applied = struct { key: u128, result: []const u8 };
 
@@ -47,9 +48,10 @@ pub const Store = struct {
     }
 
     /// The one entry point both doors reach.
-    pub fn execute(context: *anyopaque, operation: []const u8, actor: Actor, key: u128) DomainResult {
+    pub fn execute(context: *anyopaque, input: Input, actor: Actor, key: u128) DomainResult {
         _ = actor;
         const store: *Store = @ptrCast(@alignCast(context));
+        const operation = input.operation;
         if (std.mem.eql(u8, operation, "calendar.read")) return .{ .ok = "read" };
         if (std.mem.eql(u8, operation, "calendar.freebusy")) return .{ .ok = "read" };
         if (std.mem.eql(u8, operation, "calendar.add")) return store.applyKeyed(key, "add");
@@ -71,9 +73,9 @@ test "a mutating operation is exactly-once by key; a read changes nothing" {
     defer store.deinit();
     const actor: Actor = .{ .kind = .agent, .principal = .{ .value = 0xA } };
     const first_mutate = "calendar.add";
-    _ = Store.execute(&store, first_mutate, actor, 0x7);
-    _ = Store.execute(&store, first_mutate, actor, 0x7);
+    _ = Store.execute(&store, .{ .operation = first_mutate }, actor, 0x7);
+    _ = Store.execute(&store, .{ .operation = first_mutate }, actor, 0x7);
     try testing.expectEqual(@as(usize, 1), store.changes());
-    _ = Store.execute(&store, "calendar.read", actor, 0);
+    _ = Store.execute(&store, .{ .operation = "calendar.read" }, actor, 0);
     try testing.expectEqual(@as(usize, 1), store.changes());
 }
