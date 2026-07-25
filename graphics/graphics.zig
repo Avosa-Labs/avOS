@@ -13,6 +13,7 @@ pub const surfaces = @import("surfaces/surfaces.zig");
 pub const renderer = @import("renderer/renderer.zig");
 pub const scene = @import("scene/scene.zig");
 pub const animation = @import("animation/animation.zig");
+pub const interpolate = @import("animation/interpolate.zig");
 pub const effects = @import("effects/effects.zig");
 pub const materials = @import("materials/materials.zig");
 pub const linebreak = @import("text/linebreak.zig");
@@ -46,6 +47,7 @@ test {
     _ = renderer;
     _ = scene;
     _ = animation;
+    _ = interpolate;
     _ = effects;
     _ = materials;
     _ = linebreak;
