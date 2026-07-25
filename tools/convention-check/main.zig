@@ -207,10 +207,13 @@ fn inspect(
             }
             // Comment-content rules apply to comments only. Code may name a
             // path it must act on, and documentation prose may discuss the
-            // design; neither is a comment carrying authoring history.
-            if (comment_syntax.marks(text)) {
+            // design; neither is a comment carrying authoring history. The
+            // comment may be the whole line or trail code after it, so the
+            // comment tail is extracted and scanned — a `// old code` at the end
+            // of a line is as much a comment as one that starts the line.
+            if (comment_syntax.commentTail(text)) |comment| {
                 for (comment_terms) |term| {
-                    if (matches(text, term)) {
+                    if (matches(comment, term)) {
                         try append(arena, gpa, violations, path, line_number, term.rule, term.text, text);
                     }
                 }
@@ -263,12 +266,44 @@ const CommentSyntax = enum {
         return .none;
     }
 
-    fn marks(syntax: CommentSyntax, text: []const u8) bool {
-        return switch (syntax) {
-            .slash => std.mem.startsWith(u8, text, "//"),
-            .hash => std.mem.startsWith(u8, text, "#"),
-            .none => false,
+    /// The comment portion of a line — from the comment marker to the end —
+    /// wherever the marker sits, or null if the line carries no comment. A marker
+    /// inside a string or character literal is not a comment: it is tracked and
+    /// skipped, so a trailing `// filler` is found while a `"//"` in code is not.
+    fn commentTail(syntax: CommentSyntax, text: []const u8) ?[]const u8 {
+        const marker: u8 = switch (syntax) {
+            .slash => '/',
+            .hash => '#',
+            .none => return null,
         };
+        var index: usize = 0;
+        var in_string = false;
+        var in_char = false;
+        while (index < text.len) : (index += 1) {
+            const character = text[index];
+            if ((in_string or in_char) and character == '\\') {
+                index += 1; // Skip the escaped character.
+                continue;
+            }
+            if (!in_char and character == '"') {
+                in_string = !in_string;
+                continue;
+            }
+            // Only source with C-style comments has character literals; a hash
+            // file's `'` is ordinary text, so track char literals for slash only.
+            if (syntax == .slash and !in_string and character == '\'') {
+                in_char = !in_char;
+                continue;
+            }
+            if (in_string or in_char) continue;
+            if (character != marker) continue;
+            if (syntax == .slash) {
+                if (index + 1 < text.len and text[index + 1] == '/') return text[index..];
+            } else {
+                return text[index..];
+            }
+        }
+        return null;
     }
 };
 
@@ -584,6 +619,27 @@ test "a comment citing a specification section is caught but prose is not" {
     defer in_literal.deinit(gpa);
     try inspect(arena, gpa, "core/task/task.zig", "const note = \"per spec\";\n", true, &in_literal);
     try std.testing.expectEqual(@as(usize, 0), in_literal.items.len);
+}
+
+test "a filler term in a trailing comment is caught, but not one inside a string" {
+    const gpa = std.testing.allocator;
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // The comment trails code rather than opening the line; it is still a comment.
+    var trailing: std.ArrayList(Violation) = .empty;
+    defer trailing.deinit(gpa);
+    try inspect(arena, gpa, "core/task/task.zig", "return validate(cap); // per spec\n", true, &trailing);
+    try std.testing.expectEqual(@as(usize, 1), trailing.items.len);
+    try std.testing.expectEqual(Rule.comment_content, trailing.items[0].rule);
+
+    // A `//` inside a string literal does not open a comment, so a term after it
+    // in real code is not scanned as comment content.
+    var in_string: std.ArrayList(Violation) = .empty;
+    defer in_string.deinit(gpa);
+    try inspect(arena, gpa, "core/task/task.zig", "const u = \"http://per spec\";\n", true, &in_string);
+    try std.testing.expectEqual(@as(usize, 0), in_string.items.len);
 }
 
 test "clean source produces no violation" {

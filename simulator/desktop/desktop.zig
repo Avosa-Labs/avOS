@@ -30,7 +30,7 @@ const H: c_int = @intCast(live.height);
 /// approval, the app grid opens the activity ledger, the dock opens the store; on any sub-surface a tap
 /// in the header returns home and a tap in the body advances through the agent-native surfaces.
 fn navigate(current: live.Surface, mx: i32, my: i32) live.Surface {
-    _ = mx; // navigation uses vertical bands for now; the pointer routing is in graphics/pointer
+    _ = mx; // Navigation is decided by vertical band alone; the horizontal tap does not select a surface.
     // Translate the window tap into the light screen's own coordinates.
     const sy = my - graphics.phone.screen_y;
     const screen_h: i32 = @intCast(graphics.phone.screen_h);
