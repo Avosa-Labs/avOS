@@ -1,165 +1,136 @@
-//! The concrete dark reference theme, the exact colours and geometry the shell renders with.
+//! The reference theme, as the pure resolution of the reference brand — not a second
+//! palette, but the named view of what `tokens.resolve` produces.
 //!
-//! Where the semantic tokens say what a colour *means* (a surface, a denial, the accent), this module
-//! gives the *values* the reference build actually paints: the near-black base a screen rests on, the
-//! raised panel it stacks surfaces on, the agent-forward accent that marks anything an agent did, and
-//! the per-role status hues. It also fixes the geometry — the corner radii, the soft elevation shadow,
-//! the spacing step, and the spring easing — so every surface shares one coherent look rather than each
-//! inventing its own. A brand may restyle the accent and decorative hues; it may not touch the
-//! status colours or the contrast the semantic layer guarantees. Keeping the concrete values in one
-//! place is what lets a rendered frame be checked against the design pixel for pixel.
+//! This module used to hold its own copy of the concrete colours and geometry, which
+//! meant the values a renderer painted and the values the accessibility layer verified
+//! were two separate lists that could drift. They are now one: every value here is a
+//! field of `resolve(.reference, .dark)`, so the palette the contrast tests cover and
+//! the palette the screen shows are the same object by construction. A renderer keeps
+//! reading these familiar names — `theme.base`, `theme.denied`, `theme.radius_md` —
+//! but each is a projection of the single resolved source, not a value invented here.
+//! Raw colour lives in exactly one place now, the brand resolution; this is its named
+//! surface for the renderer.
 //!
-//! Colours here reuse the design token `Colour` type, so a theme value and a semantic role are the same
-//! kind of thing and can be compared directly.
+//! This module defines nothing of its own. It names the fields of a resolution, so a
+//! renderer can ask for a value by the role it fills.
 
+const std = @import("std");
 const tokens = @import("../tokens/tokens.zig");
+const resolve = @import("../tokens/resolve.zig");
 
 pub const Colour = tokens.Colour;
+pub const Gradient = resolve.Gradient;
 
-fn rgb(r: u8, g: u8, b: u8) Colour {
-    return .{ .red = r, .green = g, .blue = b, .alpha = 255 };
-}
-
-fn rgba(r: u8, g: u8, b: u8, a: u8) Colour {
-    return .{ .red = r, .green = g, .blue = b, .alpha = a };
-}
+/// The one resolved source every value below projects from.
+const reference = resolve.resolve(.reference, .dark);
+const palette = reference.palette;
+const geometry = reference.geometry;
 
 // --- Base surfaces ---
 
-/// The deepest background — a screen at rest, and what the boot and rest scenes fade to.
-pub const base = rgb(0x0b, 0x0a, 0x11);
-/// A panel raised off the base: the shell's primary surface.
-pub const panel = rgb(0x24, 0x1f, 0x30);
-/// A surface raised above a panel: cards, list rows.
-pub const surface = rgb(0x2a, 0x28, 0x33);
-/// A surface raised further: the active or focused card.
-pub const surface_raised = rgb(0x32, 0x2c, 0x40);
-/// A hairline divider between surfaces.
-pub const divider = rgba(0xff, 0xff, 0xff, 0x14);
+pub const base = palette.base;
+pub const panel = palette.panel;
+pub const surface = palette.surface;
+pub const surface_raised = palette.surface_raised;
+pub const divider = palette.divider;
 
 // --- Text ---
 
-pub const text_primary = rgb(0xf4, 0xf5, 0xf7);
-pub const text_secondary = rgb(0x94, 0x8f, 0xa2);
-pub const text_tertiary = rgb(0x6a, 0x64, 0x78);
+pub const text_primary = palette.text_primary;
+pub const text_secondary = palette.text_secondary;
+pub const text_tertiary = palette.text_tertiary;
 
 // --- Accents ---
 
-/// The agent accent: anything an agent did, is doing, or may do is marked with this. The signature
-/// colour of the platform.
-pub const agent = rgb(0x9a, 0x6c, 0xff);
-/// A lighter agent tint for fills and glows.
-pub const agent_soft = rgb(0x7c, 0x78, 0xff);
-/// The human/interaction accent — a person's own actions.
-pub const human = rgb(0x5a, 0xa8, 0xff);
-/// The calm/confirmation hue.
-pub const teal = rgb(0x37, 0xc2, 0xa6);
-pub const teal_bright = rgb(0x5f, 0xe0, 0xb0);
-/// The warm/attention hue.
-pub const coral = rgb(0xff, 0x8f, 0x6b);
-/// The caution/awaiting hue.
-pub const amber = rgb(0xff, 0xb1, 0x5c);
-/// The denial hue.
-pub const denied = rgb(0xe4, 0x6a, 0x6a);
+pub const agent = palette.agent;
+pub const agent_soft = palette.agent_soft;
+pub const human = palette.human;
+pub const teal = palette.teal;
+pub const teal_bright = palette.teal_bright;
+pub const coral = palette.coral;
+pub const amber = palette.amber;
+pub const denied = palette.denied;
 
-// --- The phone screen: a light surface inside a dark device bezel. ---
-//
-// The desktop background and the device bezel are dark (the base surfaces above); the screen the phone
-// actually shows is light, the way the reference design paints it. These are the values the app screens
-// rest on: a near-white screen wash, white cards, and near-black text — the inverse of the dark chrome.
+// --- The light phone screen ---
 
-/// The screen wash: a top-to-bottom light gradient the app content sits on.
-pub const screen_top = rgb(0xf4, 0xf2, 0xfa);
-pub const screen_mid = rgb(0xee, 0xf0, 0xf7);
-pub const screen_bottom = rgb(0xf3, 0xee, 0xf7);
-/// A card raised off the screen wash.
-pub const screen_card = rgb(0xff, 0xff, 0xff);
-/// A tinted card, warm-to-cool, for the active task surface.
-pub const screen_card_tint = rgb(0xfb, 0xf7, 0xff);
-/// Text on the light screen.
-pub const screen_text = rgb(0x21, 0x1f, 0x2a);
-pub const screen_text_soft = rgb(0x24, 0x1f, 0x30);
-pub const screen_text_muted = rgb(0x8a, 0x86, 0x94);
-pub const screen_text_faint = rgb(0x9c, 0x98, 0xa8);
-/// The uppercase section-label grey.
-pub const screen_label = rgb(0x9a, 0x95, 0xa6);
-/// A hairline on the light screen.
-pub const screen_hairline = rgba(0x21, 0x1f, 0x2a, 0x12);
-/// The decorative blue used alongside the agent accent on light surfaces.
-pub const sky = rgb(0x39, 0xb7, 0xe6);
+pub const screen_top = palette.screen_top;
+pub const screen_mid = palette.screen_mid;
+pub const screen_bottom = palette.screen_bottom;
+pub const screen_card = palette.screen_card;
+pub const screen_card_tint = palette.screen_card_tint;
+pub const screen_text = palette.screen_text;
+pub const screen_text_soft = palette.screen_text_soft;
+pub const screen_text_muted = palette.screen_text_muted;
+pub const screen_text_faint = palette.screen_text_faint;
+pub const screen_label = palette.screen_label;
+pub const screen_hairline = palette.screen_hairline;
+pub const sky = palette.sky;
 
-// --- The physical device: bezel, desktop wash, and their geometry. ---
+// --- The physical device ---
 
-/// The desktop the phone sits on: a dark radial wash.
-pub const desktop_top = rgb(0x16, 0x13, 0x29);
-pub const desktop_bottom = rgb(0x0b, 0x0a, 0x11);
-/// The device bezel: a dark brushed gradient around the screen.
-pub const bezel_top = rgb(0x26, 0x24, 0x2f);
-pub const bezel_bottom = rgb(0x10, 0x0f, 0x16);
+pub const desktop_top = palette.desktop_top;
+pub const desktop_bottom = palette.desktop_bottom;
+pub const bezel_top = palette.bezel_top;
+pub const bezel_bottom = palette.bezel_bottom;
 
-/// Standard phone screen sizes, in logical points, matching modern handset proportions (~2.17:1).
-/// A brand may present either; neither is tied to any vendor's model name.
-pub const screen_pro_w: u32 = 393;
-pub const screen_pro_h: u32 = 852;
-pub const screen_max_w: u32 = 440;
-pub const screen_max_h: u32 = 956;
+// --- Device frame geometry ---
 
-/// The device frame geometry, in logical points.
-pub const bezel_thickness: u32 = 13;
-pub const device_radius: u16 = 52;
-pub const screen_radius: u16 = 42;
-/// The desktop margin around the device inside the window.
-pub const desktop_margin: u32 = 22;
+pub const screen_pro_w = geometry.screen_pro_w;
+pub const screen_pro_h = geometry.screen_pro_h;
+pub const screen_max_w = geometry.screen_max_w;
+pub const screen_max_h = geometry.screen_max_h;
+pub const bezel_thickness = geometry.bezel_thickness;
+pub const device_radius = geometry.device_radius;
+pub const screen_radius = geometry.screen_radius;
+pub const desktop_margin = geometry.desktop_margin;
 
-// --- A per-app icon gradient: a vertical top→bottom fill. ---
+// --- App icon gradients ---
 
-pub const Gradient = struct { top: Colour, bottom: Colour };
+pub const icon_calendar = palette.icon_calendar;
+pub const icon_phone = palette.icon_phone;
+pub const icon_messages = palette.icon_messages;
+pub const icon_camera = palette.icon_camera;
+pub const icon_health = palette.icon_health;
+pub const icon_agents = palette.icon_agents;
+pub const icon_files = palette.icon_files;
+pub const icon_settings = palette.icon_settings;
+pub const icon_mail = palette.icon_mail;
+pub const icon_weather = palette.icon_weather;
+pub const icon_notes = palette.icon_notes;
+pub const icon_maps = palette.icon_maps;
 
-pub const icon_calendar: Gradient = .{ .top = rgb(0xff, 0x9a, 0x7a), .bottom = rgb(0xe8, 0x57, 0x2f) };
-pub const icon_phone: Gradient = .{ .top = rgb(0x53, 0xd6, 0x90), .bottom = rgb(0x2f, 0xae, 0x6a) };
-pub const icon_messages: Gradient = .{ .top = rgb(0x6f, 0x8b, 0xff), .bottom = rgb(0x4a, 0x8c, 0xff) };
-pub const icon_camera: Gradient = .{ .top = rgb(0xa9, 0x82, 0xff), .bottom = rgb(0x7c, 0x5c, 0xf0) };
-pub const icon_health: Gradient = .{ .top = rgb(0x56, 0xc7, 0xe6), .bottom = rgb(0x2f, 0x9f, 0xc9) };
-pub const icon_agents: Gradient = .{ .top = rgb(0xff, 0xb1, 0x5c), .bottom = rgb(0xf0, 0x84, 0x2f) };
-pub const icon_files: Gradient = .{ .top = rgb(0xa9, 0x82, 0xff), .bottom = rgb(0x7c, 0x5c, 0xf0) };
-pub const icon_settings: Gradient = .{ .top = rgb(0x7a, 0x81, 0x94), .bottom = rgb(0x56, 0x5d, 0x6e) };
-pub const icon_mail: Gradient = .{ .top = rgb(0x6f, 0x8b, 0xff), .bottom = rgb(0x4a, 0x6c, 0xf0) };
-pub const icon_weather: Gradient = .{ .top = rgb(0x5a, 0xc8, 0xff), .bottom = rgb(0x2f, 0x9f, 0xe0) };
-pub const icon_notes: Gradient = .{ .top = rgb(0xff, 0xd1, 0x5c), .bottom = rgb(0xf0, 0xa5, 0x2f) };
-pub const icon_maps: Gradient = .{ .top = rgb(0x4f, 0xd0, 0x8a), .bottom = rgb(0x2a, 0x9e, 0x86) };
+// --- Layout geometry ---
 
-// --- Geometry ---
+pub const spacing_step = geometry.spacing_step;
+pub const radius_sm = geometry.radius_sm;
+pub const radius_md = geometry.radius_md;
+pub const radius_lg = geometry.radius_lg;
+pub const radius_xl = geometry.radius_xl;
+pub const radius_pill = geometry.radius_pill;
+pub const icon_radius_ratio_num = geometry.icon_radius_ratio_num;
+pub const icon_radius_ratio_den = geometry.icon_radius_ratio_den;
 
-/// The base spacing step in logical points; the layout grid is multiples of this.
-pub const spacing_step: u16 = 8;
+// --- Elevation shadow ---
 
-/// The corner radii scale, in logical points.
-pub const radius_sm: u16 = 8;
-pub const radius_md: u16 = 12;
-pub const radius_lg: u16 = 16;
-pub const radius_xl: u16 = 20;
-pub const radius_pill: u16 = 22;
+pub const shadow_blur = geometry.elevation.blur;
+pub const shadow_offset_y = geometry.elevation.offset_y;
+pub const shadow_tint = Colour{
+    .red = geometry.elevation.tint_red,
+    .green = geometry.elevation.tint_green,
+    .blue = geometry.elevation.tint_blue,
+    .alpha = geometry.elevation.tint_alpha,
+};
 
-/// The fraction of an icon tile's side used as its superellipse corner radius (the squircle look).
-pub const icon_radius_ratio_num: u16 = 23;
-pub const icon_radius_ratio_den: u16 = 100;
+// --- The signature spring, as cubic-bezier control points scaled by 1000 ---
 
-/// The soft elevation shadow, expressed as its blur radius and offset in points and its tint.
-pub const shadow_blur: u16 = 16;
-pub const shadow_offset_y: i16 = 6;
-pub const shadow_tint = rgba(0x4b, 0x3a, 0x66, 0x99);
+pub const ease_spring_x1 = geometry.spring.x1;
+pub const ease_spring_y1 = geometry.spring.y1;
+pub const ease_spring_x2 = geometry.spring.x2;
+pub const ease_spring_y2 = geometry.spring.y2;
 
-/// The signature spring easing, as cubic-bezier control points scaled by 1000. The shell's motion
-/// overshoots slightly (y2 > 1000) so surfaces settle rather than snap.
-pub const ease_spring_x1: i16 = 200;
-pub const ease_spring_y1: i16 = 900;
-pub const ease_spring_x2: i16 = 250;
-pub const ease_spring_y2: i16 = 1100;
-
-const std = @import("std");
+// --- Tests ---
 
 test "surfaces get lighter as they rise off the base" {
-    // Elevation reads as a lighter surface on a dark theme; each step is no darker than the one below.
     try std.testing.expect(panel.luminance() >= base.luminance());
     try std.testing.expect(surface.luminance() >= panel.luminance());
     try std.testing.expect(surface_raised.luminance() >= surface.luminance());
@@ -184,11 +155,9 @@ test "every icon gradient descends (top lighter than bottom)" {
 }
 
 test "the dark-chrome text the shell actually paints clears its contrast floor" {
-    // The point of this suite: the concrete colours paint emits, not only the
-    // semantic roles, are held to the same contrast guarantee — so the legibility the
-    // token layer promises is verified against what the reference build actually
-    // shows. Primary text meets the text floor on every dark surface it lands on;
-    // secondary text, used for supporting labels, meets the large-text floor.
+    // The point of the unification: the concrete colours paint emits, not only the
+    // semantic roles, are held to the contrast guarantee — and now they are the same
+    // object the resolution produced, so this covers exactly what the renderer shows.
     const dark_surfaces = [_]Colour{ base, panel, surface, surface_raised };
     for (dark_surfaces) |background| {
         try std.testing.expect(text_primary.contrastWith(background) >= tokens.minimum_text_contrast);
@@ -197,30 +166,18 @@ test "the dark-chrome text the shell actually paints clears its contrast floor" 
 }
 
 test "the light-screen text the phone paints clears its contrast floor" {
-    // The phone screen is a light surface, and the near-black text on it must be as
-    // legible there as the chrome text is on the dark surfaces.
     const light_surfaces = [_]Colour{ screen_top, screen_mid, screen_bottom, screen_card, screen_card_tint };
     for (light_surfaces) |background| {
         try std.testing.expect(screen_text.contrastWith(background) >= tokens.minimum_text_contrast);
         try std.testing.expect(screen_text_soft.contrastWith(background) >= tokens.minimum_text_contrast);
-        // Muted and faint text is supporting, held to the large-text floor.
         try std.testing.expect(screen_text_muted.contrastWith(background) >= tokens.minimum_large_text_contrast);
     }
 }
 
-test "the status and accent hues are mutually distinguishable" {
-    // A user tells an agent mark from a denial from an approval by colour, so no two
-    // of these signature hues may collapse toward each other, mirroring the token
-    // layer's distinctness guarantee for the concrete palette paint uses.
-    // Warm hues (coral, amber) sit near each other by design; the threshold catches a
-    // genuine collapse of two hues into one while allowing a family to stay a family.
-    const marks = [_]Colour{ agent, human, teal, coral, amber, denied };
-    for (marks, 0..) |first, index| {
-        for (marks[index + 1 ..]) |second| {
-            const dr = @as(f64, @floatFromInt(first.red)) - @as(f64, @floatFromInt(second.red));
-            const dg = @as(f64, @floatFromInt(first.green)) - @as(f64, @floatFromInt(second.green));
-            const db = @as(f64, @floatFromInt(first.blue)) - @as(f64, @floatFromInt(second.blue));
-            try std.testing.expect(@sqrt(dr * dr + dg * dg + db * db) > 30);
-        }
-    }
+test "the theme is exactly the reference resolution, not a second palette" {
+    // The unification guarantee: a named value equals the field of the resolution it
+    // projects, so there is one source, not two.
+    try std.testing.expectEqual(reference.palette.denied, denied);
+    try std.testing.expectEqual(reference.geometry.radius_md, radius_md);
+    try std.testing.expectEqual(reference.geometry.spring.x1, ease_spring_x1);
 }
