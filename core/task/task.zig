@@ -268,6 +268,14 @@ pub const Graph = struct {
     ///
     /// A child of a finished parent is refused: attaching work to a completed
     /// scope would create exactly the orphan the cancellation rules exist to
+    /// The earlier of two optional deadlines. A missing deadline is no
+    /// constraint, so it yields to whichever side names a time.
+    fn soonestDeadline(a: ?time.Timestamp, b: ?time.Timestamp) ?time.Timestamp {
+        const first = a orelse return b;
+        const second = b orelse return first;
+        return if (first.order(second) == .lt) first else second;
+    }
+
     /// prevent.
     pub fn create(graph: *Graph, declaration: Declaration) !identity.TaskId {
         // Untrusted intent cannot become executing work. A purpose derived from
@@ -275,10 +283,23 @@ pub const Graph = struct {
         // `.task`; otherwise prompt-injected text could spawn a task directly.
         if (!declaration.provenance.permits(.task)) return error.Unauthorized;
 
+        // A child serves its parent's purpose, so it may neither outlive the
+        // parent's deadline nor claim a larger memory budget. Both are clamped to
+        // the parent rather than rejected, so a caller need not restate limits it
+        // is only inheriting.
+        var deadline = declaration.deadline;
+        var budget_bytes = declaration.budget_bytes;
         if (!declaration.parent.isNone()) {
             const parent = graph.tasks.get(declaration.parent.value) orelse
                 return error.InvalidInput;
             if (parent.state.isTerminal()) return error.Conflict;
+            deadline = soonestDeadline(deadline, parent.deadline);
+            if (parent.budget_bytes != 0) {
+                budget_bytes = if (budget_bytes == 0)
+                    parent.budget_bytes
+                else
+                    @min(budget_bytes, parent.budget_bytes);
+            }
         }
 
         const id = graph.ids.next(identity.TaskId);
@@ -296,8 +317,8 @@ pub const Graph = struct {
             .capabilities = .empty,
             .state = .planned,
             .created_at = graph.clock.wall(),
-            .deadline = declaration.deadline,
-            .budget_bytes = declaration.budget_bytes,
+            .deadline = deadline,
+            .budget_bytes = budget_bytes,
             .retry_policy = declaration.retry_policy,
             .attempts_made = 0,
             .conclusion = null,
@@ -612,6 +633,45 @@ const Fixture = struct {
         });
     }
 };
+
+test "a child inherits and cannot exceed its parent's deadline and budget" {
+    const gpa = std.testing.allocator;
+    var fixture: Fixture = undefined;
+    Fixture.init(gpa, &fixture);
+    defer fixture.deinit();
+
+    const parent = try fixture.graph.create(.{
+        .owner = fixture.human,
+        .requester = fixture.human,
+        .purpose = "plan the trip",
+        .deadline = .fromSeconds(2_000),
+        .budget_bytes = 1 << 16,
+    });
+
+    // A child asking for a later deadline and a larger budget is clamped down.
+    const greedy = try fixture.graph.create(.{
+        .owner = fixture.agent,
+        .requester = fixture.human,
+        .purpose = "book a flight",
+        .parent = parent,
+        .deadline = .fromSeconds(9_000),
+        .budget_bytes = 1 << 20,
+    });
+    const greedy_task = fixture.graph.get(greedy).?;
+    try std.testing.expectEqual(@as(?time.Timestamp, .fromSeconds(2_000)), greedy_task.deadline);
+    try std.testing.expectEqual(@as(usize, 1 << 16), greedy_task.budget_bytes);
+
+    // A child that states nothing inherits both limits.
+    const quiet = try fixture.graph.create(.{
+        .owner = fixture.agent,
+        .requester = fixture.human,
+        .purpose = "reserve a hotel",
+        .parent = parent,
+    });
+    const quiet_task = fixture.graph.get(quiet).?;
+    try std.testing.expectEqual(@as(?time.Timestamp, .fromSeconds(2_000)), quiet_task.deadline);
+    try std.testing.expectEqual(@as(usize, 1 << 16), quiet_task.budget_bytes);
+}
 
 test "a task planned from unvalidated model output is refused" {
     const gpa = std.testing.allocator;
