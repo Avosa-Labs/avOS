@@ -57,6 +57,58 @@ pub fn paint(target: *Framebuffer, commands: []const Command) void {
     }
 }
 
+/// Composites the whole of `source` into `target` at `(ox, oy)`, masked to a rounded rectangle so the
+/// four corners fall away with the same superellipse coverage a rounded fill uses. This is how the light
+/// phone screen is set into the dark device bezel: the screen is rendered on its own framebuffer, then
+/// dropped into the window with its corners clipped so the bezel shows through.
+pub fn compositeRounded(target: *Framebuffer, source: Framebuffer, ox: i32, oy: i32, radius_in: u32) void {
+    const radius = @min(radius_in, @min(source.width, source.height) / 2);
+    const rf: f32 = @floatFromInt(radius);
+    const left = ox;
+    const top_y = oy;
+    const right = ox + @as(i32, @intCast(source.width));
+    const bottom_y = oy + @as(i32, @intCast(source.height));
+
+    var sy: u32 = 0;
+    while (sy < source.height) : (sy += 1) {
+        const ty = oy + @as(i32, @intCast(sy));
+        if (ty < 0 or ty >= @as(i32, @intCast(target.height))) continue;
+        var sx: u32 = 0;
+        while (sx < source.width) : (sx += 1) {
+            const tx = ox + @as(i32, @intCast(sx));
+            if (tx < 0 or tx >= @as(i32, @intCast(target.width))) continue;
+
+            var cx: f32 = 0;
+            var cy: f32 = 0;
+            var in_corner = false;
+            const ri: i32 = @intCast(radius);
+            if (tx < left + ri and ty < top_y + ri) {
+                cx = @floatFromInt(left + ri);
+                cy = @floatFromInt(top_y + ri);
+                in_corner = true;
+            } else if (tx >= right - ri and ty < top_y + ri) {
+                cx = @floatFromInt(right - ri);
+                cy = @floatFromInt(top_y + ri);
+                in_corner = true;
+            } else if (tx < left + ri and ty >= bottom_y - ri) {
+                cx = @floatFromInt(left + ri);
+                cy = @floatFromInt(bottom_y - ri);
+                in_corner = true;
+            } else if (tx >= right - ri and ty >= bottom_y - ri) {
+                cx = @floatFromInt(right - ri);
+                cy = @floatFromInt(bottom_y - ri);
+                in_corner = true;
+            }
+            const src = source.get(sx, sy);
+            const coverage: u8 = if (in_corner and radius > 0)
+                cornerCoverage(@floatFromInt(tx), @floatFromInt(ty), cx, cy, rf)
+            else
+                255;
+            target.blend(@intCast(tx), @intCast(ty), src, coverage);
+        }
+    }
+}
+
 fn clampBounds(target: Framebuffer, rect: Rect) struct { x0: u32, y0: u32, x1: u32, y1: u32 } {
     const x0: i64 = @max(0, rect.x);
     const y0: i64 = @max(0, rect.y);

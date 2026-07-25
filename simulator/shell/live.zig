@@ -55,7 +55,7 @@ pub fn main(init: std.process.Init) !u8 {
 
     var target = try Framebuffer.init(gpa, live.width, live.height, baseFill());
     defer target.deinit();
-    try live.renderSurface(gpa, &target, &host, surface);
+    try live.renderSurface(gpa, &target, &host, surface, 0.0);
 
     const png = try target.encodePng(gpa);
     defer gpa.free(png);
@@ -82,7 +82,7 @@ fn renderSession(gpa: std.mem.Allocator, io: anytype, err: anytype, host: *live.
     for (sequence) |frame| {
         var target = try Framebuffer.init(gpa, live.width, live.height, baseFill());
         defer target.deinit();
-        try live.renderSurface(gpa, &target, host, frame.surface);
+        try live.renderSurface(gpa, &target, host, frame.surface, 0.0);
         const png = try target.encodePng(gpa);
         defer gpa.free(png);
         const path = try std.fmt.allocPrint(gpa, "{s}{s}.png", .{ prefix, frame.name });
