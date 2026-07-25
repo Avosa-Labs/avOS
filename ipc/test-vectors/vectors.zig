@@ -113,6 +113,48 @@ fn hex(digest: [Sha256.digest_length]u8) [Sha256.digest_length * 2]u8 {
     return std.fmt.bytesToHex(digest, .lower);
 }
 
+test "malformed messages are rejected with the right error" {
+    // A base encoding of a valid request, then targeted corruptions. Each must
+    // fail to decode, and with the specific error, so the decoder's rejections
+    // are pinned the way the accepted encodings are — a decoder that started
+    // accepting one of these would fail here.
+    var base: [envelope.max_message_bytes]u8 = undefined;
+    const encoded = try envelope.encode(vectors[0].message, &base);
+    const len = encoded.len;
+
+    // Wrong protocol identifier (byte 0).
+    {
+        var bytes = base;
+        bytes[0] ^= 0xFF;
+        try std.testing.expectError(error.ProtocolMismatch, envelope.decode(bytes[0..len]));
+    }
+    // Incompatible major version (bytes 4-5).
+    {
+        var bytes = base;
+        bytes[4] = 99;
+        try std.testing.expectError(error.IncompatibleVersion, envelope.decode(bytes[0..len]));
+    }
+    // An undefined message kind (byte 8).
+    {
+        var bytes = base;
+        bytes[8] = 0xFF;
+        try std.testing.expectError(error.UnknownEnumeration, envelope.decode(bytes[0..len]));
+    }
+    // Trailing bytes after a complete message.
+    {
+        var bytes: [envelope.max_message_bytes + 1]u8 = undefined;
+        @memcpy(bytes[0..len], encoded);
+        bytes[len] = 0;
+        try std.testing.expectError(error.TrailingBytes, envelope.decode(bytes[0 .. len + 1]));
+    }
+    // A truncated message ends before its fields do.
+    {
+        if (envelope.decode(encoded[0 .. len - 1])) |_| {
+            return error.TestExpectedError;
+        } else |_| {}
+    }
+}
+
 test "each vector encodes to its committed golden digest" {
     var buffer: [envelope.max_message_bytes]u8 = undefined;
     for (vectors) |vector| {
