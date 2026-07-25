@@ -120,6 +120,52 @@ pub const ContentDigest = struct {
     }
 };
 
+/// One link in the ledger's hash chain: a digest over the previous link and this
+/// event's own fields. Because the sequence number and every identifying field
+/// are folded in, altering a stored event or renumbering the ledger changes the
+/// recomputed digest and no longer matches what was stored.
+fn linkDigest(previous: ContentDigest, event: Event) ContentDigest {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(&previous.bytes);
+
+    var scalars: [8]u8 = undefined;
+    inline for (.{
+        event.sequence,
+        @as(u64, @intCast(event.id.value & std.math.maxInt(u64))),
+        @as(u64, @intCast(event.actor.value & std.math.maxInt(u64))),
+        @as(u64, @intCast(event.on_behalf_of.value & std.math.maxInt(u64))),
+        @as(u64, @intCast(event.task.value & std.math.maxInt(u64))),
+        @as(u64, @intCast(event.capability.value & std.math.maxInt(u64))),
+        @as(u64, @intCast(event.target.value & std.math.maxInt(u64))),
+        @as(u64, @intCast(event.parent.value & std.math.maxInt(u64))),
+        @as(u64, @bitCast(event.timestamp.nanoseconds)),
+        @as(u64, @intFromEnum(event.action)),
+        @as(u64, @intFromEnum(event.outcome)),
+        @as(u64, @intFromEnum(event.provenance)),
+        @as(u64, @intFromEnum(event.data_movement)),
+    }) |value| {
+        std.mem.writeInt(u64, &scalars, value, .little);
+        hasher.update(&scalars);
+    }
+
+    // The target kind, length-prefixed so a boundary is never ambiguous.
+    std.mem.writeInt(u64, &scalars, @intCast(event.target_kind.len), .little);
+    hasher.update(&scalars);
+    hasher.update(event.target_kind);
+
+    // The content digest, when present, so recorded evidence is bound in too.
+    if (event.content) |content| {
+        hasher.update(&[_]u8{1});
+        hasher.update(&content.bytes);
+    } else {
+        hasher.update(&[_]u8{0});
+    }
+
+    var digest: ContentDigest = .{ .bytes = undefined };
+    hasher.final(&digest.bytes);
+    return digest;
+}
+
 pub const Event = struct {
     id: identity.AuditEventId,
     sequence: u64,
@@ -144,6 +190,10 @@ pub const Event = struct {
     content: ?ContentDigest,
     /// The event that caused this one, linking a chain of consequences.
     parent: identity.AuditEventId,
+    /// This event's link in the hash chain: a digest over the previous link and
+    /// this event's own fields. A consistent renumber breaks it, so the ledger is
+    /// tamper-evident rather than merely gap-detecting.
+    entry_digest: ContentDigest,
 };
 
 /// What a caller supplies to record an event. The ledger assigns identity,
@@ -198,6 +248,9 @@ pub const Ledger = struct {
     /// bytes thousands of times.
     kinds: std.StringHashMapUnmanaged(void) = .empty,
     next_sequence: u64 = 1,
+    /// The digest of the most recently appended event, folded into the next
+    /// event's digest so the whole ledger is a hash chain. Genesis is all zero.
+    last_digest: ContentDigest = .{ .bytes = @splat(0) },
 
     pub fn init(gpa: std.mem.Allocator, ids: *identity.Source, clock: time.Clock) Ledger {
         return .{ .gpa = gpa, .ids = ids, .clock = clock };
@@ -250,7 +303,7 @@ pub const Ledger = struct {
 
         const target_kind = try ledger.internKind(record.target_kind);
 
-        try ledger.place(.{
+        var event: Event = .{
             .id = id,
             .sequence = ledger.next_sequence,
             .timestamp = ledger.clock.wall(),
@@ -267,7 +320,12 @@ pub const Ledger = struct {
             .data_movement = record.data_movement,
             .content = record.content,
             .parent = record.parent,
-        });
+            .entry_digest = undefined,
+        };
+        event.entry_digest = linkDigest(ledger.last_digest, event);
+
+        try ledger.place(event);
+        ledger.last_digest = event.entry_digest;
         ledger.next_sequence += 1;
         return id;
     }
@@ -351,6 +409,23 @@ pub const Ledger = struct {
         for (0..ledger.total) |index| {
             if (ledger.at(index).?.sequence != expected) return false;
             expected += 1;
+        }
+        return true;
+    }
+
+    /// Confirms the hash chain is intact.
+    ///
+    /// Recomputes each event's link from the previous one and compares it with
+    /// what was stored. Unlike the sequence check, this catches an edit that
+    /// preserves the numbering: changing any field, or renumbering the whole
+    /// ledger consistently, changes the recomputed digest and fails here.
+    pub fn verifyChain(ledger: Ledger) bool {
+        var previous: ContentDigest = .{ .bytes = @splat(0) };
+        for (0..ledger.total) |index| {
+            const event = ledger.at(index).?;
+            const expected = linkDigest(previous, event);
+            if (!expected.eql(event.entry_digest)) return false;
+            previous = event.entry_digest;
         }
         return true;
     }
@@ -446,6 +521,28 @@ test "a truncated ledger fails sequence verification" {
     // a lost record would.
     fixture.ledger.segments.items[0][1].sequence = 99;
     try std.testing.expect(!fixture.ledger.verifySequence());
+}
+
+test "the hash chain catches an edit that keeps the sequence intact" {
+    const gpa = std.testing.allocator;
+    var fixture: Fixture = undefined;
+    Fixture.init(gpa, &fixture);
+    defer fixture.deinit();
+
+    for (0..4) |_| {
+        _ = try fixture.ledger.append(.{
+            .actor = fixture.agent,
+            .action = .capability_used,
+            .outcome = .succeeded,
+        });
+    }
+    try std.testing.expect(fixture.ledger.verifyChain());
+
+    // Flip an outcome without touching the sequence. The gap check still passes,
+    // but the chain no longer recomputes to the stored digest.
+    fixture.ledger.segments.items[0][2].outcome = .denied;
+    try std.testing.expect(fixture.ledger.verifySequence());
+    try std.testing.expect(!fixture.ledger.verifyChain());
 }
 
 test "the timestamp comes from the clock, not the caller" {
