@@ -145,6 +145,19 @@ pub const Constraints = struct {
     /// reaches across, and a delegation can never turn this on if its parent did
     /// not already allow it.
     permit_cross_domain: bool = false,
+    /// Models this grant may be exercised with. Empty means any model; a
+    /// non-empty list confines the grant to exactly those models, so authority
+    /// tied to a reviewed model cannot be spent through another.
+    model_restrictions: []const []const u8 = &.{},
+    /// A ceiling on how often the grant may be used within a rolling window.
+    /// Null means only the lifetime `invocation_limit` applies.
+    rate_limit: ?RateLimit = null,
+};
+
+/// A rolling-window use ceiling: at most `max_uses` uses per `window`.
+pub const RateLimit = struct {
+    max_uses: u32,
+    window: time.Duration,
 };
 
 /// The context of one attempted use, checked against the constraints.
@@ -167,6 +180,8 @@ pub const UseContext = struct {
     processing_is_local: bool = true,
     /// Whether a human confirmed this specific use.
     human_confirmed: bool = false,
+    /// The model this use runs against, when the grant restricts models.
+    model: ?[]const u8 = null,
 };
 
 pub const Capability = struct {
@@ -179,6 +194,10 @@ pub const Capability = struct {
     issued_at: time.Timestamp,
     /// Uses already spent.
     invocations_used: u32,
+    /// When the current rate-limit window opened, and how many uses it has seen.
+    /// Only meaningful when `constraints.rate_limit` is set.
+    rate_window_started_at: time.Timestamp,
+    rate_uses_in_window: u32,
     /// The issuing principal's generation at issue time. A mismatch means the
     /// issuer was revoked after this grant was minted.
     issuer_generation: u64,
@@ -227,6 +246,8 @@ pub const Refusal = enum {
     delegation_forbidden,
     delegation_would_widen,
     cross_domain,
+    model_not_permitted,
+    rate_limited,
 
     /// The error a refusal surfaces to the caller. Several distinct refusals
     /// map onto one error deliberately: the caller learns it may not proceed,
@@ -255,8 +276,9 @@ pub const Refusal = enum {
             .monetary_limit_exceeded,
             .delegation_forbidden,
             .delegation_would_widen,
+            .model_not_permitted,
             => error.ConstraintViolation,
-            .invocations_exhausted => error.BudgetExhausted,
+            .invocations_exhausted, .rate_limited => error.BudgetExhausted,
         };
     }
 };
@@ -340,6 +362,7 @@ pub const Store = struct {
         owned.network_destinations = try store.ownTextList(constraints.network_destinations);
         owned.recipients = try store.ownTextList(constraints.recipients);
         owned.data_fields = try store.ownTextList(constraints.data_fields);
+        owned.model_restrictions = try store.ownTextList(constraints.model_restrictions);
         return owned;
     }
 
@@ -380,6 +403,8 @@ pub const Store = struct {
             .constraints = try store.ownConstraints(grant.constraints),
             .issued_at = store.clock.wall(),
             .invocations_used = 0,
+            .rate_window_started_at = store.clock.wall(),
+            .rate_uses_in_window = 0,
             .issuer_generation = issuer.generation,
             .generation = 0,
             .depth = 0,
@@ -420,6 +445,24 @@ pub const Store = struct {
         if (constraints.permit_cross_domain and !parent.constraints.permit_cross_domain) {
             return store.refuse(.delegation_would_widen);
         }
+        // A restricted parent cannot be delegated to a broader model set; a child
+        // that lifts the restriction, or names a model the parent did not, widens.
+        if (parent.constraints.model_restrictions.len != 0) {
+            if (constraints.model_restrictions.len == 0) return store.refuse(.delegation_would_widen);
+            for (constraints.model_restrictions) |model| {
+                if (!containsText(parent.constraints.model_restrictions, model)) {
+                    return store.refuse(.delegation_would_widen);
+                }
+            }
+        }
+        // A rate limit cannot be dropped or loosened by delegation.
+        if (parent.constraints.rate_limit) |parent_rate| {
+            const child_rate = constraints.rate_limit orelse return store.refuse(.delegation_would_widen);
+            if (child_rate.max_uses > parent_rate.max_uses) return store.refuse(.delegation_would_widen);
+            if (child_rate.window.nanoseconds < parent_rate.window.nanoseconds) {
+                return store.refuse(.delegation_would_widen);
+            }
+        }
         // Handing authority to a holder in another domain crosses a domain, so it
         // needs the same explicit permission an original cross-domain grant does.
         const delegator = try store.principals.authorize(parent.holder);
@@ -452,6 +495,8 @@ pub const Store = struct {
             .constraints = try store.ownConstraints(constraints),
             .issued_at = store.clock.wall(),
             .invocations_used = 0,
+            .rate_window_started_at = store.clock.wall(),
+            .rate_uses_in_window = 0,
             .issuer_generation = (try store.principals.authorize(parent.holder)).generation,
             .generation = 0,
             .depth = parent.depth + 1,
@@ -560,6 +605,13 @@ pub const Store = struct {
             if (amount > maximum) return store.refuse(.monetary_limit_exceeded);
         }
 
+        if (record.constraints.model_restrictions.len != 0) {
+            const model = context.model orelse return store.refuse(.model_not_permitted);
+            if (!containsText(record.constraints.model_restrictions, model)) {
+                return store.refuse(.model_not_permitted);
+            }
+        }
+
         return record;
     }
 
@@ -572,6 +624,21 @@ pub const Store = struct {
         const record = try store.check(handle, context);
         const entry = store.entries.getPtr(handle.id.value) orelse
             return store.refuse(.unknown_handle);
+
+        // A rolling-window ceiling, spent here rather than in `check` because it
+        // depends on the passage of time and on prior uses actually committing.
+        // The window resets once its duration has elapsed since it opened.
+        if (entry.constraints.rate_limit) |rate| {
+            const now = store.clock.wall();
+            const elapsed = now.since(entry.rate_window_started_at);
+            if (elapsed.nanoseconds >= rate.window.nanoseconds) {
+                entry.rate_window_started_at = now;
+                entry.rate_uses_in_window = 0;
+            }
+            if (entry.rate_uses_in_window >= rate.max_uses) return store.refuse(.rate_limited);
+            entry.rate_uses_in_window += 1;
+        }
+
         entry.invocations_used += 1;
         store.last_refusal = null;
         return record;
@@ -1314,6 +1381,63 @@ test "revoking a grant revokes what was delegated from it" {
         .operation = .read,
         .resource = .{ .kind = "calendar" },
     }));
+}
+
+test "a model-restricted grant refuses another model and admits the named one" {
+    const gpa = std.testing.allocator;
+    var fixture: Fixture = undefined;
+    try Fixture.init(gpa, &fixture);
+    defer fixture.deinit();
+
+    const handle = try fixture.store.issue(.{
+        .issuer = fixture.human,
+        .holder = fixture.agent,
+        .resource = .{ .kind = "calendar" },
+        .operations = fixture.readOnly(),
+        .constraints = .{ .model_restrictions = &.{"reviewed-planner"} },
+    });
+
+    try std.testing.expectError(error.ConstraintViolation, fixture.store.check(handle, .{
+        .holder = fixture.agent,
+        .operation = .read,
+        .resource = .{ .kind = "calendar" },
+        .model = "some-other-model",
+    }));
+    _ = try fixture.store.check(handle, .{
+        .holder = fixture.agent,
+        .operation = .read,
+        .resource = .{ .kind = "calendar" },
+        .model = "reviewed-planner",
+    });
+}
+
+test "a rate limit refuses a burst and admits a use in the next window" {
+    const gpa = std.testing.allocator;
+    var fixture: Fixture = undefined;
+    try Fixture.init(gpa, &fixture);
+    defer fixture.deinit();
+
+    const handle = try fixture.store.issue(.{
+        .issuer = fixture.human,
+        .holder = fixture.agent,
+        .resource = .{ .kind = "calendar" },
+        .operations = fixture.readOnly(),
+        .constraints = .{ .rate_limit = .{ .max_uses = 2, .window = .fromSeconds(60) } },
+    });
+    const context: UseContext = .{
+        .holder = fixture.agent,
+        .operation = .read,
+        .resource = .{ .kind = "calendar" },
+    };
+
+    _ = try fixture.store.use(handle, context);
+    _ = try fixture.store.use(handle, context);
+    // A third use inside the window is refused.
+    try std.testing.expectError(error.BudgetExhausted, fixture.store.use(handle, context));
+
+    // Once the window elapses, uses are admitted again.
+    fixture.manual.advance(.fromSeconds(61));
+    _ = try fixture.store.use(handle, context);
 }
 
 test "a grant does not cross policy domains without explicit permission" {
