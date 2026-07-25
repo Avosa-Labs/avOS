@@ -49,6 +49,29 @@ pub const Refusal = enum {
     /// A match was accepted earlier but has since gone stale, so this operation
     /// needs a fresh proof rather than riding the old one.
     match_expired,
+    /// The sensor's liveness signal failed: the sample looks like a presentation
+    /// attack — a photo, a mask, a recording — not a live person. Refused even at
+    /// a perfect score, because a score alone is exactly what a spoof reproduces.
+    spoof_suspected,
+    /// No template is enrolled for this modality, so there is nothing to match
+    /// against.
+    not_enrolled,
+};
+
+/// An enrolled biometric template.
+///
+/// The template itself never lives here: the sensitive comparison secret is held
+/// inside the secure element, and this carries only the anchor that names it. A
+/// zero anchor means no template is bound, so an enrollment that was never
+/// completed cannot be mistaken for one that was.
+pub const Enrollment = struct {
+    modality: Modality,
+    /// The secure-element key handle the template is sealed under. Zero is unbound.
+    secure_element_anchor: u64,
+
+    pub fn isBound(enrollment: Enrollment) bool {
+        return enrollment.secure_element_anchor != 0;
+    }
 };
 
 /// The outcome of an attempt.
@@ -114,14 +137,32 @@ pub const State = struct {
 /// reaching the limit, locks out.
 pub fn judge(
     policy: Policy,
-    modality: Modality,
+    enrollment: Enrollment,
     state: *State,
     score: ScoreBasisPoints,
+    live: bool,
     now_s: u32,
 ) Outcome {
+    const modality = enrollment.modality;
+
     // A locked-out biometric stays locked out whatever the score. Only the
     // passcode reopens it.
     if (state.locked_out) return .{ .refused = .locked_out };
+
+    // With no template bound there is nothing to match against.
+    if (!enrollment.isBound()) return .{ .refused = .not_enrolled };
+
+    // Liveness before score: a spoof reproduces the score, so a sample that
+    // fails liveness is refused even at a perfect one, and the attempt counts
+    // toward lockout so repeated spoofing disables the biometric.
+    if (!live) {
+        state.consecutive_failures += 1;
+        if (state.consecutive_failures >= policy.max_consecutive_failures) {
+            state.locked_out = true;
+            return .{ .refused = .locked_out };
+        }
+        return .{ .refused = .spoof_suspected };
+    }
 
     if (score >= modality.acceptanceThreshold()) {
         state.consecutive_failures = 0;
@@ -165,15 +206,46 @@ test "face is held to a higher bar than fingerprint" {
 
 test "a confident match is accepted and resets the failure count" {
     var state: State = .{ .consecutive_failures = 3 };
-    const outcome = judge(reference, .fingerprint, &state, 8_500, 1_000);
+    const outcome = judge(reference, .{ .modality = .fingerprint, .secure_element_anchor = 1 }, &state, 8_500, true, 1_000);
     try std.testing.expect(outcome.wasAccepted());
     try std.testing.expectEqual(@as(u8, 0), state.consecutive_failures);
     try std.testing.expectEqual(@as(?u32, 1_000), state.last_match_at_s);
 }
 
+test "a spoof is refused even at a perfect score" {
+    var state: State = .{};
+    // A live-signal failure at a perfect score is still a refusal, and it counts
+    // toward lockout.
+    const outcome = judge(reference, .{ .modality = .face, .secure_element_anchor = 1 }, &state, full(), false, 1_000);
+    try std.testing.expectEqual(Refusal.spoof_suspected, outcome.refused);
+    try std.testing.expectEqual(@as(u8, 1), state.consecutive_failures);
+}
+
+test "repeated spoofing locks out the biometric" {
+    var state: State = .{};
+    const enrollment: Enrollment = .{ .modality = .fingerprint, .secure_element_anchor = 1 };
+    var last: Outcome = undefined;
+    for (0..reference.max_consecutive_failures) |_| {
+        last = judge(reference, enrollment, &state, full(), false, 1_000);
+    }
+    try std.testing.expectEqual(Refusal.locked_out, last.refused);
+    try std.testing.expect(state.locked_out);
+}
+
+test "an unbound enrollment has nothing to match" {
+    var state: State = .{};
+    const outcome = judge(reference, .{ .modality = .fingerprint, .secure_element_anchor = 0 }, &state, full(), true, 1_000);
+    try std.testing.expectEqual(Refusal.not_enrolled, outcome.refused);
+}
+
+test "an enrollment is bound only with a real secure-element anchor" {
+    try std.testing.expect((Enrollment{ .modality = .face, .secure_element_anchor = 7 }).isBound());
+    try std.testing.expect(!(Enrollment{ .modality = .face, .secure_element_anchor = 0 }).isBound());
+}
+
 test "a weak match is refused below threshold" {
     var state: State = .{};
-    const outcome = judge(reference, .face, &state, 8_000, 1_000);
+    const outcome = judge(reference, .{ .modality = .face, .secure_element_anchor = 1 }, &state, 8_000, true, 1_000);
     try std.testing.expectEqual(Outcome{ .refused = .below_threshold }, outcome);
     try std.testing.expectEqual(@as(u8, 1), state.consecutive_failures);
 }
@@ -182,7 +254,7 @@ test "enough failures lock out the biometric" {
     var state: State = .{};
     var last: Outcome = undefined;
     for (0..reference.max_consecutive_failures) |_| {
-        last = judge(reference, .fingerprint, &state, 1_000, 1_000);
+        last = judge(reference, .{ .modality = .fingerprint, .secure_element_anchor = 1 }, &state, 1_000, true, 1_000);
     }
     try std.testing.expectEqual(Outcome{ .refused = .locked_out }, last);
     try std.testing.expect(state.locked_out);
@@ -192,7 +264,7 @@ test "a lockout is not reopened by a good score" {
     var state: State = .{ .locked_out = true };
     // The whole safety net is that only the passcode reopens it; a matcher that
     // a good score could reopen would have no lockout at all.
-    const outcome = judge(reference, .fingerprint, &state, full(), 1_000);
+    const outcome = judge(reference, .{ .modality = .fingerprint, .secure_element_anchor = 1 }, &state, full(), true, 1_000);
     try std.testing.expectEqual(Outcome{ .refused = .locked_out }, outcome);
 }
 
@@ -203,19 +275,19 @@ test "only the passcode clears a lockout" {
     try std.testing.expectEqual(@as(u8, 0), state.consecutive_failures);
 
     // Now a match is judged again rather than refused outright.
-    const outcome = judge(reference, .fingerprint, &state, 8_500, 1_000);
+    const outcome = judge(reference, .{ .modality = .fingerprint, .secure_element_anchor = 1 }, &state, 8_500, true, 1_000);
     try std.testing.expect(outcome.wasAccepted());
 }
 
 test "a fresh match authorizes a follow-on operation" {
     var state: State = .{};
-    _ = judge(reference, .fingerprint, &state, 8_500, 1_000);
+    _ = judge(reference, .{ .modality = .fingerprint, .secure_element_anchor = 1 }, &state, 8_500, true, 1_000);
     try std.testing.expect(matchStillValid(reference, state, 1_020));
 }
 
 test "a stale match does not" {
     var state: State = .{};
-    _ = judge(reference, .fingerprint, &state, 8_500, 1_000);
+    _ = judge(reference, .{ .modality = .fingerprint, .secure_element_anchor = 1 }, &state, 8_500, true, 1_000);
     // Past the validity window: a sensitive operation must not ride a match the
     // person has walked away from.
     try std.testing.expect(!matchStillValid(reference, state, 1_000 + reference.match_valid_seconds + 1));
@@ -235,12 +307,12 @@ test "a backwards clock invalidates a match rather than trusting it" {
 
 test "the failure count survives across attempts until a match or passcode" {
     var state: State = .{};
-    _ = judge(reference, .face, &state, 1_000, 1_000);
-    _ = judge(reference, .face, &state, 1_000, 1_001);
+    _ = judge(reference, .{ .modality = .face, .secure_element_anchor = 1 }, &state, 1_000, true, 1_000);
+    _ = judge(reference, .{ .modality = .face, .secure_element_anchor = 1 }, &state, 1_000, true, 1_001);
     try std.testing.expectEqual(@as(u8, 2), state.consecutive_failures);
 
     // A match resets it.
-    _ = judge(reference, .face, &state, 9_500, 1_002);
+    _ = judge(reference, .{ .modality = .face, .secure_element_anchor = 1 }, &state, 9_500, true, 1_002);
     try std.testing.expectEqual(@as(u8, 0), state.consecutive_failures);
 }
 
