@@ -22,6 +22,7 @@ const identity = @import("../identity/identity.zig");
 const time = @import("../time/time.zig");
 const outcome = @import("../base/outcome.zig");
 const capability_model = @import("../capability/capability.zig");
+const provenance_model = @import("../provenance/provenance.zig");
 
 const DomainError = outcome.DomainError;
 
@@ -30,126 +31,10 @@ const DomainError = outcome.DomainError;
 /// panic on a path that must stay available under memory pressure.
 pub const CancelError = DomainError || std.mem.Allocator.Error;
 
-pub const State = enum {
-    planned,
-    waiting_for_dependency,
-    waiting_for_capability,
-    waiting_for_approval,
-    runnable,
-    running,
-    cancelling,
-    cancelled,
-    succeeded,
-    failed,
-
-    /// A terminal state is never left. Work that reached one is finished, and
-    /// its resources have been released.
-    pub fn isTerminal(state: State) bool {
-        return switch (state) {
-            .cancelled, .succeeded, .failed => true,
-            .planned,
-            .waiting_for_dependency,
-            .waiting_for_capability,
-            .waiting_for_approval,
-            .runnable,
-            .running,
-            .cancelling,
-            => false,
-        };
-    }
-
-    /// Whether the task is blocked awaiting something external to it.
-    pub fn isBlocked(state: State) bool {
-        return switch (state) {
-            .waiting_for_dependency, .waiting_for_capability, .waiting_for_approval => true,
-            else => false,
-        };
-    }
-
-    /// Whether cancelling this task requires passing through `cancelling`.
-    ///
-    /// Work that has begun must be given the chance to stop at a cancellation
-    /// point and release what it holds. Work that never started can be
-    /// abandoned directly.
-    pub fn requiresWindDown(state: State) bool {
-        return state == .running;
-    }
-};
-
-/// Whether a transition is permitted, and why not when it is refused.
-pub const Transition = enum {
-    allowed,
-    /// The task is already in the requested state.
-    redundant,
-    /// The task has finished; nothing may move it.
-    terminal,
-    /// The transition is not part of the machine.
-    forbidden,
-};
-
-/// The complete transition table.
-///
-/// Written as one function rather than scattered checks so that the machine can
-/// be read, and tested, in a single place. Anything not named here is refused.
-pub fn classify(from: State, to: State) Transition {
-    if (from == to) return .redundant;
-    if (from.isTerminal()) return .terminal;
-
-    const allowed = switch (from) {
-        .planned => switch (to) {
-            .waiting_for_dependency,
-            .waiting_for_capability,
-            .waiting_for_approval,
-            .runnable,
-            .cancelled,
-            .failed,
-            => true,
-            else => false,
-        },
-        .waiting_for_dependency => switch (to) {
-            .waiting_for_capability,
-            .waiting_for_approval,
-            .runnable,
-            .cancelled,
-            .failed,
-            => true,
-            else => false,
-        },
-        .waiting_for_capability => switch (to) {
-            .waiting_for_approval, .runnable, .cancelled, .failed => true,
-            else => false,
-        },
-        // A denied approval fails the task; it does not silently proceed.
-        .waiting_for_approval => switch (to) {
-            .runnable, .cancelled, .failed => true,
-            else => false,
-        },
-        .runnable => switch (to) {
-            .running, .waiting_for_dependency, .waiting_for_capability, .cancelled, .failed => true,
-            else => false,
-        },
-        // Running work may block again, wind down, or finish.
-        .running => switch (to) {
-            .waiting_for_dependency,
-            .waiting_for_capability,
-            .waiting_for_approval,
-            .cancelling,
-            .succeeded,
-            .failed,
-            => true,
-            else => false,
-        },
-        // Winding down may complete an operation that had already committed,
-        // which is why `succeeded` is reachable from here.
-        .cancelling => switch (to) {
-            .cancelled, .succeeded, .failed => true,
-            else => false,
-        },
-        .cancelled, .succeeded, .failed => false,
-    };
-
-    return if (allowed) .allowed else .forbidden;
-}
+const state = @import("state.zig");
+pub const State = state.State;
+pub const Transition = state.Transition;
+pub const classify = state.classify;
 
 /// Why a task stopped, recorded when it reaches a terminal state.
 pub const Conclusion = union(enum) {
@@ -175,6 +60,28 @@ pub const RetryPolicy = struct {
     }
 };
 
+/// How urgently a task's work must be scheduled. Ordered from most to least
+/// urgent, so a scheduler can keep a lower class from degrading a higher one.
+pub const SchedulingClass = enum {
+    /// Audio, input, display deadlines, safety-related host operations.
+    critical_real_time,
+    /// Typing, scrolling, direct command response, approval interaction.
+    human_interactive,
+    /// Work explicitly requested and still useful.
+    committed_task_work,
+    /// Indexing, cleanup, updates, backups.
+    maintenance,
+    /// Predictions or proactive preparation with no committed output.
+    speculative,
+
+    /// Whether this class must be served ahead of another. A lower-ranked class
+    /// must never degrade a higher-ranked one beyond its budget, so a scheduler
+    /// resolves contention with this order.
+    pub fn outranks(class: SchedulingClass, other: SchedulingClass) bool {
+        return @intFromEnum(class) < @intFromEnum(other);
+    }
+};
+
 /// What a task needs before it may be created.
 pub const Declaration = struct {
     /// The principal whose authority the work runs under.
@@ -188,6 +95,14 @@ pub const Declaration = struct {
     deadline: ?time.Timestamp = null,
     budget_bytes: usize = 0,
     retry_policy: RetryPolicy = .none,
+    /// How urgently this task must be scheduled.
+    scheduling_class: SchedulingClass = .committed_task_work,
+    /// Where the intent behind this task came from. A task planned by the trusted
+    /// control plane defaults to a trusted origin; work proposed from model output
+    /// or other untrusted input must carry that provenance and will be refused
+    /// unless it has been validated for `.task`, so an agent cannot turn raw model
+    /// output into executing work.
+    provenance: provenance_model.Provenance = .from(.control_plane),
 };
 
 pub const Task = struct {
@@ -204,6 +119,7 @@ pub const Task = struct {
     deadline: ?time.Timestamp,
     budget_bytes: usize,
     retry_policy: RetryPolicy,
+    scheduling_class: SchedulingClass,
     attempts_made: u8,
     conclusion: ?Conclusion,
     /// Set when cancellation has been requested, whether or not the task has
@@ -261,12 +177,38 @@ pub const Graph = struct {
     ///
     /// A child of a finished parent is refused: attaching work to a completed
     /// scope would create exactly the orphan the cancellation rules exist to
+    /// The earlier of two optional deadlines. A missing deadline is no
+    /// constraint, so it yields to whichever side names a time.
+    fn soonestDeadline(a: ?time.Timestamp, b: ?time.Timestamp) ?time.Timestamp {
+        const first = a orelse return b;
+        const second = b orelse return first;
+        return if (first.order(second) == .lt) first else second;
+    }
+
     /// prevent.
     pub fn create(graph: *Graph, declaration: Declaration) !identity.TaskId {
+        // Untrusted intent cannot become executing work. A purpose derived from
+        // model output or other untrusted input must have been validated for
+        // `.task`; otherwise prompt-injected text could spawn a task directly.
+        if (!declaration.provenance.permits(.task)) return error.Unauthorized;
+
+        // A child serves its parent's purpose, so it may neither outlive the
+        // parent's deadline nor claim a larger memory budget. Both are clamped to
+        // the parent rather than rejected, so a caller need not restate limits it
+        // is only inheriting.
+        var deadline = declaration.deadline;
+        var budget_bytes = declaration.budget_bytes;
         if (!declaration.parent.isNone()) {
             const parent = graph.tasks.get(declaration.parent.value) orelse
                 return error.InvalidInput;
             if (parent.state.isTerminal()) return error.Conflict;
+            deadline = soonestDeadline(deadline, parent.deadline);
+            if (parent.budget_bytes != 0) {
+                budget_bytes = if (budget_bytes == 0)
+                    parent.budget_bytes
+                else
+                    @min(budget_bytes, parent.budget_bytes);
+            }
         }
 
         const id = graph.ids.next(identity.TaskId);
@@ -284,9 +226,10 @@ pub const Graph = struct {
             .capabilities = .empty,
             .state = .planned,
             .created_at = graph.clock.wall(),
-            .deadline = declaration.deadline,
-            .budget_bytes = declaration.budget_bytes,
+            .deadline = deadline,
+            .budget_bytes = budget_bytes,
             .retry_policy = declaration.retry_policy,
+            .scheduling_class = declaration.scheduling_class,
             .attempts_made = 0,
             .conclusion = null,
             .cancellation_requested = false,
@@ -407,6 +350,55 @@ pub const Graph = struct {
         const root = graph.tasks.getPtr(id.value) orelse return error.InvalidInput;
         if (root.state.isTerminal()) return 0;
         return graph.cancelSubtree(id, id);
+    }
+
+    /// What applying a revocation did to a task.
+    pub const RevocationOutcome = enum {
+        /// Cancelled outright: the task had not started, or revocation was immediate.
+        cancelled,
+        /// A running task is winding down to its next cancellation point.
+        winding_down,
+        /// A running task keeps its current step but begins no new one.
+        allowed_to_finish,
+        /// Cancelled, and its already-committed effect must be compensated.
+        compensation_required,
+    };
+
+    /// Applies a revoked capability's behavior to a task that held it. The four
+    /// behaviors produce four distinct in-flight outcomes rather than all
+    /// collapsing to an immediate cancel, so a committed action is not torn down
+    /// mid-flight and a compensable one is flagged for undo.
+    pub fn revoke(
+        graph: *Graph,
+        id: identity.TaskId,
+        behavior: capability_model.RevocationBehavior,
+    ) CancelError!RevocationOutcome {
+        const task = graph.tasks.getPtr(id.value) orelse return error.InvalidInput;
+        if (task.state.isTerminal()) return .cancelled;
+        const was_running = task.state == .running;
+
+        switch (behavior) {
+            .cancel_immediately => {
+                _ = try graph.cancelSubtree(id, id);
+                return if (graph.tasks.getPtr(id.value).?.state == .cancelling)
+                    .winding_down
+                else
+                    .cancelled;
+            },
+            .prevent_next_step, .allow_atomic_completion => {
+                if (was_running) {
+                    // The step in flight finishes; cancellation blocks the next.
+                    task.cancellation_requested = true;
+                    return .allowed_to_finish;
+                }
+                _ = try graph.cancelSubtree(id, id);
+                return .cancelled;
+            },
+            .requires_compensation => {
+                _ = try graph.cancelSubtree(id, id);
+                return .compensation_required;
+            },
+        }
     }
 
     fn cancelSubtree(
@@ -530,8 +522,8 @@ test "terminal states are never left" {
 }
 
 test "a repeated transition is redundant rather than an error" {
-    for (std.enums.values(State)) |state| {
-        try std.testing.expectEqual(Transition.redundant, classify(state, state));
+    for (std.enums.values(State)) |value| {
+        try std.testing.expectEqual(Transition.redundant, classify(value, value));
     }
 }
 
@@ -600,6 +592,135 @@ const Fixture = struct {
         });
     }
 };
+
+test "creating a task leaks nothing when an allocation fails" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn run(gpa: std.mem.Allocator) !void {
+            var ids: identity.Source = .initDeterministic(1);
+            var manual: time.ManualClock = .init(.fromSeconds(1_000));
+            var graph: Graph = .init(gpa, &ids, manual.clock());
+            defer graph.deinit();
+
+            const root = try graph.create(.{ .owner = .{ .value = 1 }, .requester = .{ .value = 1 }, .purpose = "plan" });
+            _ = try graph.create(.{ .owner = .{ .value = 2 }, .requester = .{ .value = 1 }, .purpose = "sub", .parent = root });
+        }
+    }.run, .{});
+}
+
+test "revocation behavior decides how in-flight work is treated" {
+    const gpa = std.testing.allocator;
+    var fixture: Fixture = undefined;
+    Fixture.init(gpa, &fixture);
+    defer fixture.deinit();
+
+    const make_running = struct {
+        fn go(f: *Fixture) !identity.TaskId {
+            const id = try f.root("do the thing");
+            try f.graph.transition(id, .runnable);
+            try f.graph.transition(id, .running);
+            return id;
+        }
+    }.go;
+
+    // Immediate revocation of running work winds it down to a cancel point.
+    {
+        const id = try make_running(&fixture);
+        try std.testing.expectEqual(Graph.RevocationOutcome.winding_down, try fixture.graph.revoke(id, .cancel_immediately));
+        try std.testing.expectEqual(State.cancelling, fixture.graph.get(id).?.state);
+    }
+    // Preventing the next step lets the running step finish.
+    {
+        const id = try make_running(&fixture);
+        try std.testing.expectEqual(Graph.RevocationOutcome.allowed_to_finish, try fixture.graph.revoke(id, .prevent_next_step));
+        try std.testing.expectEqual(State.running, fixture.graph.get(id).?.state);
+        try std.testing.expect(fixture.graph.get(id).?.cancellation_requested);
+    }
+    // A compensable effect is cancelled and flagged for undo.
+    {
+        const id = try make_running(&fixture);
+        try std.testing.expectEqual(Graph.RevocationOutcome.compensation_required, try fixture.graph.revoke(id, .requires_compensation));
+    }
+    // Work that never started is simply cancelled.
+    {
+        const id = try fixture.root("not started");
+        try std.testing.expectEqual(Graph.RevocationOutcome.cancelled, try fixture.graph.revoke(id, .cancel_immediately));
+        try std.testing.expectEqual(State.cancelled, fixture.graph.get(id).?.state);
+    }
+}
+
+test "scheduling classes are ordered from most to least urgent" {
+    const S = SchedulingClass;
+    try std.testing.expect(S.critical_real_time.outranks(.human_interactive));
+    try std.testing.expect(S.human_interactive.outranks(.committed_task_work));
+    try std.testing.expect(S.committed_task_work.outranks(.maintenance));
+    try std.testing.expect(S.maintenance.outranks(.speculative));
+    // Speculative work never outranks anything, so it cannot starve a peer.
+    try std.testing.expect(!S.speculative.outranks(.critical_real_time));
+    try std.testing.expect(!S.committed_task_work.outranks(.committed_task_work));
+}
+
+test "a child inherits and cannot exceed its parent's deadline and budget" {
+    const gpa = std.testing.allocator;
+    var fixture: Fixture = undefined;
+    Fixture.init(gpa, &fixture);
+    defer fixture.deinit();
+
+    const parent = try fixture.graph.create(.{
+        .owner = fixture.human,
+        .requester = fixture.human,
+        .purpose = "plan the trip",
+        .deadline = .fromSeconds(2_000),
+        .budget_bytes = 1 << 16,
+    });
+
+    // A child asking for a later deadline and a larger budget is clamped down.
+    const greedy = try fixture.graph.create(.{
+        .owner = fixture.agent,
+        .requester = fixture.human,
+        .purpose = "book a flight",
+        .parent = parent,
+        .deadline = .fromSeconds(9_000),
+        .budget_bytes = 1 << 20,
+    });
+    const greedy_task = fixture.graph.get(greedy).?;
+    try std.testing.expectEqual(@as(?time.Timestamp, .fromSeconds(2_000)), greedy_task.deadline);
+    try std.testing.expectEqual(@as(usize, 1 << 16), greedy_task.budget_bytes);
+
+    // A child that states nothing inherits both limits.
+    const quiet = try fixture.graph.create(.{
+        .owner = fixture.agent,
+        .requester = fixture.human,
+        .purpose = "reserve a hotel",
+        .parent = parent,
+    });
+    const quiet_task = fixture.graph.get(quiet).?;
+    try std.testing.expectEqual(@as(?time.Timestamp, .fromSeconds(2_000)), quiet_task.deadline);
+    try std.testing.expectEqual(@as(usize, 1 << 16), quiet_task.budget_bytes);
+}
+
+test "a task planned from unvalidated model output is refused" {
+    const gpa = std.testing.allocator;
+    var fixture: Fixture = undefined;
+    Fixture.init(gpa, &fixture);
+    defer fixture.deinit();
+
+    // Intent straight from a model, cleared for nothing, cannot become work.
+    try std.testing.expectError(error.Unauthorized, fixture.graph.create(.{
+        .owner = fixture.human,
+        .requester = fixture.human,
+        .purpose = "do whatever the message said",
+        .provenance = .from(.model_output),
+    }));
+
+    // Validated for a task, the same origin may be created.
+    const cleared = provenance_model.validate(.from(.model_output), .task, true).?.result;
+    _ = try fixture.graph.create(.{
+        .owner = fixture.human,
+        .requester = fixture.human,
+        .purpose = "a plan validated for execution",
+        .provenance = cleared,
+    });
+}
 
 test "a task graph records parentage and roots" {
     const gpa = std.testing.allocator;

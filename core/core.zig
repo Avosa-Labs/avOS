@@ -16,6 +16,7 @@ pub const identity = @import("identity/identity.zig");
 pub const time = @import("time/time.zig");
 pub const resource = @import("resource/resource.zig");
 pub const principal = @import("principal/principal.zig");
+pub const authentication = @import("principal/authentication.zig");
 pub const capability = @import("capability/capability.zig");
 pub const task = @import("task/task.zig");
 pub const accessibility = @import("accessibility/accessibility.zig");

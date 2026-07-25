@@ -40,6 +40,9 @@ pub const Usage = struct {
     injected_failures: u64 = 0,
     /// Allocations granted.
     granted_allocations: u64 = 0,
+    /// Releases larger than the outstanding total. A non-zero count is a broken
+    /// invariant surfaced rather than hidden, since the release path cannot fail.
+    accounting_faults: u64 = 0,
 
     pub fn availableBytes(usage: Usage) usize {
         return usage.limit_bytes - usage.current_bytes;
@@ -156,11 +159,17 @@ pub const Budget = struct {
 
     /// Releases `len` bytes.
     ///
-    /// Underflow would silently create budget out of nothing, so a release
-    /// larger than the outstanding total is treated as a broken invariant
-    /// rather than clamped away.
+    /// A release larger than the outstanding total would create budget out of
+    /// nothing and, on the unsigned counter, wrap it to an enormous value. The
+    /// free path returns void and cannot signal an error, so the broken invariant
+    /// is recorded on `accounting_faults` and the counter clamped to zero rather
+    /// than left to wrap into an enormous outstanding total.
     fn release(budget: *Budget, len: usize) void {
-        std.debug.assert(budget.usage.current_bytes >= len);
+        if (len > budget.usage.current_bytes) {
+            budget.usage.accounting_faults += 1;
+            budget.usage.current_bytes = 0;
+            return;
+        }
         budget.usage.current_bytes -= len;
     }
 
@@ -236,6 +245,83 @@ pub const Budget = struct {
     }
 };
 
+/// An allocator for secret material that scrubs memory before releasing it.
+///
+/// Freed heap is reused, so a secret left in it can surface in a later,
+/// unrelated allocation. Every block this hands back is zeroed on free and on a
+/// shrink, with a secure zero the compiler may not elide. Remap is refused so a
+/// block is never moved and left behind uncleared: the allocator interface then
+/// falls back to allocate-copy-free, and the free scrubs the old block.
+pub const SecretAllocator = struct {
+    parent: std.mem.Allocator,
+
+    pub fn init(parent: std.mem.Allocator) SecretAllocator {
+        return .{ .parent = parent };
+    }
+
+    pub fn allocator(secret: *SecretAllocator) std.mem.Allocator {
+        return .{
+            .ptr = secret,
+            .vtable = &.{ .alloc = alloc, .resize = resize, .remap = remap, .free = free },
+        };
+    }
+
+    fn alloc(context: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+        const secret: *SecretAllocator = @ptrCast(@alignCast(context));
+        return secret.parent.rawAlloc(len, alignment, ret_addr);
+    }
+
+    fn resize(context: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
+        const secret: *SecretAllocator = @ptrCast(@alignCast(context));
+        if (new_len < memory.len) std.crypto.secureZero(u8, memory[new_len..]);
+        return secret.parent.rawResize(memory, alignment, new_len, ret_addr);
+    }
+
+    fn remap(context: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
+        _ = context;
+        _ = memory;
+        _ = alignment;
+        _ = new_len;
+        _ = ret_addr;
+        return null;
+    }
+
+    fn free(context: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
+        const secret: *SecretAllocator = @ptrCast(@alignCast(context));
+        std.crypto.secureZero(u8, memory);
+        secret.parent.rawFree(memory, alignment, ret_addr);
+    }
+};
+
+/// A task's scratch memory, freed as a whole when the task ends.
+///
+/// Work a task does allocates here and is released together, so a completed or
+/// cancelled task cannot leak task-scoped memory. Anything that must outlive the
+/// task is copied into a longer-lived owner through `promote`, which makes the
+/// escape an explicit, owned handoff rather than a dangling arena pointer.
+pub const TaskArena = struct {
+    arena: std.heap.ArenaAllocator,
+
+    pub fn init(parent: std.mem.Allocator) TaskArena {
+        return .{ .arena = std.heap.ArenaAllocator.init(parent) };
+    }
+
+    pub fn deinit(task_arena: *TaskArena) void {
+        task_arena.arena.deinit();
+    }
+
+    pub fn allocator(task_arena: *TaskArena) std.mem.Allocator {
+        return task_arena.arena.allocator();
+    }
+
+    /// Copies task-scoped bytes into `owner`, whose lifetime outlives the task.
+    /// The caller owns the result and frees it through `owner`.
+    pub fn promote(task_arena: *TaskArena, owner: std.mem.Allocator, bytes: []const u8) ![]u8 {
+        _ = task_arena;
+        return owner.dupe(u8, bytes);
+    }
+};
+
 test "allocation within the ceiling succeeds and is attributed" {
     const attribution: Attribution = .{
         .principal = .{ .value = 11 },
@@ -261,6 +347,49 @@ test "an allocation crossing the ceiling is refused, not truncated" {
     try std.testing.expectError(error.OutOfMemory, allocator.alloc(u8, 2048));
     try std.testing.expectEqual(@as(usize, 0), budget.usage.current_bytes);
     try std.testing.expectEqual(@as(u64, 1), budget.usage.refused_allocations);
+}
+
+test "the secret allocator scrubs a block before releasing it" {
+    // A fixed buffer as the parent keeps freed bytes inspectable, so the scrub
+    // is observable where a general-purpose allocator would hide it.
+    var backing: [256]u8 = undefined;
+    var pool: std.heap.FixedBufferAllocator = .init(&backing);
+    var secret: SecretAllocator = .init(pool.allocator());
+    const allocator = secret.allocator();
+
+    const block = try allocator.alloc(u8, 32);
+    @memset(block, 0xAA);
+    const start = @intFromPtr(block.ptr) - @intFromPtr(&backing);
+    allocator.free(block);
+
+    for (backing[start .. start + 32]) |byte| {
+        try std.testing.expectEqual(@as(u8, 0), byte);
+    }
+}
+
+test "a task arena frees together and promotes what must outlive it" {
+    const gpa = std.testing.allocator;
+    var arena: TaskArena = .init(gpa);
+    const scratch = arena.allocator();
+
+    const scoped = try scratch.dupe(u8, "scratch value");
+    const kept = try arena.promote(gpa, scoped);
+    defer gpa.free(kept);
+
+    // Ending the task frees the arena; the promoted copy is unaffected.
+    arena.deinit();
+    try std.testing.expect(std.mem.eql(u8, kept, "scratch value"));
+}
+
+test "a release larger than the outstanding total clamps and is recorded" {
+    var budget: Budget = .init(std.testing.allocator, 1024, .unattributed);
+    budget.usage.current_bytes = 16;
+
+    // A release of more than is outstanding would wrap the unsigned counter.
+    budget.release(64);
+
+    try std.testing.expectEqual(@as(usize, 0), budget.usage.current_bytes);
+    try std.testing.expectEqual(@as(u64, 1), budget.usage.accounting_faults);
 }
 
 test "the ceiling holds across many small allocations" {

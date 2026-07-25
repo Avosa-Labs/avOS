@@ -142,6 +142,14 @@ pub const Request = struct {
     target_kind: []const u8,
     /// A bounded description of what will happen, for the human to read.
     summary: []const u8,
+    /// The value the human is approving, in the smallest unit of account. The
+    /// capability minted from this decision is bound to at most this amount, so an
+    /// approval for a deposit cannot authorize an unbounded transfer.
+    amount: ?u64,
+    /// The recipient the human is approving, as a centre-owned one-element list
+    /// (empty when the action has no recipient). The minted capability is bound to
+    /// exactly this recipient.
+    recipients: []const []const u8,
     requested_at: time.Timestamp,
     /// When a time-boxed approval stops being valid.
     expires_at: ?time.Timestamp,
@@ -157,6 +165,10 @@ pub const Submission = struct {
     operation: capability_model.Operation,
     target_kind: []const u8,
     summary: []const u8,
+    /// The value being approved, if any, in the smallest unit of account.
+    amount: ?u64 = null,
+    /// The recipient being approved, if any.
+    recipient: ?[]const u8 = null,
 };
 
 /// Longest description shown to a human. A prompt long enough to hide its own
@@ -174,6 +186,10 @@ pub const Centre = struct {
     policy: Policy,
     requests: std.AutoHashMapUnmanaged(u128, Request) = .empty,
     owned_text: std.ArrayList([]const u8) = .empty,
+    /// Recipient lists bound into requests. Owned separately from `owned_text`
+    /// because each is a slice of string slices, freed as a slice here while its
+    /// element strings are freed through `owned_text`.
+    owned_lists: std.ArrayList([]const []const u8) = .empty,
 
     pub fn init(
         gpa: std.mem.Allocator,
@@ -187,6 +203,8 @@ pub const Centre = struct {
     pub fn deinit(centre: *Centre) void {
         for (centre.owned_text.items) |text| centre.gpa.free(text);
         centre.owned_text.deinit(centre.gpa);
+        for (centre.owned_lists.items) |list| centre.gpa.free(list);
+        centre.owned_lists.deinit(centre.gpa);
         centre.requests.deinit(centre.gpa);
         centre.* = undefined;
     }
@@ -196,6 +214,18 @@ pub const Centre = struct {
         errdefer centre.gpa.free(copy);
         try centre.owned_text.append(centre.gpa, copy);
         return copy;
+    }
+
+    /// The single approved recipient as a one-element list the constraints can
+    /// bind, or an empty list when the action has no recipient. The list is
+    /// centre-owned so the constraints may reference it after the call returns.
+    fn ownRecipient(centre: *Centre, recipient: ?[]const u8) ![]const []const u8 {
+        const name = recipient orelse return &.{};
+        const list = try centre.gpa.alloc([]const u8, 1);
+        errdefer centre.gpa.free(list);
+        list[0] = try centre.ownText(name);
+        try centre.owned_lists.append(centre.gpa, list);
+        return list;
     }
 
     /// Opens a request for a human decision.
@@ -224,6 +254,8 @@ pub const Centre = struct {
             .requirement = requirement,
             .target_kind = try centre.ownText(submission.target_kind),
             .summary = try centre.ownText(submission.summary),
+            .amount = submission.amount,
+            .recipients = try centre.ownRecipient(submission.recipient),
             .requested_at = now,
             .expires_at = if (requirement == .time_boxed_approval)
                 now.plus(centre.policy.approval_window)
@@ -347,6 +379,11 @@ pub fn constraintsForApproval(request: Request, expires_at: ?time.Timestamp) cap
         .delegation_depth = 0,
         .expires_at = expires_at orelse request.expires_at,
         .revocation_behavior = .prevent_next_step,
+        // Bind the grant to what the human saw: the approved value and recipient.
+        // A blank recipient list stays blank; a transfer without a bound amount
+        // would be an unbounded transfer, which the caller must not request.
+        .monetary_limit = request.amount,
+        .recipients = request.recipients,
     };
 }
 
@@ -626,6 +663,54 @@ test "approval yields narrow, task-bound, single-use authority" {
     try std.testing.expect(constraints.requires_human_confirmation);
     try std.testing.expect(constraints.task_binding.eql(fixture.task));
     try std.testing.expectEqual(@as(u8, 0), constraints.delegation_depth);
+}
+
+test "opening a request leaks nothing when an allocation fails" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn run(gpa: std.mem.Allocator) !void {
+            var ids: identity.Source = .initDeterministic(1);
+            var manual: time.ManualClock = .init(.fromSeconds(1_000));
+            var centre: Centre = .init(gpa, &ids, manual.clock(), .strict);
+            defer centre.deinit();
+
+            _ = try centre.request(.{
+                .requester = .{ .value = 2 },
+                .approver = .{ .value = 1 },
+                .task = .{ .value = 3 },
+                .operation = .transfer_value,
+                .target_kind = "payment",
+                .summary = "pay the deposit",
+                .amount = 5_000,
+                .recipient = "venue",
+            });
+        }
+    }.run, .{});
+}
+
+test "an approved transfer binds the grant to its amount and recipient" {
+    const gpa = std.testing.allocator;
+    var fixture: Fixture = undefined;
+    Fixture.init(gpa, &fixture, .strict);
+    defer fixture.deinit();
+
+    const id = try fixture.centre.request(.{
+        .requester = fixture.agent,
+        .approver = fixture.human,
+        .task = fixture.task,
+        .operation = .transfer_value,
+        .target_kind = "payment",
+        .summary = "pay the venue deposit",
+        .amount = 5_000,
+        .recipient = "venue",
+    });
+    try fixture.centre.decide(id, fixture.human, .approved);
+    const approved = try fixture.centre.consume(id, fixture.agent);
+
+    const constraints = constraintsForApproval(approved, .fromSeconds(1_100));
+
+    try std.testing.expectEqual(@as(?u64, 5_000), constraints.monetary_limit);
+    try std.testing.expectEqual(@as(usize, 1), constraints.recipients.len);
+    try std.testing.expect(std.mem.eql(u8, constraints.recipients[0], "venue"));
 }
 
 test "policy loosening is explicit and never inferred" {
