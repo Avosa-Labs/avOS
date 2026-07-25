@@ -21,6 +21,7 @@ pub const wifi = @import("wifi/wifi.zig");
 pub const sensors = @import("sensors/sensors.zig");
 pub const emulator_board = @import("boards/emulator/emulator.zig");
 pub const reference_board = @import("boards/reference/reference.zig");
+pub const bound_board = @import("boards/bound.zig");
 pub const secure_element = @import("secure-element/secure_element.zig");
 pub const thermal = @import("thermal/thermal.zig");
 
@@ -40,6 +41,7 @@ test {
     _ = sensors;
     _ = emulator_board;
     _ = reference_board;
+    _ = bound_board;
     _ = secure_element;
     _ = thermal;
 }
