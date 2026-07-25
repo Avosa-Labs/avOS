@@ -227,6 +227,36 @@ const Fixture = struct {
     }
 };
 
+test "the verifier leaks nothing when an allocation fails" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn run(gpa: std.mem.Allocator) !void {
+            const identity: SigningIdentity = .{
+                .service = 0x1,
+                .key_pair = try Ed25519.KeyPair.generateDeterministic(@splat(3)),
+            };
+            var verifier: Verifier = .init(gpa);
+            defer verifier.deinit();
+            try verifier.trust(identity.service, identity.publicKey());
+
+            var buffer: [envelope_schema.max_message_bytes]u8 = undefined;
+            const message: envelope_schema.Envelope = .{
+                .version = envelope_schema.current_version,
+                .kind = .request,
+                .correlation = 1,
+                .idempotency_key = 42,
+                .principal = 0x9,
+                .task = 0,
+                .capability = 0,
+                .deadline_nanoseconds = 0,
+                .method = "calendar.read",
+                .payload = "",
+            };
+            const body = try envelope_schema.encode(message, &buffer);
+            _ = try verifier.accept(try sign(identity, body), 0);
+        }
+    }.run, .{});
+}
+
 test "a message past its deadline is refused as stale" {
     const gpa = std.testing.allocator;
     var fixture: Fixture = undefined;
