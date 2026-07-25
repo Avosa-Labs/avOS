@@ -40,6 +40,9 @@ pub const Usage = struct {
     injected_failures: u64 = 0,
     /// Allocations granted.
     granted_allocations: u64 = 0,
+    /// Releases larger than the outstanding total. A non-zero count is a broken
+    /// invariant surfaced rather than hidden, since the release path cannot fail.
+    accounting_faults: u64 = 0,
 
     pub fn availableBytes(usage: Usage) usize {
         return usage.limit_bytes - usage.current_bytes;
@@ -156,11 +159,17 @@ pub const Budget = struct {
 
     /// Releases `len` bytes.
     ///
-    /// Underflow would silently create budget out of nothing, so a release
-    /// larger than the outstanding total is treated as a broken invariant
-    /// rather than clamped away.
+    /// A release larger than the outstanding total would create budget out of
+    /// nothing and, on the unsigned counter, wrap it to an enormous value. The
+    /// free path returns void and cannot signal an error, so the broken invariant
+    /// is recorded on `accounting_faults` and the counter clamped to zero rather
+    /// than left to wrap into an enormous outstanding total.
     fn release(budget: *Budget, len: usize) void {
-        std.debug.assert(budget.usage.current_bytes >= len);
+        if (len > budget.usage.current_bytes) {
+            budget.usage.accounting_faults += 1;
+            budget.usage.current_bytes = 0;
+            return;
+        }
         budget.usage.current_bytes -= len;
     }
 
@@ -261,6 +270,17 @@ test "an allocation crossing the ceiling is refused, not truncated" {
     try std.testing.expectError(error.OutOfMemory, allocator.alloc(u8, 2048));
     try std.testing.expectEqual(@as(usize, 0), budget.usage.current_bytes);
     try std.testing.expectEqual(@as(u64, 1), budget.usage.refused_allocations);
+}
+
+test "a release larger than the outstanding total clamps and is recorded" {
+    var budget: Budget = .init(std.testing.allocator, 1024, .unattributed);
+    budget.usage.current_bytes = 16;
+
+    // A release of more than is outstanding would wrap the unsigned counter.
+    budget.release(64);
+
+    try std.testing.expectEqual(@as(usize, 0), budget.usage.current_bytes);
+    try std.testing.expectEqual(@as(u64, 1), budget.usage.accounting_faults);
 }
 
 test "the ceiling holds across many small allocations" {

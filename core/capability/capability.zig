@@ -323,6 +323,11 @@ pub const Store = struct {
     /// only when a check fails.
     last_refusal: ?Refusal = null,
 
+    /// The furthest wall time ever seen, which only advances. Expiry is judged
+    /// against this rather than the raw clock, so a backward wall-clock jump
+    /// cannot revive a grant that has already expired.
+    wall_floor: time.Timestamp = .epoch,
+
     pub fn init(
         gpa: std.mem.Allocator,
         ids: *identity.Source,
@@ -529,6 +534,10 @@ pub const Store = struct {
     pub fn check(store: *Store, handle: Handle, context: UseContext) DomainError!Capability {
         const record = try store.resolve(handle);
         const now = store.clock.wall();
+        // Expiry must not run backwards: track the furthest time ever seen and
+        // judge expiry against it, so a clock rolled back below a grant's expiry
+        // cannot bring the grant back to life.
+        if (now.isAfter(store.wall_floor)) store.wall_floor = now;
 
         if (record.revoked) return store.refuse(.revoked);
 
@@ -546,7 +555,7 @@ pub const Store = struct {
             if (now.order(not_before) == .lt) return store.refuse(.not_yet_valid);
         }
         if (record.constraints.expires_at) |expires_at| {
-            if (!expires_at.isAfter(now)) return store.refuse(.expired);
+            if (!expires_at.isAfter(store.wall_floor)) return store.refuse(.expired);
         }
 
         if (!record.operations.contains(context.operation)) {
@@ -1381,6 +1390,35 @@ test "revoking a grant revokes what was delegated from it" {
         .operation = .read,
         .resource = .{ .kind = "calendar" },
     }));
+}
+
+test "a grant that has expired stays expired when the wall clock rolls back" {
+    const gpa = std.testing.allocator;
+    var fixture: Fixture = undefined;
+    try Fixture.init(gpa, &fixture);
+    defer fixture.deinit();
+
+    const handle = try fixture.store.issue(.{
+        .issuer = fixture.human,
+        .holder = fixture.agent,
+        .resource = .{ .kind = "calendar" },
+        .operations = fixture.readOnly(),
+        .constraints = .{ .expires_at = .fromSeconds(1_100) },
+    });
+    const context: UseContext = .{
+        .holder = fixture.agent,
+        .operation = .read,
+        .resource = .{ .kind = "calendar" },
+    };
+
+    // Move past expiry; the grant is refused and the floor advances.
+    fixture.manual.advance(.fromSeconds(300));
+    try std.testing.expectError(error.CapabilityExpired, fixture.store.check(handle, context));
+
+    // Roll the wall clock back before the expiry. Without a floor the grant
+    // would look valid again; with one it stays expired.
+    fixture.manual.skewWall(.fromSeconds(-1_000));
+    try std.testing.expectError(error.CapabilityExpired, fixture.store.check(handle, context));
 }
 
 test "a model-restricted grant refuses another model and admits the named one" {

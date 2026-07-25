@@ -21,7 +21,7 @@ pub const Timestamp = struct {
     pub const epoch: Timestamp = .{ .nanoseconds = 0 };
 
     pub fn fromSeconds(count: i64) Timestamp {
-        return .{ .nanoseconds = count * std.time.ns_per_s };
+        return .{ .nanoseconds = count *| std.time.ns_per_s };
     }
 
     pub fn seconds(timestamp: Timestamp) i64 {
@@ -65,11 +65,11 @@ pub const Duration = struct {
     pub const zero: Duration = .{ .nanoseconds = 0 };
 
     pub fn fromMilliseconds(count: i64) Duration {
-        return .{ .nanoseconds = count * std.time.ns_per_ms };
+        return .{ .nanoseconds = count *| std.time.ns_per_ms };
     }
 
     pub fn fromSeconds(count: i64) Duration {
-        return .{ .nanoseconds = count * std.time.ns_per_s };
+        return .{ .nanoseconds = count *| std.time.ns_per_s };
     }
 
     pub fn milliseconds(duration: Duration) i64 {
@@ -182,6 +182,13 @@ test "deadline arithmetic saturates instead of wrapping into the past" {
     const deadline = near_limit.plus(far);
     try std.testing.expect(!deadline.isAfter(.{ .nanoseconds = std.math.maxInt(i64) }));
     try std.testing.expect(deadline.isAfter(near_limit));
+}
+
+test "constructing from a count too large to represent saturates rather than trapping" {
+    const huge: i64 = std.math.maxInt(i64);
+    try std.testing.expectEqual(@as(i64, std.math.maxInt(i64)), Timestamp.fromSeconds(huge).nanoseconds);
+    try std.testing.expectEqual(@as(i64, std.math.maxInt(i64)), Duration.fromSeconds(huge).nanoseconds);
+    try std.testing.expectEqual(@as(i64, std.math.minInt(i64)), Duration.fromMilliseconds(std.math.minInt(i64)).nanoseconds);
 }
 
 test "ordering and comparison agree" {
