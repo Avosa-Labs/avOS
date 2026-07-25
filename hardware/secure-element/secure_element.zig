@@ -125,6 +125,8 @@ pub const Element = struct {
             digest: [digest_bytes]u8,
         ) Error![signature_bytes]u8,
         destroy: *const fn (context_pointer: *anyopaque, handle: KeyHandle) Error!void,
+        readMonotonic: *const fn (context_pointer: *anyopaque) Error!u64,
+        advanceMonotonic: *const fn (context_pointer: *anyopaque) Error!u64,
     };
 
     /// Where keys held by this element actually live.
@@ -160,6 +162,39 @@ pub const Element = struct {
     pub fn destroy(element: Element, handle: KeyHandle) Error!void {
         return element.vtable.destroy(element.context_pointer, handle);
     }
+
+    /// The current value of the element's monotonic counter.
+    ///
+    /// The counter lives inside the element and only ever increases, so it
+    /// survives a wipe of the main system's writable storage. Anti-rollback state
+    /// is anchored to it: a floor recorded against a counter value cannot be
+    /// undone by resetting RAM, because the counter cannot be moved backwards.
+    pub fn readMonotonic(element: Element) Error!u64 {
+        return element.vtable.readMonotonic(element.context_pointer);
+    }
+
+    /// Advances the monotonic counter by one and returns the new value. There is
+    /// no way to lower it.
+    pub fn advanceMonotonic(element: Element) Error!u64 {
+        return element.vtable.advanceMonotonic(element.context_pointer);
+    }
+
+    /// Quotes the device's boot state: signs the measured-boot summary with an
+    /// attestation key held inside the element.
+    ///
+    /// The summary is the digest of exactly what booted, so a quote is a proof,
+    /// from a key that never leaves the device, that this device booted this
+    /// software. A different boot produces a different summary and so a different
+    /// quote; the measured-boot log becomes something a remote party can check
+    /// rather than a value only the device itself can read. The handle must name
+    /// a `device_attestation` key, which `sign` enforces.
+    pub fn attestBootState(
+        element: Element,
+        handle: KeyHandle,
+        boot_summary: [digest_bytes]u8,
+    ) Error![signature_bytes]u8 {
+        return element.sign(handle, .device_attestation, boot_summary);
+    }
 };
 
 /// How many keys an element holds.
@@ -192,6 +227,9 @@ pub const SoftwareElement = struct {
     unavailable: bool = false,
     /// Seeds deterministic key generation, so a scenario replays exactly.
     next_seed: u8 = 1,
+    /// The monotonic counter. In a real element this is fused, tamper-resistant
+    /// storage; here it is a field that this stand-in still only ever raises.
+    monotonic: u64 = 0,
 
     pub fn element(software: *SoftwareElement) Element {
         return .{ .context_pointer = software, .vtable = &vtable };
@@ -203,6 +241,8 @@ pub const SoftwareElement = struct {
         .publicKey = publicKeyOf,
         .sign = signIn,
         .destroy = destroyIn,
+        .readMonotonic = readMonotonicIn,
+        .advanceMonotonic = advanceMonotonicIn,
     };
 
     fn from(context_pointer: *anyopaque) *SoftwareElement {
@@ -298,6 +338,21 @@ pub const SoftwareElement = struct {
         const slot = try software.slotFor(handle);
         slot.* = .{};
     }
+
+    fn readMonotonicIn(context_pointer: *anyopaque) Error!u64 {
+        const software = from(context_pointer);
+        if (software.unavailable) return error.Unavailable;
+        return software.monotonic;
+    }
+
+    fn advanceMonotonicIn(context_pointer: *anyopaque) Error!u64 {
+        const software = from(context_pointer);
+        if (software.unavailable) return error.Unavailable;
+        // Saturates rather than wraps: a counter that rolled over to zero would
+        // be a rollback, which is the one thing it exists to prevent.
+        software.monotonic +|= 1;
+        return software.monotonic;
+    }
 };
 
 const sample_digest: [digest_bytes]u8 = @splat(9);
@@ -314,6 +369,63 @@ test "a key is created inside the element and used by handle" {
     try (Ed25519.Signature.fromBytes(signature)).verify(&sample_digest, key);
 }
 
+test "the monotonic counter only ever rises" {
+    var software: SoftwareElement = .{};
+    const element = software.element();
+
+    try std.testing.expectEqual(@as(u64, 0), try element.readMonotonic());
+    try std.testing.expectEqual(@as(u64, 1), try element.advanceMonotonic());
+    try std.testing.expectEqual(@as(u64, 2), try element.advanceMonotonic());
+    try std.testing.expectEqual(@as(u64, 2), try element.readMonotonic());
+
+    // Nothing in the interface can lower it: there is only advance and read.
+    inline for (@typeInfo(Element.VTable).@"struct".fields) |field| {
+        for ([_][]const u8{ "lowerMonotonic", "setMonotonic", "resetMonotonic" }) |name| {
+            try std.testing.expect(!std.mem.eql(u8, field.name, name));
+        }
+    }
+}
+
+test "a boot-state quote binds to exactly what booted" {
+    var software: SoftwareElement = .{};
+    const element = software.element();
+
+    const handle = try element.create(.device_attestation, .{});
+    const public = try element.publicKey(handle);
+    const key = try Ed25519.PublicKey.fromBytes(public);
+
+    const summary: [digest_bytes]u8 = @splat(0x11);
+    const quote = try element.attestBootState(handle, summary);
+
+    // The quote verifies against the attestation key over this exact summary.
+    try (Ed25519.Signature.fromBytes(quote)).verify(&summary, key);
+
+    // A different boot summary does not verify against the same quote, so a
+    // tampered measurement cannot pass off an old quote as its own.
+    const tampered: [digest_bytes]u8 = @splat(0x22);
+    try std.testing.expectError(
+        error.SignatureVerificationFailed,
+        (Ed25519.Signature.fromBytes(quote)).verify(&tampered, key),
+    );
+}
+
+test "a key made for something else cannot quote boot state" {
+    var software: SoftwareElement = .{};
+    const element = software.element();
+    const handle = try element.create(.storage_protection, .{});
+    try std.testing.expectError(
+        error.WrongPurpose,
+        element.attestBootState(handle, @splat(0x11)),
+    );
+}
+
+test "an unavailable element fails the counter too" {
+    var software: SoftwareElement = .{ .unavailable = true };
+    const element = software.element();
+    try std.testing.expectError(error.Unavailable, element.readMonotonic());
+    try std.testing.expectError(error.Unavailable, element.advanceMonotonic());
+}
+
 test "nothing in the interface returns key material" {
     // Checked structurally rather than by convention: an export function added
     // later fails this test rather than passing review.
@@ -323,7 +435,7 @@ test "nothing in the interface returns key material" {
             try std.testing.expect(!std.mem.eql(u8, field.name, name));
         }
     }
-    try std.testing.expectEqual(@as(usize, 5), @typeInfo(Element.VTable).@"struct".fields.len);
+    try std.testing.expectEqual(@as(usize, 7), @typeInfo(Element.VTable).@"struct".fields.len);
 }
 
 test "a key created for one purpose refuses another" {

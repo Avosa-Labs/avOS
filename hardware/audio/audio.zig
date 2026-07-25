@@ -154,7 +154,126 @@ pub fn decide(
     return .{ .volume = requested, .route = route, .adjustment = .unchanged };
 }
 
+// --- Microphone capture ---
+//
+// Output governs how loud sound may be; capture governs whether the device may
+// listen, which is the privacy question. A live capture lights an indicator a
+// person can see and a hardware mute is a hard no, mirrored on the same rules
+// the camera capture path uses so listening cannot happen unseen or through a
+// mute.
+
+pub const CaptureRefusal = enum {
+    /// A capture is already running.
+    already_active,
+    /// The microphone is muted in hardware. A capability does not override it.
+    muted,
+    /// No indicator is available to show that the device is listening.
+    no_indicator,
+
+    pub fn describe(refusal: CaptureRefusal) []const u8 {
+        return switch (refusal) {
+            .already_active => "a capture is already running",
+            .muted => "the microphone is muted",
+            .no_indicator => "no capture indicator is available",
+        };
+    }
+};
+
+/// Proof that a microphone capture is live and its indicator lit. Constructed
+/// only by `Microphone.begin`, which lights the indicator, so holding one means
+/// the light is on.
+pub const CaptureSession = struct {
+    witness: Witness,
+    const Witness = struct {};
+};
+
+pub const CaptureOutcome = union(enum) {
+    started: CaptureSession,
+    refused: CaptureRefusal,
+
+    pub fn isStarted(outcome: CaptureOutcome) bool {
+        return outcome == .started;
+    }
+};
+
+pub const Microphone = struct {
+    /// A hardware mute the running system cannot override.
+    muted: bool = false,
+    /// Whether an indicator exists to show listening.
+    indicator_present: bool = true,
+    /// Whether a capture is running.
+    active: bool = false,
+    /// Lit exactly while a capture is active.
+    indicator_lit: bool = false,
+
+    /// Starts listening, lighting the indicator, or refuses with a reason.
+    pub fn begin(microphone: *Microphone) CaptureOutcome {
+        if (microphone.active) return .{ .refused = .already_active };
+        if (microphone.muted) return .{ .refused = .muted };
+        if (!microphone.indicator_present) return .{ .refused = .no_indicator };
+
+        microphone.active = true;
+        microphone.indicator_lit = true;
+        return .{ .started = .{ .witness = .{} } };
+    }
+
+    /// Stops listening and clears the indicator. A duplicated stop is harmless.
+    pub fn end(microphone: *Microphone, session: CaptureSession) void {
+        _ = session;
+        microphone.active = false;
+        microphone.indicator_lit = false;
+    }
+
+    /// Mutes in hardware, stopping any running capture and clearing its light.
+    pub fn mute(microphone: *Microphone) void {
+        microphone.muted = true;
+        microphone.active = false;
+        microphone.indicator_lit = false;
+    }
+
+    pub fn unmute(microphone: *Microphone) void {
+        microphone.muted = false;
+    }
+
+    /// The invariant: the indicator is lit exactly when a capture is active.
+    pub fn indicatorMatchesCapture(microphone: Microphone) bool {
+        return microphone.indicator_lit == microphone.active;
+    }
+};
+
 const reference = Limits.reference;
+
+test "a microphone capture lights the indicator and stops cleanly" {
+    var microphone: Microphone = .{};
+    const outcome = microphone.begin();
+    try std.testing.expect(outcome.isStarted());
+    try std.testing.expect(microphone.indicator_lit);
+    try std.testing.expect(microphone.indicatorMatchesCapture());
+
+    microphone.end(outcome.started);
+    try std.testing.expect(!microphone.indicator_lit);
+    try std.testing.expect(microphone.indicatorMatchesCapture());
+}
+
+test "a muted microphone refuses capture and mute stops a running one" {
+    var microphone: Microphone = .{};
+    _ = microphone.begin();
+    microphone.mute();
+    try std.testing.expect(!microphone.active);
+    try std.testing.expect(!microphone.indicator_lit);
+    try std.testing.expectEqual(CaptureRefusal.muted, microphone.begin().refused);
+}
+
+test "a second microphone capture cannot start behind the first" {
+    var microphone: Microphone = .{};
+    _ = microphone.begin();
+    try std.testing.expectEqual(CaptureRefusal.already_active, microphone.begin().refused);
+}
+
+test "a microphone with no indicator refuses to listen" {
+    var microphone: Microphone = .{ .indicator_present = false };
+    try std.testing.expectEqual(CaptureRefusal.no_indicator, microphone.begin().refused);
+}
 
 test "the reference limits are valid" {
     try std.testing.expect(reference.areValid());

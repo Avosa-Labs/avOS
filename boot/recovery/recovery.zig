@@ -91,6 +91,32 @@ pub fn choose(failure: Failure, depth: Depth, available: Available) Outcome {
     };
 }
 
+/// The most consecutive recovery attempts before the device stops trying. A
+/// recovery path that keeps failing is not going to start working; past this the
+/// only safe answer is to halt and wait for an owner rather than loop.
+pub const max_attempts: u8 = 3;
+
+/// Chooses what to do given how many times recovery has already been attempted.
+///
+/// `choose` alone is stateless, so a device that boots the recovery image, fails
+/// again, and re-enters would keep choosing the recovery image forever. This
+/// walks a bounded ladder instead: the first attempt takes the best option, the
+/// next steps down to the previous slot, and any further attempt halts. The
+/// attempt count is persisted across boots by the caller and reset once a boot
+/// succeeds.
+pub fn chooseBounded(failure: Failure, depth: Depth, available: Available, attempts: u8) Outcome {
+    const base = choose(failure, depth, available);
+    // An unrecoverable failure halts regardless of how many attempts remain.
+    if (base == .halt) return .halt;
+    // Too many attempts is itself a reason to stop.
+    if (attempts >= max_attempts) return .halt;
+    return switch (attempts) {
+        0 => base,
+        1 => if (available.previous_slot_bootable) .previous_slot else .halt,
+        else => .halt,
+    };
+}
+
 /// What the owner is told.
 ///
 /// A device that has stopped must say why in terms its owner can act on.
@@ -114,6 +140,28 @@ test "a late signature failure uses recovery when it is available" {
     try std.testing.expectEqual(
         Outcome.boot_recovery_image,
         choose(.signature_rejected, .after_recovery_is_loadable, everything),
+    );
+}
+
+test "recovery escalates over repeated attempts and finally halts" {
+    // First attempt: the best option.
+    try std.testing.expectEqual(
+        Outcome.boot_recovery_image,
+        chooseBounded(.signature_rejected, .after_recovery_is_loadable, everything, 0),
+    );
+    // Second attempt: step down to the previous slot.
+    try std.testing.expectEqual(
+        Outcome.previous_slot,
+        chooseBounded(.signature_rejected, .after_recovery_is_loadable, everything, 1),
+    );
+    // Third and beyond: stop looping.
+    try std.testing.expectEqual(
+        Outcome.halt,
+        chooseBounded(.signature_rejected, .after_recovery_is_loadable, everything, 2),
+    );
+    try std.testing.expectEqual(
+        Outcome.halt,
+        chooseBounded(.signature_rejected, .after_recovery_is_loadable, everything, max_attempts),
     );
 }
 

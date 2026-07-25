@@ -21,6 +21,7 @@
 //! that the audit stage runs whether the operation succeeded or was refused.
 
 const std = @import("std");
+const device_policy = @import("../device-policy/device_policy.zig");
 
 /// The stages, in the order every privileged operation passes them.
 ///
@@ -125,6 +126,67 @@ pub fn Pipeline(comptime Context: type) type {
     };
 }
 
+/// A real privileged operation run through the pipeline: accessing a device.
+///
+/// This is the pipeline wired to something, rather than only to a test harness.
+/// Authentication gates on the caller being known; authorization is the device
+/// policy's own decision; state is the target being ready; performing an access
+/// that captures discharges the capture obligation, which lights the indicator;
+/// and audit always runs. A denial at any stage stops the operation and is still
+/// recorded, so the ordered-mediation guarantee protects a concrete access.
+pub const DeviceAccess = struct {
+    authenticated: bool,
+    class: device_policy.DeviceClass,
+    access: device_policy.Access,
+    grant: device_policy.Grant,
+    situation: device_policy.Situation,
+    target_ready: bool,
+    indicator: *device_policy.Indicator,
+
+    // Filled as the pipeline runs.
+    allowance: ?device_policy.Allowance = null,
+    capture: ?device_policy.ActiveCapture = null,
+    audited: ?Outcome = null,
+
+    fn decide(operation: *DeviceAccess, stage: Stage) Verdict {
+        return switch (stage) {
+            .authenticate => if (operation.authenticated) .proceed else .refuse,
+            .authorize => {
+                const decision = device_policy.decide(operation.class, operation.access, operation.grant, operation.situation);
+                switch (decision) {
+                    .allow => |allowance| {
+                        operation.allowance = allowance;
+                        return .proceed;
+                    },
+                    .deny => return .refuse,
+                }
+            },
+            .check_state => if (operation.target_ready) .proceed else .refuse,
+            .perform => {
+                // A capture access lights the indicator here, through the
+                // obligation, so the light is on before any sensing begins.
+                if (operation.allowance) |allowance| {
+                    switch (allowance) {
+                        .capture => |obligation| operation.capture = obligation.begin(operation.indicator),
+                        .no_capture => {},
+                    }
+                }
+                return .proceed;
+            },
+            .audit => .proceed,
+        };
+    }
+
+    fn record(operation: *DeviceAccess, outcome: Outcome) void {
+        operation.audited = outcome;
+    }
+
+    /// Runs the access through the ordered pipeline and returns what happened.
+    pub fn perform(operation: *DeviceAccess) Outcome {
+        return Pipeline(DeviceAccess).run(operation, decide, record);
+    }
+};
+
 /// Records which stages ran, in order, for a test to inspect.
 const Trace = struct {
     ran: [Stage.count]Stage = undefined,
@@ -154,6 +216,73 @@ const Trace = struct {
 };
 
 const TracePipeline = Pipeline(Trace);
+
+fn cameraStreamGrant() device_policy.Grant {
+    var classes = std.EnumSet(device_policy.DeviceClass).initEmpty();
+    classes.insert(.camera);
+    var accesses = std.EnumSet(device_policy.Access).initEmpty();
+    accesses.insert(.stream);
+    return .{ .classes = classes, .accesses = accesses };
+}
+
+test "an authorized camera stream runs every stage and lights the indicator" {
+    var indicator: device_policy.Indicator = .{};
+    var operation: DeviceAccess = .{
+        .authenticated = true,
+        .class = .camera,
+        .access = .stream,
+        .grant = cameraStreamGrant(),
+        .situation = .{ .person_present = true },
+        .target_ready = true,
+        .indicator = &indicator,
+    };
+
+    const outcome = operation.perform();
+    try std.testing.expect(outcome.wasCompleted());
+    // Performing the capture lit the indicator through the obligation.
+    try std.testing.expect(indicator.isLit(.camera));
+    try std.testing.expect(operation.capture != null);
+    // Audit ran with the completed outcome.
+    try std.testing.expect(operation.audited.?.wasCompleted());
+}
+
+test "an unauthenticated access refuses at the first stage and still audits" {
+    var indicator: device_policy.Indicator = .{};
+    var operation: DeviceAccess = .{
+        .authenticated = false,
+        .class = .camera,
+        .access = .stream,
+        .grant = cameraStreamGrant(),
+        .situation = .{ .person_present = true },
+        .target_ready = true,
+        .indicator = &indicator,
+    };
+
+    const outcome = operation.perform();
+    try std.testing.expectEqual(Outcome{ .refused_at = .authenticate }, outcome);
+    try std.testing.expect(!indicator.isLit(.camera));
+    try std.testing.expectEqual(Outcome{ .refused_at = .authenticate }, operation.audited.?);
+}
+
+test "an access the device policy denies refuses at authorize" {
+    var indicator: device_policy.Indicator = .{};
+    // A grant for the camera but not for streaming: authorize denies.
+    var classes = std.EnumSet(device_policy.DeviceClass).initEmpty();
+    classes.insert(.camera);
+    var operation: DeviceAccess = .{
+        .authenticated = true,
+        .class = .camera,
+        .access = .stream,
+        .grant = .{ .classes = classes, .accesses = std.EnumSet(device_policy.Access).initEmpty() },
+        .situation = .{ .person_present = true },
+        .target_ready = true,
+        .indicator = &indicator,
+    };
+
+    const outcome = operation.perform();
+    try std.testing.expectEqual(Outcome{ .refused_at = .authorize }, outcome);
+    try std.testing.expect(!indicator.isLit(.camera));
+}
 
 test "the stage order is fixed and total" {
     // Each stage leads to exactly the next, and audit is last.

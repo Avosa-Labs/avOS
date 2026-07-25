@@ -149,6 +149,70 @@ pub const TableAdapter = struct {
     }
 };
 
+/// An adapter that maps onto a POSIX host: scheduling classes become nice-style
+/// priorities and memory domains become distinct arena kinds.
+///
+/// Unlike the table adapter, this names concrete host values a real binder would
+/// pass to the OS — the most urgent class maps to the most favorable nice value
+/// and the least urgent to the least favorable — while producing them behind the
+/// same seam, so the kernel above it never learns which host it is on. The
+/// mapping preserves the policy's ordering, which `preservesOrdering` checks.
+pub const PosixAdapter = struct {
+    /// Nice-style values: lower is more favorable, matching the class ordinals so
+    /// a more urgent class maps to a smaller number. Spread across the usable
+    /// range rather than packed, to leave room a host scheduler can use.
+    const nice_by_class = [scheduler_policy.Class.count]i32{
+        -20, // critical_real_time — the most favorable the host offers
+        -10, // human_interactive
+        0, // committed_task
+        10, // maintenance
+        19, // speculative — the least favorable
+    };
+
+    pub fn adapter(posix: *PosixAdapter) Adapter {
+        return .{ .context_pointer = posix, .vtable = &vtable };
+    }
+
+    const vtable: Adapter.VTable = .{
+        .priorityFor = priorityFor,
+        .arenaFor = arenaFor,
+    };
+
+    fn priorityFor(context_pointer: *anyopaque, class: scheduler_policy.Class) HostPriority {
+        _ = context_pointer;
+        return .{ .value = nice_by_class[@intFromEnum(class)] };
+    }
+
+    fn arenaFor(context_pointer: *anyopaque, domain: memory_policy.Domain) HostArena {
+        _ = context_pointer;
+        // Each domain is its own arena kind on the host; the ordinal is a stable,
+        // distinct identifier the host binder maps to a real arena.
+        return .{ .value = @intFromEnum(domain) };
+    }
+};
+
+test "the posix adapter preserves the policy's class ordering" {
+    var posix: PosixAdapter = .{};
+    const adapter = posix.adapter();
+    try std.testing.expect(preservesOrdering(adapter));
+
+    // The most urgent class maps to the most favorable nice value, the least to
+    // the least favorable.
+    try std.testing.expectEqual(@as(i32, -20), adapter.priorityFor(.critical_real_time).value);
+    try std.testing.expectEqual(@as(i32, 19), adapter.priorityFor(.speculative).value);
+}
+
+test "the posix adapter gives each memory domain a distinct arena" {
+    var posix: PosixAdapter = .{};
+    const adapter = posix.adapter();
+    var seen: [memory_policy.Domain.count]bool = @splat(false);
+    for (std.enums.values(memory_policy.Domain)) |domain| {
+        const arena = adapter.arenaFor(domain);
+        try std.testing.expect(!seen[arena.value]);
+        seen[arena.value] = true;
+    }
+}
+
 test "an adapter translates every scheduling class to a host priority" {
     var table = TableAdapter.ordered;
     const adapter = table.adapter();
