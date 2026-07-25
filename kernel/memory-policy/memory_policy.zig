@@ -74,6 +74,10 @@ pub const Discipline = struct {
     /// the device; only boot and the trusted services, which are bounded by
     /// construction, are allowed to lack a numeric cap.
     bounded: bool,
+    /// The hard ceiling in bytes, or zero when the domain is unbounded. A domain
+    /// that claims a ceiling must name it, so a request can be checked against a
+    /// number rather than against a promise.
+    ceiling_bytes: usize,
     /// When memory here is reclaimed.
     lifetime: Lifetime,
 
@@ -96,6 +100,7 @@ pub fn disciplineOf(domain: Domain) Discipline {
             .zeroed_on_release = false,
             .growable = true,
             .bounded = false,
+            .ceiling_bytes = 0,
             .lifetime = .until_shutdown,
         },
         .trusted_service => .{
@@ -103,6 +108,7 @@ pub fn disciplineOf(domain: Domain) Discipline {
             .zeroed_on_release = false,
             .growable = true,
             .bounded = false,
+            .ceiling_bytes = 0,
             .lifetime = .until_shutdown,
         },
         .per_request, .per_task, .per_agent => .{
@@ -110,6 +116,7 @@ pub fn disciplineOf(domain: Domain) Discipline {
             .zeroed_on_release = false,
             .growable = true,
             .bounded = true,
+            .ceiling_bytes = 16 * 1024 * 1024,
             .lifetime = .until_scope_ends,
         },
         .real_time => .{
@@ -117,6 +124,7 @@ pub fn disciplineOf(domain: Domain) Discipline {
             .zeroed_on_release = false,
             .growable = false,
             .bounded = true,
+            .ceiling_bytes = 2 * 1024 * 1024,
             .lifetime = .manual,
         },
         .secret => .{
@@ -124,6 +132,7 @@ pub fn disciplineOf(domain: Domain) Discipline {
             .zeroed_on_release = true,
             .growable = false,
             .bounded = true,
+            .ceiling_bytes = 256 * 1024,
             .lifetime = .manual,
         },
         .shared_transport => .{
@@ -131,6 +140,7 @@ pub fn disciplineOf(domain: Domain) Discipline {
             .zeroed_on_release = false,
             .growable = false,
             .bounded = true,
+            .ceiling_bytes = 4 * 1024 * 1024,
             .lifetime = .manual,
         },
         .compatibility_runtime => .{
@@ -138,6 +148,7 @@ pub fn disciplineOf(domain: Domain) Discipline {
             .zeroed_on_release = false,
             .growable = true,
             .bounded = true,
+            .ceiling_bytes = 128 * 1024 * 1024,
             .lifetime = .until_scope_ends,
         },
         .diagnostics => .{
@@ -145,6 +156,7 @@ pub fn disciplineOf(domain: Domain) Discipline {
             .zeroed_on_release = false,
             .growable = true,
             .bounded = true,
+            .ceiling_bytes = 8 * 1024 * 1024,
             .lifetime = .until_scope_ends,
         },
     };
@@ -199,6 +211,20 @@ pub fn place(domain: Domain, requirement: Requirement) Error!void {
     if (!satisfies(domain, requirement)) return error.DomainUnsuitable;
 }
 
+/// Whether granting `requested_bytes` on top of `in_use` would cross the domain's
+/// ceiling.
+///
+/// An unbounded domain never exceeds. For a bounded one, the sum is computed with
+/// overflow rejected: a request whose size plus what is already in use does not
+/// fit in the counter is treated as exceeding rather than wrapping to a small
+/// number that would slip under the ceiling.
+pub fn wouldExceed(domain: Domain, requested_bytes: usize, in_use: usize) bool {
+    const discipline = disciplineOf(domain);
+    if (!discipline.bounded) return false;
+    const total = std.math.add(usize, in_use, requested_bytes) catch return true;
+    return total > discipline.ceiling_bytes;
+}
+
 /// The domain a secret must use.
 ///
 /// There is exactly one, and naming it as a function means a caller cannot
@@ -206,6 +232,26 @@ pub fn place(domain: Domain, requirement: Requirement) Error!void {
 /// configuration value.
 pub fn secretDomain() Domain {
     return .secret;
+}
+
+test "a bounded domain refuses a request that crosses its ceiling" {
+    const ceiling = disciplineOf(.real_time).ceiling_bytes;
+    // Just under the ceiling is fine; the request that crosses it is refused.
+    try std.testing.expect(!wouldExceed(.real_time, 1024, ceiling - 2048));
+    try std.testing.expect(wouldExceed(.real_time, 4096, ceiling - 2048));
+    // Exactly at the ceiling is allowed; one byte over is not.
+    try std.testing.expect(!wouldExceed(.real_time, ceiling, 0));
+    try std.testing.expect(wouldExceed(.real_time, ceiling + 1, 0));
+}
+
+test "an unbounded domain never reports exceeding" {
+    try std.testing.expect(!wouldExceed(.boot, std.math.maxInt(usize), 0));
+    try std.testing.expect(!wouldExceed(.trusted_service, 1 << 40, 1 << 40));
+}
+
+test "a request that overflows the counter is treated as exceeding" {
+    // The sum wraps if computed unchecked; it must be refused, not wrapped.
+    try std.testing.expect(wouldExceed(.secret, std.math.maxInt(usize), 1));
 }
 
 test "the domain table covers every domain" {
