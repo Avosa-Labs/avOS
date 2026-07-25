@@ -58,7 +58,9 @@ pub fn classifyV4(octets: [4]u8) AddressClass {
 }
 
 /// Classifies an IPv6 address by its leading bytes: loopback (::1), unspecified
-/// (::), unique-local (fc00::/7), and link-local (fe80::/10).
+/// (::), unique-local (fc00::/7), and link-local (fe80::/10). An address that
+/// embeds an IPv4 destination is classified by that destination, so a v6 answer
+/// cannot smuggle an internal IPv4 address past the rebinding check.
 pub fn classifyV6(bytes: [16]u8) AddressClass {
     var all_zero_but_last = true;
     for (bytes[0..15]) |b| {
@@ -74,9 +76,42 @@ pub fn classifyV6(bytes: [16]u8) AddressClass {
             else => .public,
         };
     }
+    // An IPv6 answer can carry an IPv4 destination inside it, and the socket layer
+    // routes such an address to that IPv4 host. If the classifier judged only the
+    // v6 prefix, an untrusted name could resolve to ::ffff:127.0.0.1 and pivot
+    // inward exactly as 127.0.0.1 would — the rebinding this module exists to stop,
+    // in v6 dress. So an embedded-v4 form is classified by the address it reaches.
+    if (embeddedV4(bytes)) |octets| return classifyV4(octets);
+
     if (bytes[0] & 0xfe == 0xfc) return .private; // fc00::/7 unique-local
     if (bytes[0] == 0xfe and (bytes[1] & 0xc0) == 0x80) return .link_local; // fe80::/10
     return .public;
+}
+
+/// The IPv4 address an IPv6 address embeds, if it is one of the forms a stack
+/// routes to IPv4: IPv4-mapped (::ffff:0:0/96), IPv4-compatible (::/96, deprecated
+/// but still routed by some stacks), or NAT64 with the well-known prefix
+/// (64:ff9b::/96). Null for any other address. The `::`/`::1` forms are handled by
+/// the caller before this runs, so they never reach here as a v4-compatible answer.
+fn embeddedV4(bytes: [16]u8) ?[4]u8 {
+    const last_four: [4]u8 = .{ bytes[12], bytes[13], bytes[14], bytes[15] };
+    const first_ten_zero = isZero(bytes[0..10]);
+
+    // ::ffff:a.b.c.d
+    if (first_ten_zero and bytes[10] == 0xff and bytes[11] == 0xff) return last_four;
+    // ::a.b.c.d — IPv4-compatible: the first twelve bytes are zero.
+    if (first_ten_zero and bytes[10] == 0 and bytes[11] == 0) return last_four;
+    // 64:ff9b::a.b.c.d — NAT64 well-known prefix.
+    if (bytes[0] == 0x00 and bytes[1] == 0x64 and bytes[2] == 0xff and bytes[3] == 0x9b and
+        isZero(bytes[4..12])) return last_four;
+    return null;
+}
+
+fn isZero(slice: []const u8) bool {
+    for (slice) |b| {
+        if (b != 0) return false;
+    }
+    return true;
 }
 
 /// Where a query came from, which fixes what its answer is allowed to be.
@@ -201,6 +236,64 @@ test "IPv6 loopback, unspecified, unique-local, and link-local are classified" {
     public[0] = 0x20;
     public[1] = 0x01;
     try std.testing.expectEqual(AddressClass.public, classifyV6(public));
+}
+
+test "an IPv6 answer embedding an internal IPv4 address is classified by that address" {
+    // ::ffff:127.0.0.1 — IPv4-mapped loopback. Must not read as public, or an
+    // untrusted name resolving to it would pivot to 127.0.0.1.
+    var mapped_loopback = [_]u8{0} ** 16;
+    mapped_loopback[10] = 0xff;
+    mapped_loopback[11] = 0xff;
+    mapped_loopback[12] = 127;
+    mapped_loopback[15] = 1;
+    try std.testing.expectEqual(AddressClass.loopback, classifyV6(mapped_loopback));
+
+    // ::ffff:192.168.1.1 — IPv4-mapped private.
+    var mapped_private = [_]u8{0} ** 16;
+    mapped_private[10] = 0xff;
+    mapped_private[11] = 0xff;
+    mapped_private[12] = 192;
+    mapped_private[13] = 168;
+    mapped_private[14] = 1;
+    mapped_private[15] = 1;
+    try std.testing.expectEqual(AddressClass.private, classifyV6(mapped_private));
+
+    // ::127.0.0.1 — deprecated IPv4-compatible loopback.
+    var compat_loopback = [_]u8{0} ** 16;
+    compat_loopback[12] = 127;
+    compat_loopback[15] = 1;
+    try std.testing.expectEqual(AddressClass.loopback, classifyV6(compat_loopback));
+
+    // 64:ff9b::7f00:1 — NAT64 well-known prefix wrapping 127.0.0.1.
+    var nat64_loopback = [_]u8{0} ** 16;
+    nat64_loopback[1] = 0x64;
+    nat64_loopback[2] = 0xff;
+    nat64_loopback[3] = 0x9b;
+    nat64_loopback[12] = 127;
+    nat64_loopback[15] = 1;
+    try std.testing.expectEqual(AddressClass.loopback, classifyV6(nat64_loopback));
+
+    // ::ffff:8.8.8.8 — a mapped public address stays public.
+    var mapped_public = [_]u8{0} ** 16;
+    mapped_public[10] = 0xff;
+    mapped_public[11] = 0xff;
+    mapped_public[12] = 8;
+    mapped_public[13] = 8;
+    mapped_public[14] = 8;
+    mapped_public[15] = 8;
+    try std.testing.expectEqual(AddressClass.public, classifyV6(mapped_public));
+}
+
+test "an untrusted query to a mapped-loopback answer is refused as rebinding" {
+    // The end-to-end path the classifier fix protects: the answer is admitted for
+    // an untrusted origin only if it is genuinely public.
+    var mapped_loopback = [_]u8{0} ** 16;
+    mapped_loopback[10] = 0xff;
+    mapped_loopback[11] = 0xff;
+    mapped_loopback[12] = 127;
+    mapped_loopback[15] = 1;
+    const answer: Answer = .{ .class = classifyV6(mapped_loopback), .ttl_seconds = 300 };
+    try std.testing.expectEqual(Decision{ .refuse = .rebinding }, admit(answer, .untrusted));
 }
 
 test "an untrusted query to an internal address is refused as rebinding" {
