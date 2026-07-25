@@ -93,12 +93,125 @@ pub fn writePrefix(body_bytes: u32, out: *[length_prefix_bytes]u8) error{Oversiz
     return out;
 }
 
+/// Accumulates bytes from a stream and yields complete message bodies.
+///
+/// `frame` is pure — it examines a buffer. A caller still has to run the loop:
+/// append what it read, pull off each complete frame, keep the remainder, and
+/// close the connection when a declared length is over the ceiling. This owns
+/// that loop over a fixed, caller-provided buffer, so the oversized-closes-the-
+/// connection contract is enforced in one place rather than re-implemented, and
+/// correctly, per caller.
+///
+/// A body returned by `next` points into the buffer and stays valid until the
+/// next `push`, which compacts consumed bytes away. Callers that keep a body
+/// across a push copy it first.
+pub const StreamReader = struct {
+    buffer: []u8,
+    /// Bytes accumulated but not yet compacted.
+    len: usize = 0,
+    /// Bytes at the front already handed out as complete frames.
+    consumed: usize = 0,
+    /// Set once an oversized frame is seen. The reader is done; the connection
+    /// must be closed.
+    closed: bool = false,
+
+    pub const Error = error{
+        /// A declared length exceeded the ceiling. Terminal: close the connection.
+        Oversized,
+        /// The buffer filled without forming a frame — a peer dribbling a huge
+        /// prefix, or a buffer smaller than one message. Terminal.
+        Overflow,
+    };
+
+    /// Appends received bytes, compacting away already-consumed frames first.
+    pub fn push(reader: *StreamReader, bytes: []const u8) Error!void {
+        if (reader.closed) return error.Oversized;
+        if (reader.consumed > 0) {
+            const remaining = reader.len - reader.consumed;
+            std.mem.copyForwards(u8, reader.buffer[0..remaining], reader.buffer[reader.consumed..reader.len]);
+            reader.len = remaining;
+            reader.consumed = 0;
+        }
+        if (reader.len + bytes.len > reader.buffer.len) return error.Overflow;
+        @memcpy(reader.buffer[reader.len..][0..bytes.len], bytes);
+        reader.len += bytes.len;
+    }
+
+    /// Returns the next complete message body, null if more bytes are needed, or
+    /// Oversized if a frame declared more than the ceiling.
+    pub fn next(reader: *StreamReader) Error!?[]const u8 {
+        if (reader.closed) return error.Oversized;
+        const window = reader.buffer[reader.consumed..reader.len];
+        switch (frame(window)) {
+            .complete => |complete| {
+                const body = window[complete.body_offset..][0..complete.body_bytes];
+                reader.consumed += complete.total_bytes;
+                return body;
+            },
+            .incomplete => return null,
+            .oversized => {
+                reader.closed = true;
+                return error.Oversized;
+            },
+        }
+    }
+};
+
 fn buildFrame(body: []const u8, into: []u8) []const u8 {
     var prefix: [length_prefix_bytes]u8 = undefined;
     const written = writePrefix(@intCast(body.len), &prefix) catch unreachable;
     @memcpy(into[0..written.len], written);
     @memcpy(into[written.len..][0..body.len], body);
     return into[0 .. written.len + body.len];
+}
+
+test "a stream reader yields a message dribbled in over several pushes" {
+    var backing: [max_message_bytes + length_prefix_bytes]u8 = undefined;
+    var reader: StreamReader = .{ .buffer = &backing };
+
+    var frame_bytes: [length_prefix_bytes + 5]u8 = undefined;
+    const framed = buildFrame("hello", &frame_bytes);
+
+    // Feed it two bytes at a time; only the last push completes the frame.
+    var offset: usize = 0;
+    while (offset < framed.len) : (offset += 2) {
+        const take = @min(2, framed.len - offset);
+        try reader.push(framed[offset..][0..take]);
+        if (offset + take < framed.len) try std.testing.expectEqual(@as(?[]const u8, null), try reader.next());
+    }
+    try std.testing.expectEqualStrings("hello", (try reader.next()).?);
+    try std.testing.expectEqual(@as(?[]const u8, null), try reader.next());
+}
+
+test "a stream reader pulls two frames from one push in order" {
+    var backing: [128]u8 = undefined;
+    var reader: StreamReader = .{ .buffer = &backing };
+
+    var one: [length_prefix_bytes + 3]u8 = undefined;
+    var two: [length_prefix_bytes + 3]u8 = undefined;
+    const first = buildFrame("abc", &one);
+    const second = buildFrame("xyz", &two);
+
+    var both: [64]u8 = undefined;
+    @memcpy(both[0..first.len], first);
+    @memcpy(both[first.len..][0..second.len], second);
+    try reader.push(both[0 .. first.len + second.len]);
+
+    try std.testing.expectEqualStrings("abc", (try reader.next()).?);
+    try std.testing.expectEqualStrings("xyz", (try reader.next()).?);
+    try std.testing.expectEqual(@as(?[]const u8, null), try reader.next());
+}
+
+test "a stream reader closes on an oversized declaration" {
+    var backing: [16]u8 = undefined;
+    var reader: StreamReader = .{ .buffer = &backing };
+    // A prefix declaring more than the ceiling.
+    var prefix: [length_prefix_bytes]u8 = undefined;
+    std.mem.writeInt(u32, &prefix, max_message_bytes + 1, .little);
+    try reader.push(&prefix);
+    try std.testing.expectError(error.Oversized, reader.next());
+    // Once closed it stays closed.
+    try std.testing.expectError(error.Oversized, reader.push("x"));
 }
 
 test "a complete message frames with its exact extent" {

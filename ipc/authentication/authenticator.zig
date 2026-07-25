@@ -80,6 +80,11 @@ pub const Verifier = struct {
     trusted: std.AutoHashMapUnmanaged(u128, [public_key_bytes]u8) = .empty,
     /// Idempotency keys already accepted, per sender.
     seen: std.AutoHashMapUnmanaged(SeenKey, void) = .empty,
+    /// The accepted keys in the order they arrived, so eviction removes the
+    /// oldest rather than an arbitrary hashmap entry. Eviction order matters:
+    /// dropping a recent key would reopen a shorter replay window than dropping
+    /// the oldest, which is the least likely to still be replayed.
+    order: std.ArrayListUnmanaged(SeenKey) = .empty,
     /// Ceiling on remembered messages. Without one the record grows with
     /// traffic and becomes its own exhaustion vector.
     max_remembered: usize = 4096,
@@ -99,6 +104,7 @@ pub const Verifier = struct {
     pub fn deinit(verifier: *Verifier) void {
         verifier.trusted.deinit(verifier.gpa);
         verifier.seen.deinit(verifier.gpa);
+        verifier.order.deinit(verifier.gpa);
         verifier.* = undefined;
     }
 
@@ -128,6 +134,7 @@ pub const Verifier = struct {
     pub fn accept(
         verifier: *Verifier,
         message: SignedMessage,
+        now_nanoseconds: i64,
     ) (Error || envelope_schema.DecodeError || std.mem.Allocator.Error)!envelope_schema.Envelope {
         const key_bytes = verifier.trusted.get(message.sender) orelse return error.UnknownSender;
 
@@ -136,6 +143,13 @@ pub const Verifier = struct {
         signature.verify(message.body, public_key) catch return error.IntegrityFailure;
 
         const decoded = try envelope_schema.decode(message.body);
+
+        // A message past its deadline is stale. This is the freshness gate the
+        // replay record cannot provide on its own: once an old key is evicted,
+        // only its expired deadline still keeps it out.
+        if (decoded.deadline_nanoseconds != 0 and now_nanoseconds > decoded.deadline_nanoseconds) {
+            return error.OutsideFreshnessWindow;
+        }
 
         // Only a message that may mutate needs replay protection; a response or
         // a fault carries no effect to repeat.
@@ -151,20 +165,24 @@ pub const Verifier = struct {
         return decoded;
     }
 
-    /// Records a message as seen, evicting an older entry when full.
+    /// Records a message as seen, evicting the oldest entry when full.
     ///
-    /// Eviction is counted rather than silent: losing replay protection is a
-    /// security-relevant degradation, not a routine cache miss.
+    /// Eviction removes the oldest key, tracked in `order`, rather than an
+    /// arbitrary hashmap entry — so the replay window that stays protected is the
+    /// most recent one, where a replay is most likely. Eviction is counted
+    /// because losing replay protection is a security-relevant degradation, not a
+    /// routine cache miss.
     fn rememberBounded(verifier: *Verifier, key: SeenKey) !void {
-        if (verifier.seen.count() >= verifier.max_remembered) {
-            var iterator = verifier.seen.keyIterator();
-            if (iterator.next()) |oldest| {
-                const victim = oldest.*;
-                _ = verifier.seen.remove(victim);
-                verifier.evictions += 1;
-            }
+        // Reserve space for the new order entry before touching the set, so a
+        // failed allocation leaves the record unchanged.
+        try verifier.order.ensureUnusedCapacity(verifier.gpa, 1);
+        if (verifier.seen.count() >= verifier.max_remembered and verifier.order.items.len > 0) {
+            const victim = verifier.order.orderedRemove(0);
+            _ = verifier.seen.remove(victim);
+            verifier.evictions += 1;
         }
         try verifier.seen.put(verifier.gpa, key, {});
+        verifier.order.appendAssumeCapacity(key);
     }
 
     pub fn rememberedCount(verifier: Verifier) usize {
@@ -209,6 +227,80 @@ const Fixture = struct {
     }
 };
 
+test "the verifier leaks nothing when an allocation fails" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn run(gpa: std.mem.Allocator) !void {
+            const identity: SigningIdentity = .{
+                .service = 0x1,
+                .key_pair = try Ed25519.KeyPair.generateDeterministic(@splat(3)),
+            };
+            var verifier: Verifier = .init(gpa);
+            defer verifier.deinit();
+            try verifier.trust(identity.service, identity.publicKey());
+
+            var buffer: [envelope_schema.max_message_bytes]u8 = undefined;
+            const message: envelope_schema.Envelope = .{
+                .version = envelope_schema.current_version,
+                .kind = .request,
+                .correlation = 1,
+                .idempotency_key = 42,
+                .principal = 0x9,
+                .task = 0,
+                .capability = 0,
+                .deadline_nanoseconds = 0,
+                .method = "calendar.read",
+                .payload = "",
+            };
+            const body = try envelope_schema.encode(message, &buffer);
+            _ = try verifier.accept(try sign(identity, body), 0);
+        }
+    }.run, .{});
+}
+
+test "a message past its deadline is refused as stale" {
+    const gpa = std.testing.allocator;
+    var fixture: Fixture = undefined;
+    try Fixture.init(gpa, &fixture);
+    defer fixture.deinit();
+
+    var message_envelope = fixture.request(5);
+    message_envelope.deadline_nanoseconds = 1_000;
+    const body = try envelope_schema.encode(message_envelope, &fixture.buffer);
+    const message = try sign(fixture.identity, body);
+
+    // Arriving after the deadline, it is refused before the replay record is even
+    // touched, so an evicted old key cannot let it back in.
+    try std.testing.expectError(error.OutsideFreshnessWindow, fixture.verifier.accept(message, 2_000));
+    // At the deadline it is still fresh and accepted.
+    _ = try fixture.verifier.accept(message, 1_000);
+}
+
+test "eviction drops the oldest accepted message first" {
+    const gpa = std.testing.allocator;
+    var fixture: Fixture = undefined;
+    try Fixture.init(gpa, &fixture);
+    defer fixture.deinit();
+    fixture.verifier.max_remembered = 2;
+
+    // Three distinct mutating messages; the third evicts the first.
+    inline for (.{ 1, 2, 3 }) |idempotency| {
+        var buffer: [envelope_schema.max_message_bytes]u8 = undefined;
+        const body = try envelope_schema.encode(fixture.request(idempotency), &buffer);
+        _ = try fixture.verifier.accept(try sign(fixture.identity, body), 0);
+    }
+    try std.testing.expectEqual(@as(u64, 1), fixture.verifier.evictions);
+
+    // Message 1 was evicted, so re-presenting it is not caught as a replay.
+    var buffer_one: [envelope_schema.max_message_bytes]u8 = undefined;
+    const body_one = try envelope_schema.encode(fixture.request(1), &buffer_one);
+    _ = try fixture.verifier.accept(try sign(fixture.identity, body_one), 0);
+
+    // Message 3, the most recent, is still remembered and refused.
+    var buffer_three: [envelope_schema.max_message_bytes]u8 = undefined;
+    const body_three = try envelope_schema.encode(fixture.request(3), &buffer_three);
+    try std.testing.expectError(error.ReplayDetected, fixture.verifier.accept(try sign(fixture.identity, body_three), 0));
+}
+
 test "a signed message from a trusted service is accepted" {
     const gpa = std.testing.allocator;
     var fixture: Fixture = undefined;
@@ -218,7 +310,7 @@ test "a signed message from a trusted service is accepted" {
     const body = try envelope_schema.encode(fixture.request(1), &fixture.buffer);
     const message = try sign(fixture.identity, body);
 
-    const decoded = try fixture.verifier.accept(message);
+    const decoded = try fixture.verifier.accept(message, 0);
     try std.testing.expectEqualStrings("calendar.read", decoded.method);
 }
 
@@ -232,7 +324,7 @@ test "a message from an untrusted service is refused before it is parsed" {
     var message = try sign(fixture.identity, body);
     message.sender = 0xb0b;
 
-    try std.testing.expectError(error.UnknownSender, fixture.verifier.accept(message));
+    try std.testing.expectError(error.UnknownSender, fixture.verifier.accept(message, 0));
 }
 
 test "a tampered body fails verification" {
@@ -250,7 +342,7 @@ test "a tampered body fails verification" {
     tampered[body.len - 1] ^= 0xff;
     message.body = tampered[0..body.len];
 
-    try std.testing.expectError(error.IntegrityFailure, fixture.verifier.accept(message));
+    try std.testing.expectError(error.IntegrityFailure, fixture.verifier.accept(message, 0));
 }
 
 test "a tampered signature fails verification" {
@@ -263,7 +355,7 @@ test "a tampered signature fails verification" {
     var message = try sign(fixture.identity, body);
     message.signature[0] ^= 0xff;
 
-    try std.testing.expectError(error.IntegrityFailure, fixture.verifier.accept(message));
+    try std.testing.expectError(error.IntegrityFailure, fixture.verifier.accept(message, 0));
 }
 
 test "a signature from one service does not authenticate another" {
@@ -282,7 +374,7 @@ test "a signature from one service does not authenticate another" {
     const message = try sign(impostor, body);
 
     // The sender field claims a trusted service, but the key does not match.
-    try std.testing.expectError(error.IntegrityFailure, fixture.verifier.accept(message));
+    try std.testing.expectError(error.IntegrityFailure, fixture.verifier.accept(message, 0));
 }
 
 test "a captured mutating message cannot be replayed" {
@@ -294,9 +386,9 @@ test "a captured mutating message cannot be replayed" {
     const body = try envelope_schema.encode(fixture.request(0xdeadbeef), &fixture.buffer);
     const message = try sign(fixture.identity, body);
 
-    _ = try fixture.verifier.accept(message);
+    _ = try fixture.verifier.accept(message, 0);
     // The identical message, validly signed, must not be honored twice.
-    try std.testing.expectError(error.ReplayDetected, fixture.verifier.accept(message));
+    try std.testing.expectError(error.ReplayDetected, fixture.verifier.accept(message, 0));
 }
 
 test "distinct mutations from one service are each accepted" {
@@ -309,7 +401,7 @@ test "distinct mutations from one service are each accepted" {
         var body_buffer: [envelope_schema.max_message_bytes]u8 = undefined;
         const body = try envelope_schema.encode(fixture.request(@intCast(index)), &body_buffer);
         const message = try sign(fixture.identity, body);
-        _ = try fixture.verifier.accept(message);
+        _ = try fixture.verifier.accept(message, 0);
     }
     try std.testing.expectEqual(@as(usize, 7), fixture.verifier.rememberedCount());
 }
@@ -328,11 +420,11 @@ test "the same key from different services is not a replay" {
     try fixture.verifier.trust(second.service, second.publicKey());
 
     const body = try envelope_schema.encode(fixture.request(42), &fixture.buffer);
-    _ = try fixture.verifier.accept(try sign(fixture.identity, body));
+    _ = try fixture.verifier.accept(try sign(fixture.identity, body), 0);
 
     var second_buffer: [envelope_schema.max_message_bytes]u8 = undefined;
     const second_body = try envelope_schema.encode(fixture.request(42), &second_buffer);
-    _ = try fixture.verifier.accept(try sign(second, second_body));
+    _ = try fixture.verifier.accept(try sign(second, second_body), 0);
 }
 
 test "a response is not subject to replay protection" {
@@ -348,8 +440,8 @@ test "a response is not subject to replay protection" {
     const message = try sign(fixture.identity, body);
 
     // A response carries no effect to repeat, so redelivery is harmless.
-    _ = try fixture.verifier.accept(message);
-    _ = try fixture.verifier.accept(message);
+    _ = try fixture.verifier.accept(message, 0);
+    _ = try fixture.verifier.accept(message, 0);
     try std.testing.expectEqual(@as(usize, 0), fixture.verifier.rememberedCount());
 }
 
@@ -360,7 +452,7 @@ test "revoking trust stops the next message from a service" {
     defer fixture.deinit();
 
     const body = try envelope_schema.encode(fixture.request(1), &fixture.buffer);
-    _ = try fixture.verifier.accept(try sign(fixture.identity, body));
+    _ = try fixture.verifier.accept(try sign(fixture.identity, body), 0);
 
     fixture.verifier.revokeTrust(fixture.identity.service);
     try std.testing.expect(!fixture.verifier.trustsService(fixture.identity.service));
@@ -369,7 +461,7 @@ test "revoking trust stops the next message from a service" {
     const next_body = try envelope_schema.encode(fixture.request(2), &next_buffer);
     try std.testing.expectError(
         error.UnknownSender,
-        fixture.verifier.accept(try sign(fixture.identity, next_body)),
+        fixture.verifier.accept(try sign(fixture.identity, next_body), 0),
     );
 }
 
@@ -384,7 +476,7 @@ test "the replay record is bounded and reports degradation" {
     for (1..32) |index| {
         var body_buffer: [envelope_schema.max_message_bytes]u8 = undefined;
         const body = try envelope_schema.encode(fixture.request(@intCast(index)), &body_buffer);
-        _ = try fixture.verifier.accept(try sign(fixture.identity, body));
+        _ = try fixture.verifier.accept(try sign(fixture.identity, body), 0);
     }
 
     // The record never grows past its ceiling, and the loss is visible.
@@ -401,5 +493,5 @@ test "a malformed body is refused after the signature verifies" {
     // Validly signed rubbish must still fail to decode.
     const rubbish = [_]u8{ 1, 2, 3, 4, 5 };
     const message = try sign(fixture.identity, &rubbish);
-    try std.testing.expectError(error.ProtocolMismatch, fixture.verifier.accept(message));
+    try std.testing.expectError(error.ProtocolMismatch, fixture.verifier.accept(message, 0));
 }
