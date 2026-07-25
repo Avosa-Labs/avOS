@@ -31,13 +31,16 @@ const H: c_int = @intCast(live.height);
 /// in the header returns home and a tap in the body advances through the agent-native surfaces.
 fn navigate(current: live.Surface, mx: i32, my: i32) live.Surface {
     _ = mx; // navigation uses vertical bands for now; the pointer routing is in graphics/pointer
+    // Translate the window tap into the light screen's own coordinates.
+    const sy = my - graphics.phone.screen_y;
+    const screen_h: i32 = @intCast(graphics.phone.screen_h);
     if (current == .home) {
-        if (my >= 150 and my <= 232) return .approval; // the agent-activity card
-        if (my >= 740) return .store; // the dock
-        if (my >= 240 and my <= 620) return .activity; // the app grid
+        if (sy >= 104 and sy <= 170) return .approval; // the command bar / active task
+        if (sy >= screen_h - 110) return .store; // the dock
+        if (sy >= 190 and sy <= 400) return .activity; // the in-motion list
         return .home;
     }
-    if (my < 148) return .home; // tap the header to go back home
+    if (sy < 110) return .home; // tap the header to go back home
     return switch (current) {
         .activity => .approval,
         .approval => .principals,
@@ -93,6 +96,7 @@ pub fn main(init: std.process.Init) !u8 {
     var surface: live.Surface = .boot;
     var progress: f32 = 0.0;
     var boot_seen: u32 = 0;
+    var frames: u32 = 0;
     var running = true;
     var event: c.SDL_Event = undefined;
 
@@ -123,18 +127,20 @@ pub fn main(init: std.process.Init) !u8 {
             }
         }
 
-        // Advance the entrance animation.
+        // Advance the entrance animation and the continuous-motion clock.
         progress = @min(1.0, progress + 0.05);
+        frames += 1;
+        const t = @as(f32, @floatFromInt(frames)) / 60.0;
 
-        // Paint the current surface, then fade it in with the spring easing by overlaying the base
+        // Paint the current surface, then fade it in with the spring easing by overlaying the desktop
         // colour at a falling alpha.
-        try live.renderSurface(gpa, &fb, &host, surface);
+        try live.renderSurface(gpa, &fb, &host, surface, t);
         const eased = std.math.clamp(anim.springEase(progress), 0.0, 1.0);
         const overlay: u8 = @intFromFloat((1.0 - eased) * 255.0);
         if (overlay > 0) {
             graphics.paint.paint(&fb, &.{.{ .solid = .{
                 .rect = .{ .x = 0, .y = 0, .w = live.width, .h = live.height },
-                .colour = .{ .r = theme.base.red, .g = theme.base.green, .b = theme.base.blue, .a = overlay },
+                .colour = .{ .r = theme.desktop_bottom.red, .g = theme.desktop_bottom.green, .b = theme.desktop_bottom.blue, .a = overlay },
             } }});
         }
 

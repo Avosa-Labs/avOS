@@ -62,6 +62,55 @@ pub const amber = rgb(0xff, 0xb1, 0x5c);
 /// The denial hue.
 pub const denied = rgb(0xe4, 0x6a, 0x6a);
 
+// --- The phone screen: a light surface inside a dark device bezel. ---
+//
+// The desktop background and the device bezel are dark (the base surfaces above); the screen the phone
+// actually shows is light, the way the reference design paints it. These are the values the app screens
+// rest on: a near-white screen wash, white cards, and near-black text — the inverse of the dark chrome.
+
+/// The screen wash: a top-to-bottom light gradient the app content sits on.
+pub const screen_top = rgb(0xf4, 0xf2, 0xfa);
+pub const screen_mid = rgb(0xee, 0xf0, 0xf7);
+pub const screen_bottom = rgb(0xf3, 0xee, 0xf7);
+/// A card raised off the screen wash.
+pub const screen_card = rgb(0xff, 0xff, 0xff);
+/// A tinted card, warm-to-cool, for the active task surface.
+pub const screen_card_tint = rgb(0xfb, 0xf7, 0xff);
+/// Text on the light screen.
+pub const screen_text = rgb(0x21, 0x1f, 0x2a);
+pub const screen_text_soft = rgb(0x24, 0x1f, 0x30);
+pub const screen_text_muted = rgb(0x8a, 0x86, 0x94);
+pub const screen_text_faint = rgb(0x9c, 0x98, 0xa8);
+/// The uppercase section-label grey.
+pub const screen_label = rgb(0x9a, 0x95, 0xa6);
+/// A hairline on the light screen.
+pub const screen_hairline = rgba(0x21, 0x1f, 0x2a, 0x12);
+/// The decorative blue used alongside the agent accent on light surfaces.
+pub const sky = rgb(0x39, 0xb7, 0xe6);
+
+// --- The physical device: bezel, desktop wash, and their geometry. ---
+
+/// The desktop the phone sits on: a dark radial wash.
+pub const desktop_top = rgb(0x16, 0x13, 0x29);
+pub const desktop_bottom = rgb(0x0b, 0x0a, 0x11);
+/// The device bezel: a dark brushed gradient around the screen.
+pub const bezel_top = rgb(0x26, 0x24, 0x2f);
+pub const bezel_bottom = rgb(0x10, 0x0f, 0x16);
+
+/// Standard phone screen sizes, in logical points, matching modern handset proportions (~2.17:1).
+/// A brand may present either; neither is tied to any vendor's model name.
+pub const screen_pro_w: u32 = 393;
+pub const screen_pro_h: u32 = 852;
+pub const screen_max_w: u32 = 440;
+pub const screen_max_h: u32 = 956;
+
+/// The device frame geometry, in logical points.
+pub const bezel_thickness: u32 = 13;
+pub const device_radius: u16 = 52;
+pub const screen_radius: u16 = 42;
+/// The desktop margin around the device inside the window.
+pub const desktop_margin: u32 = 22;
+
 // --- A per-app icon gradient: a vertical top→bottom fill. ---
 
 pub const Gradient = struct { top: Colour, bottom: Colour };
