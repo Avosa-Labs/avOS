@@ -19,6 +19,7 @@
 //! over the request set.
 
 const std = @import("std");
+const envelope_schema = @import("../schema/envelope.zig");
 
 /// Distinguishes one request from another. Matches the envelope's correlation.
 pub const Correlation = u64;
@@ -181,6 +182,39 @@ test "cancelling a task stops every in-flight request under it" {
     // A different task and another owner's request are untouched.
     try std.testing.expectEqual(State.active, requests[2].state);
     try std.testing.expectEqual(State.active, requests[3].state);
+}
+
+test "a decoded cancel envelope stops the in-flight request it names" {
+    // The correlation and principal a cancel acts on come from a wire message.
+    // A cancel envelope carries them; this builds the Cancel from the envelope
+    // the way the receive path would, and applies it.
+    const cancel_envelope: envelope_schema.Envelope = .{
+        .version = envelope_schema.current_version,
+        .kind = .cancel,
+        .correlation = 1,
+        .idempotency_key = 0,
+        .principal = owner,
+        .task = 0,
+        .capability = 0,
+        .deadline_nanoseconds = 0,
+        .method = "",
+        .payload = "",
+    };
+
+    var requests = oneRequest();
+    const registry: Registry = .{ .requests = &requests };
+    const message: Cancel = .{ .correlation = cancel_envelope.correlation, .principal = cancel_envelope.principal };
+    try std.testing.expectEqual(Outcome.marked, registry.cancel(message));
+    try std.testing.expect(registry.shouldStop(1, 0));
+}
+
+test "a request whose envelope deadline has passed stops without a cancel" {
+    // The deadline the worker checks is the one the request's envelope carried.
+    const deadline = 5_000;
+    var requests = [_]Request{.{ .correlation = 1, .principal = owner, .deadline_nanoseconds = deadline }};
+    const registry: Registry = .{ .requests = &requests };
+    try std.testing.expect(!registry.shouldStop(1, deadline - 1));
+    try std.testing.expect(registry.shouldStop(1, deadline));
 }
 
 test "a cancel from another principal is refused" {
