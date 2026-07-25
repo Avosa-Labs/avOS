@@ -55,4 +55,12 @@ case "$first_character" in
     [[:upper:]]) printf 'commit-msg: subject must be lowercase\n' >&2; exit 1 ;;
 esac
 
+# Reject a message written as generated prose rather than terse notes. The tone
+# check lives in the repository so the same rule runs here and in CI.
+repository_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+tone_check="$repository_root/infrastructure/development/hooks/message-tone.sh"
+if [ -n "$repository_root" ] && [ -x "$tone_check" ]; then
+    "$tone_check" "$message_file" || exit 1
+fi
+
 exit 0
