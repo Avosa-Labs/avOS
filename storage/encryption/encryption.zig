@@ -2,8 +2,17 @@
 //!
 //! State at rest is encrypted with a key derived for the store that holds it,
 //! so compromising one store's key reveals that store and nothing else. Keys
-//! are derived rather than stored: what persists is a salt and a generation
-//! number, and the key material exists only while it is in use.
+//! are derived rather than stored: what persists is a salt, a generation
+//! number, and the sequence a resumed store must continue past, and the key
+//! material exists only while it is in use.
+//!
+//! The sequence is load-bearing. A record's nonce is its generation and its
+//! sequence, which must never repeat for a key. The sequence only advances, so
+//! within one run of the store it never does — but a store re-opened after a
+//! restart continues at the same generation, and if it also restarted the
+//! sequence at zero it would re-emit nonces already used under that key, which
+//! is fatal for the cipher. So reopening uses `deriveResuming` with the
+//! persisted high-water mark; `derive` starts a genuinely new store at zero.
 //!
 //! Rotation replaces the key without rewriting history. Each record records
 //! which generation sealed it, so a store can be read across a rotation while
@@ -96,15 +105,36 @@ pub const StoreKeys = struct {
     /// Records sealed under the current generation.
     next_sequence: u64 = 0,
 
-    /// Derives a store's keys from a root key and a salt.
+    /// Derives the keys for a genuinely new store, whose sequence starts at zero.
     ///
     /// The salt persists with the store; the root key does not. Losing the root
     /// makes the store unreadable, which is the intended property.
+    ///
+    /// Use this only for a store that has never sealed a record. Re-opening a
+    /// store that has — after a restart — must use `deriveResuming`, or it would
+    /// restart the sequence at zero and re-use nonces already spent under this
+    /// generation's key.
     pub fn derive(
         root_key: []const u8,
         purpose: Purpose,
         salt: [salt_bytes]u8,
         generation: u32,
+    ) StoreKeys {
+        return deriveResuming(root_key, purpose, salt, generation, 0);
+    }
+
+    /// Re-derives a store's keys and resumes its sequence at `next_sequence`.
+    ///
+    /// `next_sequence` is the high-water mark persisted alongside the salt and
+    /// generation: the first sequence not yet used under the current generation.
+    /// Resuming there is what stops a reopened store from re-emitting a nonce it
+    /// already sealed a record under, which would break the cipher outright.
+    pub fn deriveResuming(
+        root_key: []const u8,
+        purpose: Purpose,
+        salt: [salt_bytes]u8,
+        generation: u32,
+        next_sequence: u64,
     ) StoreKeys {
         return .{
             .purpose = purpose,
@@ -114,6 +144,7 @@ pub const StoreKeys = struct {
             .current_key = deriveKey(root_key, purpose, salt, generation),
             .previous_key = null,
             .previous_generation = 0,
+            .next_sequence = next_sequence,
         };
     }
 
@@ -451,6 +482,69 @@ test "a nonce never repeats within a store, including across rotation" {
         }
         try keys.rotate(device_root);
     }
+}
+
+test "a store reopened at its high-water mark never re-uses a nonce" {
+    const gpa = std.testing.allocator;
+    var seen: std.AutoHashMapUnmanaged([nonce_bytes]u8, void) = .empty;
+    defer seen.deinit(gpa);
+
+    var sealed: [256]u8 = undefined;
+
+    // A store seals some records, then the device restarts.
+    var before: StoreKeys = .derive(device_root, .task_state, store_salt, 1);
+    for (0..100) |_| {
+        const record = try before.seal("payload", &sealed);
+        try seen.put(gpa, nonceFor(record.generation, record.sequence), {});
+    }
+    // What persists is the salt, the generation, and the next sequence.
+    const persisted_generation = before.current_generation;
+    const persisted_next_sequence = before.next_sequence;
+    before.deinit();
+
+    // Reopening resumes at the high-water mark, not at zero, so every nonce the
+    // reopened store emits is one the earlier run never used.
+    var after: StoreKeys = .deriveResuming(
+        device_root,
+        .task_state,
+        store_salt,
+        persisted_generation,
+        persisted_next_sequence,
+    );
+    defer after.deinit();
+    for (0..100) |_| {
+        const record = try after.seal("payload", &sealed);
+        const entry = try seen.getOrPut(gpa, nonceFor(record.generation, record.sequence));
+        try std.testing.expect(!entry.found_existing);
+    }
+}
+
+test "reopening at zero would re-use a nonce the high-water mark avoids" {
+    // The failure the high-water mark exists to prevent: a store that resumed at
+    // sequence zero would re-emit the first generation-1 nonce. This asserts the
+    // hazard is real, so the fix above is not guarding a phantom.
+    var first: StoreKeys = .derive(device_root, .session_state, store_salt, 4);
+    defer first.deinit();
+    var sealed: [64]u8 = undefined;
+    const original = try first.seal("first record", &sealed);
+
+    var naive_reopen: StoreKeys = .derive(device_root, .session_state, store_salt, 4);
+    defer naive_reopen.deinit();
+    const collision = try naive_reopen.seal("a different record", &sealed);
+
+    // Same generation, same sequence — the same nonce under the same key.
+    try std.testing.expectEqual(original.generation, collision.generation);
+    try std.testing.expectEqual(original.sequence, collision.sequence);
+    try std.testing.expectEqual(
+        nonceFor(original.generation, original.sequence),
+        nonceFor(collision.generation, collision.sequence),
+    );
+
+    // Resuming at the high-water mark instead yields a fresh nonce.
+    var safe_reopen: StoreKeys = .deriveResuming(device_root, .session_state, store_salt, 4, first.next_sequence);
+    defer safe_reopen.deinit();
+    const safe = try safe_reopen.seal("a different record", &sealed);
+    try std.testing.expect(safe.sequence != original.sequence);
 }
 
 test "secret material is never backed up" {
