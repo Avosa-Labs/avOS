@@ -11,6 +11,7 @@ pub const meter = @import("endpoint/meter.zig");
 pub const journal = @import("endpoint/journal.zig");
 pub const payload = @import("endpoint/payload.zig");
 pub const endpoint_harness = @import("endpoint/harness.zig");
+pub const acceptance_tests = @import("tests/acceptance.zig");
 pub const background_work = @import("background-work/background_work.zig");
 pub const notification = @import("notification/notification.zig");
 pub const supervisor = @import("supervisor/supervisor.zig");
@@ -69,6 +70,7 @@ test {
     _ = journal;
     _ = payload;
     _ = endpoint_harness;
+    _ = acceptance_tests;
     _ = background_work;
     _ = notification;
     _ = supervisor;
