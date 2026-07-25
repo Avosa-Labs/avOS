@@ -176,6 +176,28 @@ pub const RetryPolicy = struct {
     }
 };
 
+/// How urgently a task's work must be scheduled. Ordered from most to least
+/// urgent, so a scheduler can keep a lower class from degrading a higher one.
+pub const SchedulingClass = enum {
+    /// Audio, input, display deadlines, safety-related host operations.
+    critical_real_time,
+    /// Typing, scrolling, direct command response, approval interaction.
+    human_interactive,
+    /// Work explicitly requested and still useful.
+    committed_task_work,
+    /// Indexing, cleanup, updates, backups.
+    maintenance,
+    /// Predictions or proactive preparation with no committed output.
+    speculative,
+
+    /// Whether this class must be served ahead of another. A lower-ranked class
+    /// must never degrade a higher-ranked one beyond its budget, so a scheduler
+    /// resolves contention with this order.
+    pub fn outranks(class: SchedulingClass, other: SchedulingClass) bool {
+        return @intFromEnum(class) < @intFromEnum(other);
+    }
+};
+
 /// What a task needs before it may be created.
 pub const Declaration = struct {
     /// The principal whose authority the work runs under.
@@ -189,6 +211,8 @@ pub const Declaration = struct {
     deadline: ?time.Timestamp = null,
     budget_bytes: usize = 0,
     retry_policy: RetryPolicy = .none,
+    /// How urgently this task must be scheduled.
+    scheduling_class: SchedulingClass = .committed_task_work,
     /// Where the intent behind this task came from. A task planned by the trusted
     /// control plane defaults to a trusted origin; work proposed from model output
     /// or other untrusted input must carry that provenance and will be refused
@@ -211,6 +235,7 @@ pub const Task = struct {
     deadline: ?time.Timestamp,
     budget_bytes: usize,
     retry_policy: RetryPolicy,
+    scheduling_class: SchedulingClass,
     attempts_made: u8,
     conclusion: ?Conclusion,
     /// Set when cancellation has been requested, whether or not the task has
@@ -320,6 +345,7 @@ pub const Graph = struct {
             .deadline = deadline,
             .budget_bytes = budget_bytes,
             .retry_policy = declaration.retry_policy,
+            .scheduling_class = declaration.scheduling_class,
             .attempts_made = 0,
             .conclusion = null,
             .cancellation_requested = false,
@@ -633,6 +659,17 @@ const Fixture = struct {
         });
     }
 };
+
+test "scheduling classes are ordered from most to least urgent" {
+    const S = SchedulingClass;
+    try std.testing.expect(S.critical_real_time.outranks(.human_interactive));
+    try std.testing.expect(S.human_interactive.outranks(.committed_task_work));
+    try std.testing.expect(S.committed_task_work.outranks(.maintenance));
+    try std.testing.expect(S.maintenance.outranks(.speculative));
+    // Speculative work never outranks anything, so it cannot starve a peer.
+    try std.testing.expect(!S.speculative.outranks(.critical_real_time));
+    try std.testing.expect(!S.committed_task_work.outranks(.committed_task_work));
+}
 
 test "a child inherits and cannot exceed its parent's deadline and budget" {
     const gpa = std.testing.allocator;
