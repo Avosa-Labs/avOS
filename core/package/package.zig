@@ -110,6 +110,13 @@ pub const Manifest = struct {
     runs_in_background: bool = false,
     /// Deepest delegation the package may perform.
     max_delegation_depth: u8 = 0,
+    /// The platform contract this package was built against, so an installer can
+    /// refuse a package built for an incompatible platform.
+    compatibility: []const u8 = "",
+    /// The update track this package follows, e.g. a stable or beta channel.
+    update_channel: []const u8 = "",
+    /// Whether the build is reproducible from published sources.
+    reproducible_build: bool = false,
 
     /// Checks the manifest's own bounds before anything acts on it.
     pub fn validate(manifest: Manifest) Error!void {
@@ -168,6 +175,10 @@ pub const Manifest = struct {
         for (manifest.network_destinations) |destination| {
             hashField(&hasher, destination);
         }
+
+        hashField(&hasher, manifest.compatibility);
+        hashField(&hasher, manifest.update_channel);
+        hashInt(&hasher, u8, @intFromBool(manifest.reproducible_build));
 
         // The contents' own digest, so a signature over the manifest is also a
         // signature over exactly these bytes.
@@ -321,6 +332,16 @@ pub const Installer = struct {
             try installer.installed.put(installer.gpa, owned_name, record);
         }
         return record;
+    }
+
+    /// Removes an installed package by name. Returns whether one was present, so
+    /// the caller can record a removal and distinguish it from a no-op.
+    pub fn uninstall(installer: *Installer, name: []const u8) bool {
+        if (installer.installed.fetchRemove(name)) |entry| {
+            installer.gpa.free(entry.key);
+            return true;
+        }
+        return false;
     }
 
     pub fn installedVersion(installer: Installer, name: []const u8) ?Installation {
@@ -562,6 +583,21 @@ test "a downgrade is refused" {
         @as(u32, 2),
         fixture.installer.installedVersion("calendar agent").?.version.major,
     );
+}
+
+test "uninstalling removes an installation and reports whether one was present" {
+    const gpa = std.testing.allocator;
+    var fixture: Fixture = undefined;
+    try Fixture.init(gpa, &fixture);
+    defer fixture.deinit();
+
+    _ = try fixture.installer.install(try fixture.package("component bytes"));
+    try std.testing.expectEqual(@as(usize, 1), fixture.installer.installedCount());
+
+    try std.testing.expect(fixture.installer.uninstall("calendar agent"));
+    try std.testing.expectEqual(@as(usize, 0), fixture.installer.installedCount());
+    // A second removal finds nothing.
+    try std.testing.expect(!fixture.installer.uninstall("calendar agent"));
 }
 
 test "reinstalling the same version is permitted" {
