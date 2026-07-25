@@ -20,9 +20,22 @@
 const std = @import("std");
 
 const Sha256 = std.crypto.hash.sha2.Sha256;
+const HmacSha256 = std.crypto.auth.hmac.sha2.HmacSha256;
 
 /// The digest that binds an item, or the whole manifest, to its contents.
 pub const Digest = [Sha256.digest_length]u8;
+
+/// Authenticates a manifest root to the device that made the backup.
+///
+/// A digest binds the manifest to its contents, but anyone can recompute a digest,
+/// so a digest alone cannot say *who* made the backup: an attacker who rewrites the
+/// whole manifest also recomputes a matching root. The authenticator closes that
+/// gap. It is an HMAC over the root under a key the device holds and never copies
+/// into the backup, so only this device can produce the authenticator its restore
+/// side will accept. A backup sitting on foreign storage cannot be re-rooted to
+/// forged contents without that key.
+pub const authenticator_bytes = HmacSha256.mac_length;
+pub const Authenticator = [authenticator_bytes]u8;
 
 /// How sensitive an item is, which decides whether it may enter a plaintext
 /// backup.
@@ -107,6 +120,22 @@ pub fn manifestRoot(entries: []const ManifestEntry) Digest {
     return root;
 }
 
+/// Authenticates a manifest root under a device-held key, producing the tag a
+/// restore checks the presented root against. Computed at backup time.
+pub fn authenticateRoot(root: Digest, key: []const u8) Authenticator {
+    var mac: Authenticator = undefined;
+    HmacSha256.create(&mac, &root, key);
+    return mac;
+}
+
+/// Whether a presented authenticator is the one this device would produce for a
+/// root under its key. Compared in constant time, so a wrong authenticator reveals
+/// nothing about the right one by how long the check takes.
+pub fn rootIsAuthentic(root: Digest, key: []const u8, presented: Authenticator) bool {
+    const expected = authenticateRoot(root, key);
+    return std.crypto.timing_safe.eql(Authenticator, expected, presented);
+}
+
 test "ordinary state is eligible under either protection" {
     const item: Item = .{ .id = 1, .bytes = "a document", .sensitivity = .ordinary };
     try std.testing.expect(includeInBackup(item, .plaintext));
@@ -165,4 +194,27 @@ test "no device-bound secret is ever eligible for a plaintext backup, swept" {
 
 test "an empty manifest has a stable root" {
     try std.testing.expectEqual(manifestRoot(&.{}), manifestRoot(&.{}));
+}
+
+test "a root authenticates only under the key that sealed it" {
+    const root = manifestRoot(&.{
+        .{ .id = 1, .digest = itemDigest("one") },
+    });
+    const device_key = "a device-held manifest key";
+    const mac = authenticateRoot(root, device_key);
+
+    try std.testing.expect(rootIsAuthentic(root, device_key, mac));
+    // A different device's key does not accept this backup's root.
+    try std.testing.expect(!rootIsAuthentic(root, "a different device key", mac));
+}
+
+test "a forged root does not authenticate under the real key" {
+    const device_key = "a device-held manifest key";
+    const sealed_root = manifestRoot(&.{.{ .id = 1, .digest = itemDigest("the original bytes") }});
+    const mac = authenticateRoot(sealed_root, device_key);
+
+    // An attacker who rewrites the manifest produces a self-consistent forged root,
+    // but cannot produce its authenticator without the device key.
+    const forged_root = manifestRoot(&.{.{ .id = 1, .digest = itemDigest("forged") }});
+    try std.testing.expect(!rootIsAuthentic(forged_root, device_key, mac));
 }

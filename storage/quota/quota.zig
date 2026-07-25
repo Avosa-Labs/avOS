@@ -40,15 +40,20 @@ pub const Account = struct {
     principal: PrincipalId,
     /// The most bytes this principal may hold.
     ceiling_bytes: u64,
-    /// Bytes currently held. Always at or below the ceiling.
+    /// Bytes currently held. Usually at or below the ceiling, but a ceiling lowered
+    /// below current usage leaves it above until the principal frees space.
     used_bytes: u64 = 0,
 
+    /// Headroom before the ceiling. Saturates at zero: a principal already over its
+    /// ceiling — which a lowered quota produces — has no space, not a wrapped one.
     pub fn available(account: Account) u64 {
-        return account.ceiling_bytes - account.used_bytes;
+        return account.ceiling_bytes -| account.used_bytes;
     }
 
     pub fn isOverHalf(account: Account) bool {
-        return account.used_bytes * 2 > account.ceiling_bytes;
+        // Compared as used > ceiling/2 rather than used*2 > ceiling, so a large
+        // usage cannot overflow the doubling. Integer-equivalent for all ceilings.
+        return account.used_bytes > account.ceiling_bytes / 2;
     }
 };
 
@@ -211,6 +216,11 @@ test "lowering a quota below current usage stops further writes without eviction
     try std.testing.expectError(error.QuotaExceeded, tracker.reserve(owner, 1));
     const account = tracker.accountOf(owner).?;
     try std.testing.expectEqual(@as(u64, 800), account.used_bytes);
+    // Over the ceiling, available reports no space rather than underflowing to a
+    // near-limitless wrap (or panicking in a checked build).
+    try std.testing.expectEqual(@as(u64, 0), account.available());
+    try std.testing.expectEqual(@as(u64, 0), try tracker.available(owner));
+    try std.testing.expect(account.isOverHalf());
 }
 
 test "the account reports crossing half its ceiling" {
