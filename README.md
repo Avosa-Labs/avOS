@@ -8,12 +8,13 @@ first-class computing principals.
 
 The trusted control plane, agent execution plane, runtimes, session continuity,
 first-party applications, the store, the developer SDK, and the shell — including
-a native, GPU-ready renderer that draws the designed interface — are implemented
-and run. Every surface can be rendered from real control-plane state (see **See
-the interface** below). What remains is on-device work: binding the render layer
-to a real GPU driver (Vulkan/Metal) and a windowed input loop, and hardware
-bring-up. Nothing here is production software, and no handset readiness claim is
-made; read `docs/public/known-limitations.md` before drawing any conclusion.
+a native renderer that draws the designed interface — are implemented and run.
+`zig build run` opens the OS in a real, GPU-backed window (Metal on macOS, Vulkan
+or the platform compositor on Linux, through SDL2), driven by real control-plane
+state (see **Run the OS** below). What remains is on-device work: a native
+Vulkan/Metal backend in place of the SDL present path, and hardware bring-up.
+Nothing here is production software, and no handset readiness claim is made; read
+`docs/public/known-limitations.md` before drawing any conclusion.
 
 Qualified compiler lanes:
 
@@ -55,27 +56,38 @@ extracting, and places them in a project-local ignored tool directory.
 `docs/public/developer-quick-start.md` walks through all of this, including how
 to read the demonstration's output.
 
-## See the interface
+## Run the OS
 
-The shell renders the designed interface to PNG images with no GPU and no image
-library — the same display list a GPU backend consumes drives a software
+```sh
+zig build run
+```
+
+This opens the OS in a real window and runs it. The window is GPU-backed —
+Metal on macOS, Vulkan or the platform compositor on Linux — through SDL2; if
+SDL2 is present at build time the `run` step builds and launches the windowed
+shell, otherwise it falls back to the headless frame renderer below. It runs the
+canonical scenario once for live state, then drives a real render loop: every
+frame it paints the current surface from that run's real audit ledger, registry,
+and store decisions — the actual agents doing the actual work — into a
+framebuffer, uploads it to a GPU texture, and presents it. Click to navigate: the
+home agent card opens the held approval, the app grid opens the activity ledger,
+the dock opens the store, and tapping the header returns home; each navigation
+fades in with the design's spring easing. Press Esc to quit.
+
+Install SDL2 first if it isn't already present (`brew install sdl2` on macOS,
+your distro's `libsdl2-dev` on Linux).
+
+### On a host with no display
+
+The same surfaces render to PNG images with no GPU and no image library — the
+same display list the windowed loop uploads to the GPU drives a software
 rasterizer here, so a frame is a real, viewable artifact on any host. Open the
 output with any image viewer (`open frame.png` on macOS).
 
-The headline command plays the **live** session: it runs the canonical scenario
-and renders each surface from that run's real audit ledger, registry, and store
-decisions — the actual agents doing the actual work.
-
 ```sh
-zig build run -- /tmp/avos_        # the whole live session, boot to rest, as frames:
-                                   #   00_boot 01_home 02_activity 03_approval
-                                   #   04_principals 05_store 06_rest
-open /tmp/avos_01_home.png
-```
-
-Render one surface, live from the real run, or standalone from demonstration data:
-
-```sh
+zig build shell  -- session /tmp/avos_    # the whole live session, boot to rest,
+                                          #   as frames: 00_boot 01_home 02_activity
+                                          #   03_approval 04_principals 05_store 06_rest
 zig build shell  -- home out.png          # a live surface: home|activity|approval|
                                           #   principals|store|boot|rest
 zig build home   out.png                  # the home screen

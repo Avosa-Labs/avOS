@@ -550,18 +550,30 @@ pub fn build(b: *std.Build) void {
     if (b.args) |forwarded| run_app.addArgs(forwarded);
     b.step("app", "Render a named app screen to a PNG").dependOn(&run_app.step);
 
-    // The live shell: runs the canonical scenario and renders the designed activity screen from the
-    // real audit ledger it produces — the design driven by real agents.
+    // The shared render bridge: turns a real control-plane run into the designed surfaces. Both the
+    // headless frame writer and the windowed desktop shell render through it.
+    const live_render_module = b.createModule(.{
+        .root_source_file = b.path("simulator/shell/live_render.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "simulator", .module = simulator_module },
+            .{ .name = "graphics", .module = graphics_module },
+            .{ .name = "design", .module = design_module },
+            .{ .name = "applications", .module = applications_module },
+        },
+    });
+
+    // The headless shell: renders the live surfaces to PNG files, for hosts without a display.
     const live_module = b.createModule(.{
         .root_source_file = b.path("simulator/shell/live.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
             .{ .name = "compat", .module = compat_module },
-            .{ .name = "simulator", .module = simulator_module },
+            .{ .name = "live_render", .module = live_render_module },
             .{ .name = "graphics", .module = graphics_module },
             .{ .name = "design", .module = design_module },
-            .{ .name = "applications", .module = applications_module },
         },
     });
     const live_exe = b.addExecutable(.{ .name = "shell", .root_module = live_module });
@@ -569,14 +581,43 @@ pub fn build(b: *std.Build) void {
     const run_live = b.addRunArtifact(live_exe);
     run_live.step.dependOn(b.getInstallStep());
     if (b.args) |forwarded| run_live.addArgs(forwarded);
-    b.step("shell", "Run the canonical scenario and render the designed UI from its real state").dependOn(&run_live.step);
+    b.step("shell", "Render a live designed surface from the real run to a PNG").dependOn(&run_live.step);
 
-    // `run`: play the whole live OS session as a numbered sequence of frames, from one real run.
-    const run_session = b.addRunArtifact(live_exe);
-    run_session.step.dependOn(b.getInstallStep());
-    run_session.addArg("session");
-    if (b.args) |forwarded| run_session.addArgs(forwarded);
-    b.step("run", "Play the live OS session (boot to rest) as a sequence of frames").dependOn(&run_session.step);
+    // The windowed desktop shell: the OS in a real window, on the GPU, with input — built only when a
+    // display library (SDL2) is present, so headless CI stays green while a desktop gets the real thing.
+    // SDL is backed by Metal/AppKit on macOS and Vulkan/Wayland on Linux.
+    const run_step = b.step("run", "Run the OS in a window (needs SDL2); falls back to rendering frames");
+    if (sdlPrefix(b)) |prefix| {
+        const desktop_module = b.createModule(.{
+            .root_source_file = b.path("simulator/desktop/desktop.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "live_render", .module = live_render_module },
+                .{ .name = "graphics", .module = graphics_module },
+                .{ .name = "design", .module = design_module },
+            },
+        });
+        // The binding is declared directly (simulator/desktop/sdl.zig), so no header include is
+        // needed; only the SDL2 library is linked, from the detected prefix. pkg-config is disabled so
+        // SDL2main is not pulled in, since the shell provides its own entry point.
+        desktop_module.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/lib", .{prefix}) });
+        desktop_module.linkSystemLibrary("SDL2", .{ .use_pkg_config = .no });
+        desktop_module.link_libc = true;
+        const desktop_exe = b.addExecutable(.{ .name = "desktop", .root_module = desktop_module });
+        b.installArtifact(desktop_exe);
+        const run_desktop = b.addRunArtifact(desktop_exe);
+        run_desktop.step.dependOn(b.getInstallStep());
+        if (b.args) |forwarded| run_desktop.addArgs(forwarded);
+        run_step.dependOn(&run_desktop.step);
+    } else {
+        // No display library: play the whole session to image frames instead.
+        const run_session = b.addRunArtifact(live_exe);
+        run_session.step.dependOn(b.getInstallStep());
+        run_session.addArg("session");
+        if (b.args) |forwarded| run_session.addArgs(forwarded);
+        run_step.dependOn(&run_session.step);
+    }
 
     // Acceptance tests hold a milestone to what it must demonstrate. They sit
     // outside the modules they exercise, so they can only use the interfaces a
@@ -744,6 +785,21 @@ pub fn build(b: *std.Build) void {
 /// The version comes from the manifest rather than from a constant here, so the
 /// build always links the release the manifest pins and never a stale copy left
 /// in the tool directory.
+/// The install prefix under which SDL2's header lives, or null if SDL2 is not installed. Checks the
+/// common Homebrew and system locations so a desktop host is detected without any configuration, while
+/// a headless host (no SDL) falls back to rendering frames.
+fn sdlPrefix(b: *std.Build) ?[]const u8 {
+    const io = b.graph.io;
+    const candidates = [_][]const u8{ "/opt/homebrew", "/usr/local", "/usr" };
+    for (candidates) |prefix| {
+        const include = b.fmt("{s}/include/SDL2", .{prefix});
+        var directory = b.build_root.handle.openDir(io, include, .{}) catch continue;
+        directory.close(io);
+        return prefix;
+    }
+    return null;
+}
+
 fn wasmRuntimeRoot(b: *std.Build) ?[]const u8 {
     const io = b.graph.io;
     const gpa = b.allocator;
