@@ -9,6 +9,7 @@
 pub const abstraction = @import("abstraction/abstraction.zig");
 pub const audio = @import("audio/audio.zig");
 pub const battery = @import("battery/battery.zig");
+pub const camera = @import("camera/camera.zig");
 pub const biometrics = @import("biometrics/biometrics.zig");
 pub const charging = @import("charging/charging.zig");
 pub const display = @import("display/display.zig");
@@ -29,6 +30,7 @@ test {
     _ = abstraction;
     _ = audio;
     _ = battery;
+    _ = camera;
     _ = biometrics;
     _ = charging;
     _ = display;
