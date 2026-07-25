@@ -182,3 +182,45 @@ test "every icon gradient descends (top lighter than bottom)" {
         try std.testing.expect(gradient.top.luminance() >= gradient.bottom.luminance());
     }
 }
+
+test "the dark-chrome text the shell actually paints clears its contrast floor" {
+    // The point of this suite: the concrete colours paint emits, not only the
+    // semantic roles, are held to the same contrast guarantee — so the legibility the
+    // token layer promises is verified against what the reference build actually
+    // shows. Primary text meets the text floor on every dark surface it lands on;
+    // secondary text, used for supporting labels, meets the large-text floor.
+    const dark_surfaces = [_]Colour{ base, panel, surface, surface_raised };
+    for (dark_surfaces) |background| {
+        try std.testing.expect(text_primary.contrastWith(background) >= tokens.minimum_text_contrast);
+        try std.testing.expect(text_secondary.contrastWith(background) >= tokens.minimum_large_text_contrast);
+    }
+}
+
+test "the light-screen text the phone paints clears its contrast floor" {
+    // The phone screen is a light surface, and the near-black text on it must be as
+    // legible there as the chrome text is on the dark surfaces.
+    const light_surfaces = [_]Colour{ screen_top, screen_mid, screen_bottom, screen_card, screen_card_tint };
+    for (light_surfaces) |background| {
+        try std.testing.expect(screen_text.contrastWith(background) >= tokens.minimum_text_contrast);
+        try std.testing.expect(screen_text_soft.contrastWith(background) >= tokens.minimum_text_contrast);
+        // Muted and faint text is supporting, held to the large-text floor.
+        try std.testing.expect(screen_text_muted.contrastWith(background) >= tokens.minimum_large_text_contrast);
+    }
+}
+
+test "the status and accent hues are mutually distinguishable" {
+    // A user tells an agent mark from a denial from an approval by colour, so no two
+    // of these signature hues may collapse toward each other, mirroring the token
+    // layer's distinctness guarantee for the concrete palette paint uses.
+    // Warm hues (coral, amber) sit near each other by design; the threshold catches a
+    // genuine collapse of two hues into one while allowing a family to stay a family.
+    const marks = [_]Colour{ agent, human, teal, coral, amber, denied };
+    for (marks, 0..) |first, index| {
+        for (marks[index + 1 ..]) |second| {
+            const dr = @as(f64, @floatFromInt(first.red)) - @as(f64, @floatFromInt(second.red));
+            const dg = @as(f64, @floatFromInt(first.green)) - @as(f64, @floatFromInt(second.green));
+            const db = @as(f64, @floatFromInt(first.blue)) - @as(f64, @floatFromInt(second.blue));
+            try std.testing.expect(@sqrt(dr * dr + dg * dg + db * db) > 30);
+        }
+    }
+}
