@@ -178,6 +178,23 @@ pub const Element = struct {
     pub fn advanceMonotonic(element: Element) Error!u64 {
         return element.vtable.advanceMonotonic(element.context_pointer);
     }
+
+    /// Quotes the device's boot state: signs the measured-boot summary with an
+    /// attestation key held inside the element.
+    ///
+    /// The summary is the digest of exactly what booted, so a quote is a proof,
+    /// from a key that never leaves the device, that this device booted this
+    /// software. A different boot produces a different summary and so a different
+    /// quote; the measured-boot log becomes something a remote party can check
+    /// rather than a value only the device itself can read. The handle must name
+    /// a `device_attestation` key, which `sign` enforces.
+    pub fn attestBootState(
+        element: Element,
+        handle: KeyHandle,
+        boot_summary: [digest_bytes]u8,
+    ) Error![signature_bytes]u8 {
+        return element.sign(handle, .device_attestation, boot_summary);
+    }
 };
 
 /// How many keys an element holds.
@@ -367,6 +384,39 @@ test "the monotonic counter only ever rises" {
             try std.testing.expect(!std.mem.eql(u8, field.name, name));
         }
     }
+}
+
+test "a boot-state quote binds to exactly what booted" {
+    var software: SoftwareElement = .{};
+    const element = software.element();
+
+    const handle = try element.create(.device_attestation, .{});
+    const public = try element.publicKey(handle);
+    const key = try Ed25519.PublicKey.fromBytes(public);
+
+    const summary: [digest_bytes]u8 = @splat(0x11);
+    const quote = try element.attestBootState(handle, summary);
+
+    // The quote verifies against the attestation key over this exact summary.
+    try (Ed25519.Signature.fromBytes(quote)).verify(&summary, key);
+
+    // A different boot summary does not verify against the same quote, so a
+    // tampered measurement cannot pass off an old quote as its own.
+    const tampered: [digest_bytes]u8 = @splat(0x22);
+    try std.testing.expectError(
+        error.SignatureVerificationFailed,
+        (Ed25519.Signature.fromBytes(quote)).verify(&tampered, key),
+    );
+}
+
+test "a key made for something else cannot quote boot state" {
+    var software: SoftwareElement = .{};
+    const element = software.element();
+    const handle = try element.create(.storage_protection, .{});
+    try std.testing.expectError(
+        error.WrongPurpose,
+        element.attestBootState(handle, @splat(0x11)),
+    );
 }
 
 test "an unavailable element fails the counter too" {
