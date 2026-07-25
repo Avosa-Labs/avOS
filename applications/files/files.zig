@@ -23,6 +23,18 @@ pub const tools = [_]framework.Tool{
     .{ .name = "file.delete", .required_capability = "files.write", .effect = .local_mutation },
 };
 
+const domain = @import("domain.zig");
+pub const Store = domain.Store;
+pub const App = framework.App;
+
+/// Assembles the files app over the shared frame: its domain, its registered
+/// capabilities, and the ledger every operation is recorded to. Both the human surface
+/// and an agent reach the one domain through this app.
+pub fn open(store: *Store, ledger: *framework.Ledger) App {
+    return .{ .name = "files", .domain = store.domain(), .tools = .{ .tools = &tools }, .ledger = ledger };
+}
+
+
 /// Whether a path stays within the granted folder — never absolute, never climbing
 /// above its root.
 pub fn withinGrant(path: []const u8) bool {

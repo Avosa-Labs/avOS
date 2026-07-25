@@ -1,0 +1,11 @@
+.{
+    // The package identity, declared capabilities, and signing requirement for the
+    // Calendar app. A default app is present, not installed, but it carries the same
+    // manifest every app does: the capabilities it may register, so what an agent can
+    // discover in it is exactly what is declared here and verified against its tools.
+    .name = "Calendar",
+    .package = "default.calendar",
+    .kind = .default_app,
+    .capabilities = .{ "calendar.read", "calendar.freebusy", "calendar.add", "calendar.invite" },
+    .signing = .system_image,
+}

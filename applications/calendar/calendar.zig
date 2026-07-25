@@ -22,6 +22,18 @@ pub const tools = [_]framework.Tool{
     .{ .name = "calendar.invite", .required_capability = "calendar.invite", .effect = .external },
 };
 
+const domain = @import("domain.zig");
+pub const Store = domain.Store;
+pub const App = framework.App;
+
+/// Assembles the calendar app over the shared frame: its domain, its registered
+/// capabilities, and the ledger every operation is recorded to. Both the human surface
+/// and an agent reach the one domain through this app.
+pub fn open(store: *Store, ledger: *framework.Ledger) App {
+    return .{ .name = "calendar", .domain = store.domain(), .tools = .{ .tools = &tools }, .ledger = ledger };
+}
+
+
 /// What a free/busy query is allowed to learn about a slot: only whether it is taken.
 pub const Availability = enum { free, busy };
 

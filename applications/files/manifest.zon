@@ -1,0 +1,11 @@
+.{
+    // The package identity, declared capabilities, and signing requirement for the
+    // Files app. A default app is present, not installed, but it carries the same
+    // manifest every app does: the capabilities it may register, so what an agent can
+    // discover in it is exactly what is declared here and verified against its tools.
+    .name = "Files",
+    .package = "default.files",
+    .kind = .default_app,
+    .capabilities = .{ "file.list", "file.open", "file.edit", "file.move", "file.share", "file.delete" },
+    .signing = .system_image,
+}

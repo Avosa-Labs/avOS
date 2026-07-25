@@ -158,6 +158,11 @@ pub fn build(b: *std.Build) void {
             .description = "Verify raw colour is constructed only in the design token layer",
         },
         .{
+            .name = "boundary-check",
+            .root = "tools/boundary-check/main.zig",
+            .description = "Verify a default app reaches the system only through its framework",
+        },
+        .{
             .name = "convention-check",
             .root = "tools/convention-check/main.zig",
             .description = "Verify authoring conventions: attribution, comments, and naming",

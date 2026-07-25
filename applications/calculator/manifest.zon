@@ -1,0 +1,11 @@
+.{
+    // The package identity, declared capabilities, and signing requirement for the
+    // Calculator app. A default app is present, not installed, but it carries the same
+    // manifest every app does: the capabilities it may register, so what an agent can
+    // discover in it is exactly what is declared here and verified against its tools.
+    .name = "Calculator",
+    .package = "default.calculator",
+    .kind = .default_app,
+    .capabilities = .{ "calc.evaluate" },
+    .signing = .system_image,
+}

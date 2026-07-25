@@ -18,6 +18,18 @@ pub const tools = [_]framework.Tool{
     .{ .name = "settings.sensitive_change", .required_capability = "settings.security", .effect = .value_transfer },
 };
 
+const domain = @import("domain.zig");
+pub const Store = domain.Store;
+pub const App = framework.App;
+
+/// Assembles the settings app over the shared frame: its domain, its registered
+/// capabilities, and the ledger every operation is recorded to. Both the human surface
+/// and an agent reach the one domain through this app.
+pub fn open(store: *Store, ledger: *framework.Ledger) App {
+    return .{ .name = "settings", .domain = store.domain(), .tools = .{ .tools = &tools }, .ledger = ledger };
+}
+
+
 /// The panes Settings presents, sorted by whether changing one touches the device's
 /// protections.
 pub const Pane = enum {

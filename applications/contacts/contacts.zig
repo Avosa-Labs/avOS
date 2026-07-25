@@ -19,6 +19,18 @@ pub const tools = [_]framework.Tool{
     .{ .name = "contact.delete", .required_capability = "contacts.write", .effect = .local_mutation },
 };
 
+const domain = @import("domain.zig");
+pub const Store = domain.Store;
+pub const App = framework.App;
+
+/// Assembles the contacts app over the shared frame: its domain, its registered
+/// capabilities, and the ledger every operation is recorded to. Both the human surface
+/// and an agent reach the one domain through this app.
+pub fn open(store: *Store, ledger: *framework.Ledger) App {
+    return .{ .name = "contacts", .domain = store.domain(), .tools = .{ .tools = &tools }, .ledger = ledger };
+}
+
+
 /// A field of a contact record.
 pub const Field = enum { name, phone, email, address, birthday, notes };
 pub const FieldSet = std.EnumSet(Field);

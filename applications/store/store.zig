@@ -20,6 +20,18 @@ pub const tools = [_]framework.Tool{
     .{ .name = "store.update", .required_capability = "store.install", .effect = .local_mutation },
 };
 
+const domain = @import("domain.zig");
+pub const Store = domain.Store;
+pub const App = framework.App;
+
+/// Assembles the store app over the shared frame: its domain, its registered
+/// capabilities, and the ledger every operation is recorded to. Both the human surface
+/// and an agent reach the one domain through this app.
+pub fn open(store: *Store, ledger: *framework.Ledger) App {
+    return .{ .name = "store", .domain = store.domain(), .tools = .{ .tools = &tools }, .ledger = ledger };
+}
+
+
 /// Where an install came from.
 pub const Source = enum { store, sideload };
 

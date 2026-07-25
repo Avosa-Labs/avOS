@@ -19,6 +19,18 @@ pub const tools = [_]framework.Tool{
     .{ .name = "call.dial", .required_capability = "phone.dial", .effect = .external },
 };
 
+const domain = @import("domain.zig");
+pub const Store = domain.Store;
+pub const App = framework.App;
+
+/// Assembles the phone app over the shared frame: its domain, its registered
+/// capabilities, and the ledger every operation is recorded to. Both the human surface
+/// and an agent reach the one domain through this app.
+pub fn open(store: *Store, ledger: *framework.Ledger) App {
+    return .{ .name = "phone", .domain = store.domain(), .tools = .{ .tools = &tools }, .ledger = ledger };
+}
+
+
 /// What is known about an incoming caller.
 pub const Caller = struct { known: bool, verified: bool };
 
