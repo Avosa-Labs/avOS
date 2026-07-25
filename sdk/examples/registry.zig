@@ -22,16 +22,15 @@ pub const Example = struct {
     path: []const u8,
 };
 
-/// The closed set of maintained examples. A name absent from it does not resolve.
-const registry = [_]Example{
-    .{ .name = "hello-agent", .path = "examples/hello-agent" },
-    .{ .name = "todo-app", .path = "examples/todo-app" },
-    .{ .name = "camera-capture", .path = "examples/camera-capture" },
-};
+/// The closed set of maintained examples, from the one source both this module and the
+/// example-check gate read. Keeping the set in data rather than code means the gate that
+/// enforces "every listed example is real, every real example is listed" checks the same
+/// list this resolves from — the promise and its enforcement cannot drift.
+const registry = @import("registry.zon");
 
 /// Resolves an example name to its path, or null if the name is not in the registry.
 pub fn resolve(name: []const u8) ?[]const u8 {
-    for (registry) |example| {
+    inline for (registry) |example| {
         if (std.mem.eql(u8, example.name, name)) return example.path;
     }
     return null;
@@ -57,7 +56,7 @@ test "membership is exact" {
 }
 
 test "every registered example resolves and nothing else does, swept" {
-    for (registry) |example| {
+    inline for (registry) |example| {
         try std.testing.expect(has(example.name));
         try std.testing.expectEqualStrings(example.path, resolve(example.name).?);
     }
