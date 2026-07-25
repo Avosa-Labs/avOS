@@ -23,6 +23,15 @@ fn s(colour: theme.Colour) fb.Rgba {
     return paint.sample(colour);
 }
 
+/// Samples a palette colour at an explicit alpha, for the semi-transparent shadow and
+/// veil fills — so their colour still comes from the resolved palette, only their
+/// opacity is chosen at the call site.
+fn sa(colour: theme.Colour, alpha: u8) fb.Rgba {
+    var rgba = paint.sample(colour);
+    rgba.a = alpha;
+    return rgba;
+}
+
 /// One "in motion" task line on home: a titled row with a coloured presence dot.
 pub const Task = struct { title: []const u8, note: []const u8, hue: theme.Colour };
 
@@ -95,7 +104,7 @@ fn card(screen: *Framebuffer, rect: paint.Rect, radius: u16, tint: bool) void {
     paint.paint(screen, &.{.{ .rounded = .{
         .rect = .{ .x = rect.x, .y = rect.y + 8, .w = @intCast(rect.w), .h = @intCast(rect.h) },
         .radius = radius,
-        .colour = .{ .r = 0x6a, .g = 0x4b, .b = 0xb0, .a = 22 },
+        .colour = sa(theme.card_shadow, 22),
     } }});
     paint.paint(screen, &.{.{ .rounded = .{
         .rect = rect,
@@ -129,7 +138,7 @@ fn glowDot(screen: *Framebuffer, cx: f32, cy: f32, hue: theme.Colour, t: f32, ph
 fn flowGraph(screen: *Framebuffer, x: i32, y: i32, width: u32, t: f32) void {
     const fx: f32 = @floatFromInt(x);
     const fy: f32 = @floatFromInt(y);
-    const line = s(.{ .red = 0xc9, .green = 0xbf, .blue = 0xe6, .alpha = 255 });
+    const line = s(theme.screen_line);
     const a_x = fx + @as(f32, @floatFromInt(width)) * 0.36;
     const ends_x = fx + @as(f32, @floatFromInt(width)) * 0.78;
     // Connectors.
@@ -152,7 +161,7 @@ pub const dock_apps = [_]iconography.App{ .phone, .messages, .camera, .agents };
 fn dock(screen: *Framebuffer) void {
     const dh: u32 = 76;
     const rect: paint.Rect = .{ .x = 16, .y = @intCast(theme.screen_pro_h - dh - 26), .w = w - 32, .h = dh };
-    paint.paint(screen, &.{.{ .rounded = .{ .rect = rect, .radius = theme.radius_xl + 4, .colour = .{ .r = 0xff, .g = 0xff, .b = 0xff, .a = 200 } } }});
+    paint.paint(screen, &.{.{ .rounded = .{ .rect = rect, .radius = theme.radius_xl + 4, .colour = sa(theme.screen_card, 200) } }});
     const tile: u32 = 52;
     const inner = @as(u32, @intCast(rect.w)) - 44;
     const gap = (inner - dock_apps.len * tile) / (dock_apps.len - 1);

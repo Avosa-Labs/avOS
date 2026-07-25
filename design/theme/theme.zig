@@ -64,6 +64,8 @@ pub const screen_text_muted = palette.screen_text_muted;
 pub const screen_text_faint = palette.screen_text_faint;
 pub const screen_label = palette.screen_label;
 pub const screen_hairline = palette.screen_hairline;
+pub const card_shadow = palette.card_shadow;
+pub const screen_line = palette.screen_line;
 pub const sky = palette.sky;
 
 // --- The physical device ---

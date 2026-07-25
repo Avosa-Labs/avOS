@@ -69,6 +69,10 @@ pub const Palette = struct {
     screen_text_faint: Colour,
     screen_label: Colour,
     screen_hairline: Colour,
+    /// The tint of a card's soft drop shadow on the light screen, applied at low alpha.
+    card_shadow: Colour,
+    /// A faint lavender rule between rows on the light screen.
+    screen_line: Colour,
     sky: Colour,
     // The physical device.
     desktop_top: Colour,
@@ -160,6 +164,8 @@ fn referencePalette() Palette {
         .screen_text_faint = rgb(0x9c, 0x98, 0xa8),
         .screen_label = rgb(0x9a, 0x95, 0xa6),
         .screen_hairline = rgba(0x21, 0x1f, 0x2a, 0x12),
+        .card_shadow = rgb(0x6a, 0x4b, 0xb0),
+        .screen_line = rgb(0xc9, 0xbf, 0xe6),
         .sky = rgb(0x39, 0xb7, 0xe6),
         .desktop_top = rgb(0x16, 0x13, 0x29),
         .desktop_bottom = rgb(0x0b, 0x0a, 0x11),
