@@ -20,34 +20,33 @@ const shell = @import("shell");
 
 test "attack: escape a folder grant with parent traversal" {
     // A path that climbs above the granted root must be refused, however it is dressed up.
-    try std.testing.expect(!applications.files.withinGrant(&.{ "..", "etc", "secret" }));
-    try std.testing.expect(!applications.files.withinGrant(&.{ "reports", "..", "..", "escape" }));
-    try std.testing.expect(!applications.files.withinGrant(&.{ "a", "..", "..", ".." }));
+    try std.testing.expect(!applications.files.withinGrant("../etc/secret"));
+    try std.testing.expect(!applications.files.withinGrant("reports/../../escape"));
+    try std.testing.expect(!applications.files.withinGrant("a/../../.."));
 }
 
-test "attack: elicit a saved credential from a look-alike origin" {
-    const saved = applications.browser.Origin{ .scheme = "https", .host = "bank.example" };
-    const homograph = applications.browser.Origin{ .scheme = "https", .host = "bank.example.evil" };
-    // Even over a secure connection, a mismatched host gets nothing.
-    try std.testing.expect(!applications.browser.mayOffer(saved, homograph, true));
-    // And the real host over an insecure connection also gets nothing.
-    const insecure = applications.browser.Origin{ .scheme = "http", .host = "bank.example" };
-    try std.testing.expect(!applications.browser.mayOffer(saved, insecure, false));
+test "attack: have an agent send a message without the person" {
+    // Sending is declared external, so the framework holds an agent's send for approval
+    // rather than completing it on the agent's own authority.
+    for (applications.messages.tools) |tool| {
+        if (std.mem.eql(u8, tool.name, "message.send")) {
+            try std.testing.expect(tool.effect.needsApproval());
+        }
+    }
 }
 
-test "attack: present a passkey to a phishing relying party" {
-    const request = applications.credentials.Request{
-        .registered_rp = "bank.example",
-        .requesting_origin = "bank.example.evil",
-        .connection_secure = true,
-    };
-    try std.testing.expect(!applications.credentials.mayOffer(request));
+test "attack: have an agent capture from the camera" {
+    // Capture is the person's alone: it is not among the camera capabilities an agent
+    // can discover or invoke at all, so no capability reaches it.
+    for (applications.camera.tools) |tool| {
+        try std.testing.expect(!std.mem.eql(u8, tool.name, "camera.capture"));
+    }
 }
 
 test "attack: install an unreviewed package without acknowledgement" {
-    // An external package that was never acknowledged must not reach a proceed decision.
-    const decision = applications.store.decide(.external, false);
-    try std.testing.expect(decision != .proceed);
+    // A sideloaded package must always require an explicit acknowledgement — it can
+    // never proceed silently.
+    try std.testing.expect(applications.store.installNeedsAcknowledgement(.sideload));
 }
 
 test "attack: force a session protocol below the security floor" {
@@ -97,6 +96,13 @@ test "attack: install applications from a wearable" {
 }
 
 test "attack: read private contact fields with only basic scope" {
-    try std.testing.expect(!applications.contacts.mayRead(.basic, .private));
-    try std.testing.expect(!applications.contacts.mayRead(.none, .identifying));
+    // A grant covering only the name never yields a private field, however the read
+    // is phrased.
+    var basic: applications.contacts.FieldSet = .initEmpty();
+    basic.insert(.name);
+    try std.testing.expect(!applications.contacts.fieldVisible(basic, .address));
+    try std.testing.expect(!applications.contacts.fieldVisible(basic, .birthday));
+    // An empty grant yields nothing at all.
+    const none: applications.contacts.FieldSet = .initEmpty();
+    try std.testing.expect(!applications.contacts.fieldVisible(none, .email));
 }

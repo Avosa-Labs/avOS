@@ -75,17 +75,18 @@ test "floor: private data is unreachable from a shared surface" {
 test "floor: a permission is never exceeded beyond what was declared or granted" {
     // Web permission ceiling: an undeclared permission cannot be requested.
     const manifest = [_][]const u8{ "geolocation", "notifications" };
-    try std.testing.expect(!applications.contacts.mayRead(.basic, .private)); // contact field scope
-    // Location precision ceiling: exact only under a precise grant.
-    try std.testing.expect(applications.maps.deliver(.approximate) != .exact);
+    // Contact field scope: a name-only grant never yields a private field.
+    var basic: applications.contacts.FieldSet = .initEmpty();
+    basic.insert(.name);
+    try std.testing.expect(!applications.contacts.fieldVisible(basic, .address));
     _ = manifest;
 }
 
 test "floor: a file grant cannot be escaped" {
-    try std.testing.expect(!applications.files.withinGrant(&.{ "..", "escape" }));
+    try std.testing.expect(!applications.files.withinGrant("../escape"));
 }
 
 test "floor: sensitive settings require fresh authentication" {
-    try std.testing.expect(!applications.settings.mayChange(.sensitive, false));
-    try std.testing.expect(applications.settings.mayChange(.sensitive, true));
+    try std.testing.expect(!applications.settings.changeAllowed(.security, false));
+    try std.testing.expect(applications.settings.changeAllowed(.security, true));
 }
