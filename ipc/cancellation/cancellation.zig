@@ -19,6 +19,7 @@
 //! over the request set.
 
 const std = @import("std");
+const envelope_schema = @import("../schema/envelope.zig");
 
 /// Distinguishes one request from another. Matches the envelope's correlation.
 pub const Correlation = u64;
@@ -43,6 +44,10 @@ pub const Request = struct {
     /// The principal the request acts on behalf of. A cancel must come from the
     /// same principal to take effect.
     principal: u128,
+    /// The task this request belongs to. Cancelling the task cancels every
+    /// in-flight request under it, so a subtree stops together rather than
+    /// leaving orphaned work behind. Zero means no task.
+    task: u128 = 0,
     /// When the request stops being worth doing, in nanoseconds since the epoch.
     /// Zero means no deadline.
     deadline_nanoseconds: i64 = 0,
@@ -113,6 +118,24 @@ pub const Registry = struct {
         return .marked;
     }
 
+    /// Cancels every active request belonging to a task, on the task owner's
+    /// authority, and returns how many were marked. This is structured
+    /// cancellation at the wire: when a task is cancelled, its in-flight requests
+    /// stop together rather than continuing as orphans. A request owned by another
+    /// principal is left alone, so cancelling a task cannot reach across owners.
+    pub fn cancelTask(registry: Registry, task: u128, principal: u128) usize {
+        if (task == 0) return 0; // no task means nothing to cascade to
+        var marked: usize = 0;
+        for (registry.requests) |*request| {
+            if (request.task != task) continue;
+            if (request.principal != principal) continue;
+            if (request.state.isTerminal() or request.state == .cancelling) continue;
+            request.state = .cancelling;
+            marked += 1;
+        }
+        return marked;
+    }
+
     /// Marks a request finished, whether it completed or stopped. After this a
     /// cancel for it is a no-op.
     pub fn complete(registry: Registry, correlation: Correlation) void {
@@ -140,6 +163,58 @@ test "cancelling an active request marks it to stop" {
     try std.testing.expectEqual(Outcome.marked, registry.cancel(.{ .correlation = 1, .principal = owner }));
     try std.testing.expectEqual(State.cancelling, requests[0].state);
     try std.testing.expect(registry.shouldStop(1, 0));
+}
+
+test "cancelling a task stops every in-flight request under it" {
+    const other: u128 = 0xB0B;
+    var requests = [_]Request{
+        .{ .correlation = 1, .principal = owner, .task = 0x77 },
+        .{ .correlation = 2, .principal = owner, .task = 0x77 },
+        .{ .correlation = 3, .principal = owner, .task = 0x88 }, // a different task
+        .{ .correlation = 4, .principal = other, .task = 0x77 }, // another owner
+    };
+    const registry: Registry = .{ .requests = &requests };
+
+    const marked = registry.cancelTask(0x77, owner);
+    try std.testing.expectEqual(@as(usize, 2), marked);
+    try std.testing.expectEqual(State.cancelling, requests[0].state);
+    try std.testing.expectEqual(State.cancelling, requests[1].state);
+    // A different task and another owner's request are untouched.
+    try std.testing.expectEqual(State.active, requests[2].state);
+    try std.testing.expectEqual(State.active, requests[3].state);
+}
+
+test "a decoded cancel envelope stops the in-flight request it names" {
+    // The correlation and principal a cancel acts on come from a wire message.
+    // A cancel envelope carries them; this builds the Cancel from the envelope
+    // the way the receive path would, and applies it.
+    const cancel_envelope: envelope_schema.Envelope = .{
+        .version = envelope_schema.current_version,
+        .kind = .cancel,
+        .correlation = 1,
+        .idempotency_key = 0,
+        .principal = owner,
+        .task = 0,
+        .capability = 0,
+        .deadline_nanoseconds = 0,
+        .method = "",
+        .payload = "",
+    };
+
+    var requests = oneRequest();
+    const registry: Registry = .{ .requests = &requests };
+    const message: Cancel = .{ .correlation = cancel_envelope.correlation, .principal = cancel_envelope.principal };
+    try std.testing.expectEqual(Outcome.marked, registry.cancel(message));
+    try std.testing.expect(registry.shouldStop(1, 0));
+}
+
+test "a request whose envelope deadline has passed stops without a cancel" {
+    // The deadline the worker checks is the one the request's envelope carried.
+    const deadline = 5_000;
+    var requests = [_]Request{.{ .correlation = 1, .principal = owner, .deadline_nanoseconds = deadline }};
+    const registry: Registry = .{ .requests = &requests };
+    try std.testing.expect(!registry.shouldStop(1, deadline - 1));
+    try std.testing.expect(registry.shouldStop(1, deadline));
 }
 
 test "a cancel from another principal is refused" {

@@ -20,6 +20,7 @@
 //! time.
 
 const std = @import("std");
+const routing = @import("../routing/routing.zig");
 
 /// The largest method name a descriptor may declare, kept in step with the
 /// envelope, router, and binding bounds so a generated stub cannot name a method
@@ -111,6 +112,55 @@ pub fn isValid(descriptor: Descriptor) bool {
     return true;
 }
 
+pub const ReconcileError = error{
+    /// A method the descriptor declares is not delivered by any route, so a
+    /// client generated from it would invoke a method that reaches no service.
+    MethodNotRouted,
+};
+
+/// Confirms every method a descriptor declares is delivered by the routing table.
+///
+/// A descriptor and a route table are two views of the same surface, written
+/// separately; if they drift, a client is generated for a method the router will
+/// refuse. This reconciles them: a descriptor method with no route is a defect
+/// caught here rather than at runtime as a mysterious `unavailable`.
+pub fn reconcileWithRoutes(descriptor: Descriptor, table: routing.Table) ReconcileError!void {
+    for (descriptor.methods) |method| {
+        if (!table.handles(method.name)) return ReconcileError.MethodNotRouted;
+    }
+}
+
+/// Emits a client stub for a descriptor.
+///
+/// The descriptor is validated first, so an invalid one never produces output —
+/// a build fails at the description, not at the generated code. The emission is
+/// deterministic: the same descriptor always writes exactly the same bytes, which
+/// is what lets the output be committed and diffed rather than trusted. Each
+/// method becomes a call binding carrying the exact wire name, the capability a
+/// caller must present, and whether it mutates, so a client cannot invoke a
+/// method the description did not declare or forget the capability it requires.
+pub fn emit(descriptor: Descriptor, writer: *std.Io.Writer) (DescriptorError || std.Io.Writer.Error)!void {
+    try validate(descriptor);
+    try writer.print("// client stub for service \"{s}\"\n", .{descriptor.service});
+    for (descriptor.methods) |method| {
+        try writer.writeAll("pub const ");
+        try writeIdentifier(writer, method.name);
+        try writer.print(
+            " = Call{{ .method = \"{s}\", .capability = \"{s}\", .mutates = {} }};\n",
+            .{ method.name, method.required_capability, method.effect.mutates() },
+        );
+    }
+}
+
+/// Writes a method name as a Zig identifier: the dot that namespaces a wire name
+/// is not legal in an identifier, so it becomes an underscore. Deterministic and
+/// one-to-one for the bounded, dot-and-alphanumeric names a descriptor allows.
+fn writeIdentifier(writer: *std.Io.Writer, name: []const u8) std.Io.Writer.Error!void {
+    for (name) |character| {
+        try writer.writeByte(if (character == '.') '_' else character);
+    }
+}
+
 const sample_methods = [_]Method{
     .{ .name = "calendar.read", .required_capability = "calendar.read", .effect = .read_only },
     .{ .name = "calendar.write", .required_capability = "calendar.write", .effect = .local_mutation },
@@ -118,6 +168,55 @@ const sample_methods = [_]Method{
 };
 
 const sample_descriptor: Descriptor = .{ .service = "calendar", .methods = &sample_methods };
+
+test "a descriptor reconciles with a routing table that serves its methods" {
+    const table_routes = [_]routing.Route{
+        .{ .method = "calendar.read", .service = 1 },
+        .{ .method = "calendar.write", .service = 1 },
+        .{ .method = "calendar.share", .service = 1 },
+    };
+    try reconcileWithRoutes(sample_descriptor, .{ .routes = &table_routes });
+}
+
+test "a descriptor method with no route is a reconciliation error" {
+    // The table serves only read; the descriptor also declares write and share.
+    const table_routes = [_]routing.Route{
+        .{ .method = "calendar.read", .service = 1 },
+    };
+    try std.testing.expectError(ReconcileError.MethodNotRouted, reconcileWithRoutes(sample_descriptor, .{ .routes = &table_routes }));
+}
+
+test "a descriptor emits a deterministic client stub" {
+    var buffer: [1024]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
+    try emit(sample_descriptor, &writer);
+
+    const expected =
+        \\// client stub for service "calendar"
+        \\pub const calendar_read = Call{ .method = "calendar.read", .capability = "calendar.read", .mutates = false };
+        \\pub const calendar_write = Call{ .method = "calendar.write", .capability = "calendar.write", .mutates = true };
+        \\pub const calendar_share = Call{ .method = "calendar.share", .capability = "calendar.share", .mutates = true };
+        \\
+    ;
+    try std.testing.expectEqualStrings(expected, writer.buffered());
+}
+
+test "emitting the same descriptor twice produces identical bytes" {
+    var first: [1024]u8 = undefined;
+    var second: [1024]u8 = undefined;
+    var writer_first = std.Io.Writer.fixed(&first);
+    var writer_second = std.Io.Writer.fixed(&second);
+    try emit(sample_descriptor, &writer_first);
+    try emit(sample_descriptor, &writer_second);
+    try std.testing.expectEqualStrings(writer_first.buffered(), writer_second.buffered());
+}
+
+test "an invalid descriptor emits nothing" {
+    var buffer: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
+    const invalid: Descriptor = .{ .service = "", .methods = &sample_methods };
+    try std.testing.expectError(DescriptorError.EmptyServiceName, emit(invalid, &writer));
+}
 
 test "a well-formed descriptor validates" {
     try validate(sample_descriptor);
