@@ -665,6 +665,28 @@ test "approval yields narrow, task-bound, single-use authority" {
     try std.testing.expectEqual(@as(u8, 0), constraints.delegation_depth);
 }
 
+test "opening a request leaks nothing when an allocation fails" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn run(gpa: std.mem.Allocator) !void {
+            var ids: identity.Source = .initDeterministic(1);
+            var manual: time.ManualClock = .init(.fromSeconds(1_000));
+            var centre: Centre = .init(gpa, &ids, manual.clock(), .strict);
+            defer centre.deinit();
+
+            _ = try centre.request(.{
+                .requester = .{ .value = 2 },
+                .approver = .{ .value = 1 },
+                .task = .{ .value = 3 },
+                .operation = .transfer_value,
+                .target_kind = "payment",
+                .summary = "pay the deposit",
+                .amount = 5_000,
+                .recipient = "venue",
+            });
+        }
+    }.run, .{});
+}
+
 test "an approved transfer binds the grant to its amount and recipient" {
     const gpa = std.testing.allocator;
     var fixture: Fixture = undefined;

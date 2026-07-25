@@ -584,6 +584,20 @@ test "a truncated ledger fails sequence verification" {
     try std.testing.expect(!fixture.ledger.verifySequence());
 }
 
+test "appending an event leaks nothing when an allocation fails" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn run(gpa: std.mem.Allocator) !void {
+            var ids: identity.Source = .initDeterministic(1);
+            var manual: time.ManualClock = .init(.fromSeconds(1_000));
+            var ledger: Ledger = .init(gpa, &ids, manual.clock());
+            defer ledger.deinit();
+
+            _ = try ledger.append(.{ .actor = .{ .value = 2 }, .action = .capability_used, .outcome = .succeeded, .target_kind = "calendar" });
+            _ = try ledger.append(.{ .actor = .{ .value = 2 }, .action = .action_denied, .outcome = .denied, .target_kind = "mail" });
+        }
+    }.run, .{});
+}
+
 test "a page of denials skips an offset and caps its length" {
     const gpa = std.testing.allocator;
     var fixture: Fixture = undefined;

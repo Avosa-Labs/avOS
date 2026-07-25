@@ -1478,6 +1478,37 @@ test "a rate limit refuses a burst and admits a use in the next window" {
     _ = try fixture.store.use(handle, context);
 }
 
+test "issue and delegate leak nothing when an allocation fails" {
+    // Setup registers its cleanup before each fallible step, so a failure at any
+    // allocation — in enrolment, issue, or delegate — still releases everything.
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn run(gpa: std.mem.Allocator) !void {
+            var ids: identity.Source = .initDeterministic(20260722);
+            var manual: time.ManualClock = .init(.fromSeconds(1_000));
+            var registry: principal_model.Registry = .init(gpa, &ids, manual.clock());
+            defer registry.deinit();
+            var store: Store = .init(gpa, &ids, manual.clock(), &registry);
+            defer store.deinit();
+
+            const human = try registry.enroll(.{ .kind = .human, .display_name = "operator", .policy_domain = "local" });
+            const agent = try registry.enroll(.{ .kind = .agent, .display_name = "calendar", .policy_domain = "local", .expires_at = .fromSeconds(100_000), .issuer = human });
+            const other = try registry.enroll(.{ .kind = .agent, .display_name = "travel", .policy_domain = "local", .expires_at = .fromSeconds(100_000), .issuer = human });
+
+            var read: OperationSet = .initEmpty();
+            read.insert(.read);
+
+            const parent = try store.issue(.{
+                .issuer = human,
+                .holder = agent,
+                .resource = .{ .kind = "calendar" },
+                .operations = read,
+                .constraints = .{ .delegation_depth = 1 },
+            });
+            _ = try store.delegate(parent, other, read, .{ .kind = "calendar" }, .{});
+        }
+    }.run, .{});
+}
+
 test "a grant does not cross policy domains without explicit permission" {
     const gpa = std.testing.allocator;
     var fixture: Fixture = undefined;

@@ -709,6 +709,20 @@ const Fixture = struct {
     }
 };
 
+test "creating a task leaks nothing when an allocation fails" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn run(gpa: std.mem.Allocator) !void {
+            var ids: identity.Source = .initDeterministic(1);
+            var manual: time.ManualClock = .init(.fromSeconds(1_000));
+            var graph: Graph = .init(gpa, &ids, manual.clock());
+            defer graph.deinit();
+
+            const root = try graph.create(.{ .owner = .{ .value = 1 }, .requester = .{ .value = 1 }, .purpose = "plan" });
+            _ = try graph.create(.{ .owner = .{ .value = 2 }, .requester = .{ .value = 1 }, .purpose = "sub", .parent = root });
+        }
+    }.run, .{});
+}
+
 test "revocation behavior decides how in-flight work is treated" {
     const gpa = std.testing.allocator;
     var fixture: Fixture = undefined;
