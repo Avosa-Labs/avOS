@@ -286,3 +286,101 @@ test "a capability for one thing never authorizes another, swept" {
         try std.testing.expectEqual(covered, decision.authorized());
     }
 }
+
+test "checking a capability leaves it unchanged, so a replayed invocation decides the same" {
+    // The check is a pure decision over the grant, not a spend: it never mutates the
+    // grant, so presenting the same invocation twice — a duplicate or a replay —
+    // always reaches the same verdict. A single-use capability is spent by the store
+    // that owns it, not by asking whether it authorizes; the two must not be
+    // conflated, or a replay would read as a second, distinct use.
+    var grant = calendar_grant;
+    grant.invocations_remaining = 1;
+    const invocation = invoke(holder, "calendar.read");
+
+    const first = check(grant, invocation);
+    const second = check(grant, invocation);
+    const third = check(grant, invocation);
+    try std.testing.expect(first.authorized());
+    try std.testing.expect(second.authorized());
+    try std.testing.expect(third.authorized());
+    // The grant itself is untouched by having been checked.
+    try std.testing.expectEqual(@as(?u32, 1), grant.invocations_remaining);
+}
+
+test "when several conditions fail at once the refusal precedence is fixed" {
+    // A grant can be defective in more than one way. The order the reasons are
+    // reported is a contract: a caller keys retries and audit off the reason, so a
+    // reorder that started reporting a different one for the same grant is a
+    // behavior change, caught here. The order is: method shape, then principal, then
+    // revoked, generation, expiry, task binding, invocations, and finally scope.
+    const base: Grant = .{
+        .bound_principal = holder,
+        .generation = 5,
+        .revoked = true,
+        .expires_at_ns = 1_000,
+        .task_binding = 0x7,
+        .invocations_remaining = 0,
+        .scopes = &.{.{ .pattern = "calendar.", .prefix = true }},
+    };
+    const past_expiry: u64 = 2_000;
+
+    // Principal outranks every capability-state reason, even all of them together.
+    const wrong_principal: Invocation = .{
+        .principal = other,
+        .method = "unscoped.method",
+        .generation = 99,
+        .task = 0x9,
+        .now_ns = past_expiry,
+    };
+    try std.testing.expectEqual(Refusal.principal_mismatch, check(base, wrong_principal).refuse);
+
+    // For the right principal, revoked is reported before generation, expiry, task,
+    // invocations, or scope — all of which also fail here.
+    const right_principal: Invocation = .{
+        .principal = holder,
+        .method = "unscoped.method",
+        .generation = 99,
+        .task = 0x9,
+        .now_ns = past_expiry,
+    };
+    try std.testing.expectEqual(Refusal.revoked, check(base, right_principal).refuse);
+
+    // Clear revoked and generation, and expiry is reported before task, invocations,
+    // and scope.
+    var not_revoked = base;
+    not_revoked.revoked = false;
+    const matched_generation: Invocation = .{
+        .principal = holder,
+        .method = "unscoped.method",
+        .generation = 5,
+        .task = 0x9,
+        .now_ns = past_expiry,
+    };
+    try std.testing.expectEqual(Refusal.expired, check(not_revoked, matched_generation).refuse);
+
+    // Within the deadline, the task binding is reported before invocations and scope.
+    const within_deadline: Invocation = .{
+        .principal = holder,
+        .method = "unscoped.method",
+        .generation = 5,
+        .task = 0x9,
+        .now_ns = 999,
+    };
+    try std.testing.expectEqual(Refusal.task_binding_violated, check(not_revoked, within_deadline).refuse);
+
+    // Matching the task, the spent count is reported before scope.
+    const matched_task: Invocation = .{
+        .principal = holder,
+        .method = "unscoped.method",
+        .generation = 5,
+        .task = 0x7,
+        .now_ns = 999,
+    };
+    try std.testing.expectEqual(Refusal.invocations_exhausted, check(not_revoked, matched_task).refuse);
+
+    // With every state reason satisfied, scope is the last line: an uncovered method
+    // is out of scope.
+    var spendable = not_revoked;
+    spendable.invocations_remaining = 1;
+    try std.testing.expectEqual(Refusal.out_of_scope, check(spendable, matched_task).refuse);
+}

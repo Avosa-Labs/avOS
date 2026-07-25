@@ -71,6 +71,13 @@ pub const Table = struct {
     /// twice, no route points at the reserved zero service, and no method name is
     /// over the bound. A table that fails this is a configuration error, caught
     /// here rather than surfacing as a misroute later.
+    ///
+    /// The duplicate check is a pairwise scan, quadratic in the route count. That is
+    /// deliberate: a routing table is fixed configuration validated once at load, not
+    /// per message, and its size is bounded by the services a build ships — tens, not
+    /// thousands — so a hash set would cost an allocation and more code to save time
+    /// that is never on a hot path. `resolve`, which does run per message, stays
+    /// linear and needs no such structure.
     pub fn validate(table: Table) TableError!void {
         for (table.routes, 0..) |route, index| {
             if (route.service == 0) return TableError.ReservedService;
