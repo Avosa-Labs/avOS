@@ -19,6 +19,7 @@ const identity = @import("../identity/identity.zig");
 const time = @import("../time/time.zig");
 const outcome = @import("../base/outcome.zig");
 const principal_model = @import("../principal/principal.zig");
+const provenance_model = @import("../provenance/provenance.zig");
 
 const DomainError = outcome.DomainError;
 
@@ -260,6 +261,12 @@ pub const Grant = struct {
     resource: ResourceSelector,
     operations: OperationSet,
     constraints: Constraints = .{},
+    /// Where the request for this grant came from. A grant the trusted control
+    /// plane mints defaults to a trusted origin; a request derived from model
+    /// output or other untrusted input must carry that provenance and is refused
+    /// unless it has been validated for `.capability_request`, so an agent cannot
+    /// mint authority out of unvalidated model output.
+    provenance: provenance_model.Provenance = .from(.control_plane),
 };
 
 /// The authoritative capability set for this host.
@@ -335,6 +342,11 @@ pub const Store = struct {
     /// principal would create authority that outlives the authority to create
     /// it.
     pub fn issue(store: *Store, grant: Grant) !Handle {
+        // Authority cannot be minted from unvalidated untrusted input. A request
+        // carrying model-output or external provenance must have been validated
+        // for `.capability_request` first.
+        if (!grant.provenance.permits(.capability_request)) return error.Unauthorized;
+
         const issuer = try store.principals.authorize(grant.issuer);
         _ = try store.principals.authorize(grant.holder);
 
@@ -1276,6 +1288,32 @@ test "revoking a grant revokes what was delegated from it" {
         .operation = .read,
         .resource = .{ .kind = "calendar" },
     }));
+}
+
+test "a capability request from unvalidated model output is refused" {
+    const gpa = std.testing.allocator;
+    var fixture: Fixture = undefined;
+    try Fixture.init(gpa, &fixture);
+    defer fixture.deinit();
+
+    // A request whose intent came straight from a model, cleared for nothing.
+    try std.testing.expectError(error.Unauthorized, fixture.store.issue(.{
+        .issuer = fixture.human,
+        .holder = fixture.agent,
+        .resource = .{ .kind = "calendar" },
+        .operations = fixture.readOnly(),
+        .provenance = .from(.model_output),
+    }));
+
+    // Once validated for a capability request, the same origin may be issued.
+    const validated = provenance_model.validate(.from(.model_output), .capability_request, true).?.result;
+    _ = try fixture.store.issue(.{
+        .issuer = fixture.human,
+        .holder = fixture.agent,
+        .resource = .{ .kind = "calendar" },
+        .operations = fixture.readOnly(),
+        .provenance = validated,
+    });
 }
 
 test "revoking a grant revokes the whole delegation subtree, not only its children" {

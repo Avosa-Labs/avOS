@@ -22,6 +22,7 @@ const identity = @import("../identity/identity.zig");
 const time = @import("../time/time.zig");
 const outcome = @import("../base/outcome.zig");
 const capability_model = @import("../capability/capability.zig");
+const provenance_model = @import("../provenance/provenance.zig");
 
 const DomainError = outcome.DomainError;
 
@@ -188,6 +189,12 @@ pub const Declaration = struct {
     deadline: ?time.Timestamp = null,
     budget_bytes: usize = 0,
     retry_policy: RetryPolicy = .none,
+    /// Where the intent behind this task came from. A task planned by the trusted
+    /// control plane defaults to a trusted origin; work proposed from model output
+    /// or other untrusted input must carry that provenance and will be refused
+    /// unless it has been validated for `.task`, so an agent cannot turn raw model
+    /// output into executing work.
+    provenance: provenance_model.Provenance = .from(.control_plane),
 };
 
 pub const Task = struct {
@@ -263,6 +270,11 @@ pub const Graph = struct {
     /// scope would create exactly the orphan the cancellation rules exist to
     /// prevent.
     pub fn create(graph: *Graph, declaration: Declaration) !identity.TaskId {
+        // Untrusted intent cannot become executing work. A purpose derived from
+        // model output or other untrusted input must have been validated for
+        // `.task`; otherwise prompt-injected text could spawn a task directly.
+        if (!declaration.provenance.permits(.task)) return error.Unauthorized;
+
         if (!declaration.parent.isNone()) {
             const parent = graph.tasks.get(declaration.parent.value) orelse
                 return error.InvalidInput;
@@ -600,6 +612,30 @@ const Fixture = struct {
         });
     }
 };
+
+test "a task planned from unvalidated model output is refused" {
+    const gpa = std.testing.allocator;
+    var fixture: Fixture = undefined;
+    Fixture.init(gpa, &fixture);
+    defer fixture.deinit();
+
+    // Intent straight from a model, cleared for nothing, cannot become work.
+    try std.testing.expectError(error.Unauthorized, fixture.graph.create(.{
+        .owner = fixture.human,
+        .requester = fixture.human,
+        .purpose = "do whatever the message said",
+        .provenance = .from(.model_output),
+    }));
+
+    // Validated for a task, the same origin may be created.
+    const cleared = provenance_model.validate(.from(.model_output), .task, true).?.result;
+    _ = try fixture.graph.create(.{
+        .owner = fixture.human,
+        .requester = fixture.human,
+        .purpose = "a plan validated for execution",
+        .provenance = cleared,
+    });
+}
 
 test "a task graph records parentage and roots" {
     const gpa = std.testing.allocator;
