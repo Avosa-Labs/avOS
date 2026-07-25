@@ -26,6 +26,12 @@ const backup = @import("../backup/backup.zig");
 /// refused rather than guessed at.
 pub const supported_format_version: u16 = 1;
 
+/// The oldest backup format this build still accepts. A backup older than this is
+/// refused rather than applied, so a stale backup cannot force the device back onto
+/// a format whose weaknesses a later version fixed. Raise this when an old format is
+/// retired.
+pub const minimum_format_version: u16 = 1;
+
 /// An item offered for restore: the id it claims and the bytes presented for it.
 pub const OfferedItem = struct {
     id: u64,
@@ -39,6 +45,9 @@ pub const Presented = struct {
     manifest: []const backup.ManifestEntry,
     /// The manifest root as recorded when the backup was made.
     manifest_root: backup.Digest,
+    /// The authenticator the making device computed over the root under its key.
+    /// The root is trusted only if this re-computes under the device's key.
+    authenticator: backup.Authenticator,
     items: []const OfferedItem,
 
     fn find(presented: Presented, id: u64) ?OfferedItem {
@@ -49,10 +58,23 @@ pub const Presented = struct {
     }
 };
 
+/// What the device brings to a restore that the backup cannot supply for itself:
+/// the key its root was authenticated under. Held on the device, never in the
+/// backup, so a backup on foreign storage cannot be re-rooted to forged contents.
+pub const Trust = struct {
+    manifest_key: []const u8,
+};
+
 /// Why a restore was refused.
 pub const Refusal = union(enum) {
     /// The backup's format is newer than this build understands.
     incompatible_version: u16,
+    /// The backup's format is older than this build still accepts: applying it
+    /// would downgrade the device to a retired format.
+    downgraded: u16,
+    /// The manifest root is not authentic under this device's key: the backup was
+    /// not made by this device, or its root was forged.
+    unauthenticated,
     /// The manifest does not match its recorded root: the manifest itself was
     /// altered.
     manifest_altered,
@@ -77,17 +99,27 @@ pub const Decision = union(enum) {
 
 /// Decides whether a presented backup may be applied.
 ///
-/// The format version is checked first: a backup this build cannot interpret is
-/// refused before its contents are trusted. Then the manifest is checked against
-/// its recorded root, so an altered manifest — one with an item added, removed, or
-/// repointed — is caught before any digest is trusted. Then every manifest entry
-/// must have an offered item whose contents hash to the recorded digest; a missing
-/// or mismatching item refuses the whole restore. Only a backup that passes all of
-/// this is applied, and because the decision is made before any write, a refusal
-/// leaves live state untouched.
-pub fn decide(presented: Presented) Decision {
+/// The format version is checked first: a backup newer than this build can
+/// interpret, or older than it still accepts, is refused before its contents are
+/// trusted. Then the manifest root is authenticated against the device's key — this
+/// is what ties the backup to this device, and it comes before the root is used for
+/// anything, because a forged manifest carries a self-consistent forged root that
+/// the manifest-altered check alone would wave through. Then the manifest is checked
+/// against that now-trusted root, so an altered manifest — one with an item added,
+/// removed, or repointed — is caught. Then every manifest entry must have an offered
+/// item whose contents hash to the recorded digest; a missing or mismatching item
+/// refuses the whole restore. Only a backup that passes all of this is applied, and
+/// because the decision is made before any write, a refusal leaves live state
+/// untouched.
+pub fn decide(presented: Presented, trust: Trust) Decision {
     if (presented.format_version > supported_format_version) {
         return .{ .refuse = .{ .incompatible_version = presented.format_version } };
+    }
+    if (presented.format_version < minimum_format_version) {
+        return .{ .refuse = .{ .downgraded = presented.format_version } };
+    }
+    if (!backup.rootIsAuthentic(presented.manifest_root, trust.manifest_key, presented.authenticator)) {
+        return .{ .refuse = .unauthenticated };
     }
     if (!std.mem.eql(u8, &backup.manifestRoot(presented.manifest), &presented.manifest_root)) {
         return .{ .refuse = .manifest_altered };
@@ -101,6 +133,30 @@ pub fn decide(presented: Presented) Decision {
         }
     }
     return .restore;
+}
+
+/// The key a test device authenticates its backup roots under. Never travels in a
+/// backup; the restore side already holds it.
+const device_key = "a device-held manifest key, never in the backup";
+
+fn deviceTrust() Trust {
+    return .{ .manifest_key = device_key };
+}
+
+/// Builds a Presented over a manifest, authenticating the recorded root under the
+/// device key as a real making device would.
+fn presentedFor(
+    manifest: []const backup.ManifestEntry,
+    items: []const OfferedItem,
+) Presented {
+    const root = backup.manifestRoot(manifest);
+    return .{
+        .format_version = supported_format_version,
+        .manifest = manifest,
+        .manifest_root = root,
+        .authenticator = backup.authenticateRoot(root, device_key),
+        .items = items,
+    };
 }
 
 fn goodBackup() struct {
@@ -121,54 +177,86 @@ fn goodBackup() struct {
 
 test "a well-formed backup is approved" {
     const b = goodBackup();
-    const presented: Presented = .{
-        .format_version = supported_format_version,
-        .manifest = &b.manifest,
-        .manifest_root = backup.manifestRoot(&b.manifest),
-        .items = &b.items,
-    };
-    try std.testing.expect(decide(presented).approved());
+    try std.testing.expect(decide(presentedFor(&b.manifest, &b.items), deviceTrust()).approved());
 }
 
 test "a backup from a newer format is refused" {
     const b = goodBackup();
-    const presented: Presented = .{
-        .format_version = supported_format_version + 1,
-        .manifest = &b.manifest,
-        .manifest_root = backup.manifestRoot(&b.manifest),
-        .items = &b.items,
-    };
+    var presented = presentedFor(&b.manifest, &b.items);
+    presented.format_version = supported_format_version + 1;
     try std.testing.expectEqual(
         Decision{ .refuse = .{ .incompatible_version = supported_format_version + 1 } },
-        decide(presented),
+        decide(presented, deviceTrust()),
     );
+}
+
+test "a backup older than this build accepts is refused as a downgrade" {
+    const b = goodBackup();
+    var presented = presentedFor(&b.manifest, &b.items);
+    presented.format_version = minimum_format_version - 1;
+    try std.testing.expectEqual(
+        Decision{ .refuse = .{ .downgraded = minimum_format_version - 1 } },
+        decide(presented, deviceTrust()),
+    );
+}
+
+test "a backup not authenticated by this device is refused" {
+    const b = goodBackup();
+    const presented = presentedFor(&b.manifest, &b.items);
+    // The device holds a different key than the one the backup was authenticated
+    // under, so its root is not trusted.
+    try std.testing.expectEqual(
+        Decision{ .refuse = .unauthenticated },
+        decide(presented, .{ .manifest_key = "some other device's key" }),
+    );
+}
+
+test "a forged manifest with a self-consistent root is refused as unauthenticated" {
+    // The core attack: an attacker rewrites the whole manifest and recomputes the
+    // root to match, so the manifest-altered check would pass. Only the missing
+    // authenticator stops it — the attacker cannot MAC the forged root.
+    const forged = [_]backup.ManifestEntry{
+        .{ .id = 1, .digest = backup.itemDigest("payload the attacker chose") },
+    };
+    const forged_items = [_]OfferedItem{
+        .{ .id = 1, .bytes = "payload the attacker chose" },
+    };
+    const forged_root = backup.manifestRoot(&forged);
+    const presented: Presented = .{
+        .format_version = supported_format_version,
+        .manifest = &forged,
+        .manifest_root = forged_root, // self-consistent: matches the forged manifest
+        .authenticator = backup.authenticateRoot(forged_root, "the attacker's own key"),
+        .items = &forged_items,
+    };
+    try std.testing.expectEqual(Decision{ .refuse = .unauthenticated }, decide(presented, deviceTrust()));
 }
 
 test "an altered manifest is caught against its root" {
     const b = goodBackup();
-    // The root was recorded for the real manifest, but a tampered manifest is
-    // presented with it.
+    // The root was recorded and authenticated for the real manifest, but a tampered
+    // manifest is presented with it. Authentication passes on the real root; the
+    // manifest-altered check catches the swap.
     var tampered = b.manifest;
     tampered[0].digest = backup.itemDigest("forged");
+    const made_root = backup.manifestRoot(&b.manifest);
     const presented: Presented = .{
         .format_version = supported_format_version,
         .manifest = &tampered,
-        .manifest_root = backup.manifestRoot(&b.manifest), // original root
+        .manifest_root = made_root,
+        .authenticator = backup.authenticateRoot(made_root, device_key),
         .items = &b.items,
     };
-    try std.testing.expectEqual(Decision{ .refuse = .manifest_altered }, decide(presented));
+    try std.testing.expectEqual(Decision{ .refuse = .manifest_altered }, decide(presented, deviceTrust()));
 }
 
 test "a missing item refuses the whole restore" {
     const b = goodBackup();
     const only_one = [_]OfferedItem{.{ .id = 1, .bytes = "first" }};
-    const presented: Presented = .{
-        .format_version = supported_format_version,
-        .manifest = &b.manifest,
-        .manifest_root = backup.manifestRoot(&b.manifest),
-        .items = &only_one,
-    };
-    try std.testing.expectEqual(Decision{ .refuse = .{ .missing_item = 2 } }, decide(presented));
+    try std.testing.expectEqual(
+        Decision{ .refuse = .{ .missing_item = 2 } },
+        decide(presentedFor(&b.manifest, &only_one), deviceTrust()),
+    );
 }
 
 test "a tampered item is detected and refuses the restore" {
@@ -177,13 +265,10 @@ test "a tampered item is detected and refuses the restore" {
         .{ .id = 1, .bytes = "first" },
         .{ .id = 2, .bytes = "second-but-altered" }, // does not match its digest
     };
-    const presented: Presented = .{
-        .format_version = supported_format_version,
-        .manifest = &b.manifest,
-        .manifest_root = backup.manifestRoot(&b.manifest),
-        .items = &corrupted,
-    };
-    try std.testing.expectEqual(Decision{ .refuse = .{ .tampered_item = 2 } }, decide(presented));
+    try std.testing.expectEqual(
+        Decision{ .refuse = .{ .tampered_item = 2 } },
+        decide(presentedFor(&b.manifest, &corrupted), deviceTrust()),
+    );
 }
 
 test "a backup with one bad item is refused whole, never half-restored" {
@@ -194,21 +279,9 @@ test "a backup with one bad item is refused whole, never half-restored" {
         .{ .id = 1, .bytes = "altered" },
         .{ .id = 2, .bytes = "second" },
     };
-    const presented: Presented = .{
-        .format_version = supported_format_version,
-        .manifest = &b.manifest,
-        .manifest_root = backup.manifestRoot(&b.manifest),
-        .items = &corrupted,
-    };
-    try std.testing.expect(!decide(presented).approved());
+    try std.testing.expect(!decide(presentedFor(&b.manifest, &corrupted), deviceTrust()).approved());
 }
 
 test "an empty backup at a supported version is trivially approved" {
-    const presented: Presented = .{
-        .format_version = supported_format_version,
-        .manifest = &.{},
-        .manifest_root = backup.manifestRoot(&.{}),
-        .items = &.{},
-    };
-    try std.testing.expect(decide(presented).approved());
+    try std.testing.expect(decide(presentedFor(&.{}, &.{}), deviceTrust()).approved());
 }
