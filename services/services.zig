@@ -16,6 +16,7 @@ pub const notification = @import("notification/notification.zig");
 pub const supervisor = @import("supervisor/supervisor.zig");
 pub const restart_policy = @import("supervisor/policy.zig");
 pub const policy = @import("policy/policy.zig");
+pub const policy_service = @import("policy/service.zig");
 pub const secret = @import("secret/secret.zig");
 pub const update_rollout = @import("update/rollout.zig");
 pub const power = @import("power/power.zig");
@@ -28,6 +29,7 @@ pub const account = @import("account/account.zig");
 pub const connectivity = @import("connectivity/connectivity.zig");
 pub const device_posture = @import("device/posture.zig");
 pub const session_lock = @import("session/lock.zig");
+pub const session_service = @import("session/service.zig");
 pub const application_install = @import("application/install.zig");
 pub const search = @import("search/search.zig");
 pub const window_overlay = @import("window/overlay.zig");
@@ -42,6 +44,7 @@ pub const index = @import("index/index.zig");
 pub const media_focus = @import("media/focus.zig");
 pub const locale = @import("localization/locale.zig");
 pub const package_verify = @import("package/verify.zig");
+pub const package_service = @import("package/service.zig");
 pub const recovery_ladder = @import("recovery/ladder.zig");
 pub const backup_schedule = @import("backup/schedule.zig");
 pub const restore_eligibility = @import("restore/eligibility.zig");
@@ -53,6 +56,7 @@ pub const resource_admission = @import("resource/admission.zig");
 pub const audit_append = @import("audit/append.zig");
 pub const audit_service = @import("audit/service.zig");
 pub const provenance_flow = @import("provenance/flow.zig");
+pub const provenance_service = @import("provenance/service.zig");
 
 test {
     _ = endpoint;
@@ -66,6 +70,7 @@ test {
     _ = supervisor;
     _ = restart_policy;
     _ = policy;
+    _ = policy_service;
     _ = secret;
     _ = update_rollout;
     _ = power;
@@ -78,6 +83,7 @@ test {
     _ = connectivity;
     _ = device_posture;
     _ = session_lock;
+    _ = session_service;
     _ = application_install;
     _ = search;
     _ = window_overlay;
@@ -92,6 +98,7 @@ test {
     _ = media_focus;
     _ = locale;
     _ = package_verify;
+    _ = package_service;
     _ = recovery_ladder;
     _ = backup_schedule;
     _ = restore_eligibility;
@@ -103,4 +110,5 @@ test {
     _ = audit_append;
     _ = audit_service;
     _ = provenance_flow;
+    _ = provenance_service;
 }
