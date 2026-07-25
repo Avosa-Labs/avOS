@@ -120,6 +120,13 @@ pub const Source = struct {
         random.bytes(std.mem.sliceAsBytes(source.buffered[0..]));
         source.remaining = buffer_length;
     }
+
+    /// Fills `buffer` with unpredictable bytes for a one-time value such as an
+    /// authentication nonce, which needs entropy but not an identifier's shape.
+    pub fn bytes(source: *Source, buffer: []u8) void {
+        var random = source.state.random();
+        random.bytes(buffer);
+    }
 };
 
 test "identifiers of different domains are distinct types" {

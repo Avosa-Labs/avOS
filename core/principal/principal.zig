@@ -18,6 +18,9 @@ const outcome = @import("../base/outcome.zig");
 
 const DomainError = outcome.DomainError;
 
+/// The size of a principal's public identity key, in bytes.
+pub const public_key_bytes = std.crypto.sign.Ed25519.PublicKey.encoded_length;
+
 pub const Kind = enum {
     human,
     agent,
@@ -88,6 +91,10 @@ pub const Principal = struct {
     /// Incremented on every revocation so a handle minted before a revocation
     /// cannot be replayed after one.
     generation: u64,
+    /// Public identity material: the key that authenticates this principal when
+    /// it proves itself. Absent for a principal that authenticates by another
+    /// means, such as a local human verified at the device.
+    public_key: ?[public_key_bytes]u8,
 
     /// Whether this principal may act at `now`.
     ///
@@ -121,6 +128,8 @@ pub const Declaration = struct {
     expires_at: ?time.Timestamp = null,
     /// The principal enrolling this one. `none` only for a root human.
     issuer: identity.PrincipalId = .none,
+    /// Public identity material, when this principal authenticates by key.
+    public_key: ?[public_key_bytes]u8 = null,
 };
 
 /// The authoritative set of principals on this host.
@@ -186,6 +195,7 @@ pub const Registry = struct {
             .policy_domain = policy_domain,
             .expires_at = declaration.expires_at,
             .generation = 0,
+            .public_key = declaration.public_key,
         });
         return id;
     }
