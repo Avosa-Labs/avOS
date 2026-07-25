@@ -9,6 +9,11 @@
 pub const abstraction = @import("abstraction/abstraction.zig");
 pub const audio = @import("audio/audio.zig");
 pub const battery = @import("battery/battery.zig");
+pub const camera = @import("camera/camera.zig");
+pub const input = @import("input/input.zig");
+pub const sim = @import("sim/sim.zig");
+pub const bluetooth = @import("bluetooth/bluetooth.zig");
+pub const accessories = @import("accessories/accessories.zig");
 pub const biometrics = @import("biometrics/biometrics.zig");
 pub const charging = @import("charging/charging.zig");
 pub const display = @import("display/display.zig");
@@ -21,6 +26,8 @@ pub const wifi = @import("wifi/wifi.zig");
 pub const sensors = @import("sensors/sensors.zig");
 pub const emulator_board = @import("boards/emulator/emulator.zig");
 pub const reference_board = @import("boards/reference/reference.zig");
+pub const bound_board = @import("boards/bound.zig");
+pub const board_integration = @import("tests/board_integration.zig");
 pub const secure_element = @import("secure-element/secure_element.zig");
 pub const thermal = @import("thermal/thermal.zig");
 
@@ -28,6 +35,11 @@ test {
     _ = abstraction;
     _ = audio;
     _ = battery;
+    _ = camera;
+    _ = input;
+    _ = sim;
+    _ = bluetooth;
+    _ = accessories;
     _ = biometrics;
     _ = charging;
     _ = display;
@@ -40,6 +52,8 @@ test {
     _ = sensors;
     _ = emulator_board;
     _ = reference_board;
+    _ = bound_board;
+    _ = board_integration;
     _ = secure_element;
     _ = thermal;
 }

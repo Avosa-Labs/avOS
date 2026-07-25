@@ -15,8 +15,10 @@ pub const scheduler_policy = @import("scheduler-policy/scheduler_policy.zig");
 pub const memory_policy = @import("memory-policy/memory_policy.zig");
 pub const device_policy = @import("device-policy/device_policy.zig");
 pub const security_hooks = @import("security-hooks/security_hooks.zig");
+pub const mediation_integration = @import("tests/mediation_integration.zig");
 
 test {
+    _ = mediation_integration;
     _ = adapters;
     _ = scheduler_policy;
     _ = memory_policy;

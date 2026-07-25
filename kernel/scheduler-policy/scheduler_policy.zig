@@ -79,6 +79,19 @@ pub const Demand = struct {
     /// How much of the current window this class has already consumed, in parts
     /// per thousand. Used to hold a lower class to its budget.
     spent_per_mille: u16 = 0,
+
+    /// The demand left after `cancelled` units are cancelled. Cancelled work
+    /// stops being ready, so the scheduler no longer picks the class for it; when
+    /// all of a class's ready work is cancelled the class becomes idle and draws
+    /// no scheduling. Subtraction saturates: cancelling more than is ready leaves
+    /// zero rather than wrapping.
+    pub fn afterCancellation(current: Demand, cancelled: u32) Demand {
+        return .{
+            .class = current.class,
+            .ready = current.ready -| cancelled,
+            .spent_per_mille = current.spent_per_mille,
+        };
+    }
 };
 
 /// The budgets the policy enforces.
@@ -191,6 +204,36 @@ test "the class order is the priority order" {
     for (std.enums.values(Class)) |class| {
         try std.testing.expect(!class.outranks(class));
     }
+}
+
+test "an idle class draws no scheduling, so an idle agent uses no CPU" {
+    // A speculative class with nothing ready is the shape of an idle agent: it is
+    // present but has no work. The scheduler must run nothing rather than spin.
+    const demands = [_]Demand{.{ .class = .speculative, .ready = 0 }};
+    try std.testing.expectEqual(Decision.idle, selectNext(&demands, Budgets.reference));
+}
+
+test "cancelling a class's work removes it from scheduling" {
+    var running: Demand = .{ .class = .committed_task, .ready = 4 };
+    // While it has ready work it is chosen.
+    try std.testing.expectEqual(Decision{ .run = .committed_task }, selectNext(&.{running}, Budgets.reference));
+
+    // Cancelling all of its ready work — as when a task is cancelled mid-flight —
+    // makes the class idle, and the scheduler no longer picks it.
+    running = running.afterCancellation(4);
+    try std.testing.expectEqual(@as(u32, 0), running.ready);
+    try std.testing.expectEqual(Decision.idle, selectNext(&.{running}, Budgets.reference));
+
+    // Cancelling more than is ready saturates to zero rather than wrapping.
+    try std.testing.expectEqual(@as(u32, 0), (Demand{ .class = .speculative, .ready = 2 }).afterCancellation(9).ready);
+}
+
+test "speculative work yields to committed work" {
+    const demands = [_]Demand{
+        .{ .class = .committed_task, .ready = 1 },
+        .{ .class = .speculative, .ready = 1 },
+    };
+    try std.testing.expectEqual(Decision{ .run = .committed_task }, selectNext(&demands, Budgets.reference));
 }
 
 test "a ready urgent class always wins" {

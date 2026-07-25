@@ -129,16 +129,71 @@ pub const Grant = struct {
     accesses: std.EnumSet(Access),
 };
 
+/// The capture indicators currently lit, one per class a person can see.
+pub const Indicator = struct {
+    lit: std.EnumSet(DeviceClass) = .initEmpty(),
+
+    pub fn isLit(indicator: Indicator, class: DeviceClass) bool {
+        return indicator.lit.contains(class);
+    }
+};
+
+/// Proof that a capture indicator is lit for a class.
+///
+/// It cannot be constructed by naming its fields: the witness field's type is
+/// private to this module, so the only way to obtain one is through
+/// `CaptureObligation.begin`, which lights the indicator first. A code path that
+/// holds an `ActiveCapture` has therefore already lit the light — the state
+/// "capturing but unlit" is not representable, which is what makes the indicator
+/// unbypassable rather than merely advised.
+pub const ActiveCapture = struct {
+    class: DeviceClass,
+    witness: Witness,
+
+    const Witness = struct {};
+};
+
+/// The obligation a capture-activating allow carries: to proceed, the caller must
+/// light the indicator, and doing so is the only way to get the token that lets
+/// the capture start.
+pub const CaptureObligation = struct {
+    class: DeviceClass,
+
+    /// Lights the indicator for the class and yields the proof of it. This is the
+    /// single path from an allowed capture to actually capturing.
+    pub fn begin(obligation: CaptureObligation, indicator: *Indicator) ActiveCapture {
+        indicator.lit.insert(obligation.class);
+        return .{ .class = obligation.class, .witness = .{} };
+    }
+};
+
+/// What an allowed access lets the caller do.
+pub const Allowance = union(enum) {
+    /// Nothing is captured, so there is no indicator to light.
+    no_capture,
+    /// Sensing starts, so the indicator must be lit; the obligation is the only
+    /// way to begin.
+    capture: CaptureObligation,
+};
+
 /// The outcome of an access attempt.
 pub const Decision = union(enum) {
-    /// The access is permitted. Whether it lights a capture indicator is
-    /// carried so the caller cannot forget to light it.
-    allow: struct { lights_indicator: bool },
+    /// The access is permitted. A capture-activating access carries an obligation
+    /// that can only be discharged by lighting the indicator.
+    allow: Allowance,
     /// The access is refused, with the reason.
     deny: Refusal,
 
     pub fn isAllowed(decision: Decision) bool {
         return decision == .allow;
+    }
+
+    /// Whether this decision, if allowed, lights a capture indicator.
+    pub fn lightsIndicator(decision: Decision) bool {
+        return switch (decision) {
+            .allow => |allowance| allowance == .capture,
+            .deny => false,
+        };
     }
 };
 
@@ -178,9 +233,10 @@ pub fn decide(
         return .{ .deny = .physically_locked_out };
     }
 
-    return .{ .allow = .{
-        .lights_indicator = class.showsCaptureIndicator() and access.activatesSensor(),
-    } };
+    if (class.showsCaptureIndicator() and access.activatesSensor()) {
+        return .{ .allow = .{ .capture = .{ .class = class } } };
+    }
+    return .{ .allow = .no_capture };
 }
 
 /// Whether a class may only be used with a person present.
@@ -270,11 +326,28 @@ test "using a camera lights the capture indicator" {
     const grant = grantOf(&.{.camera}, &.{ .read, .stream, .configure });
 
     // Reading or streaming activates the sensor and must light the indicator.
-    try std.testing.expect(decide(.camera, .stream, grant, present).allow.lights_indicator);
-    try std.testing.expect(decide(.camera, .read, grant, present).allow.lights_indicator);
+    try std.testing.expect(decide(.camera, .stream, grant, present).lightsIndicator());
+    try std.testing.expect(decide(.camera, .read, grant, present).lightsIndicator());
 
     // Configuring it while off does not activate the sensor, so no light.
-    try std.testing.expect(!decide(.camera, .configure, grant, present).allow.lights_indicator);
+    try std.testing.expect(!decide(.camera, .configure, grant, present).lightsIndicator());
+}
+
+test "a capture cannot begin without lighting the indicator" {
+    const grant = grantOf(&.{.camera}, &.{.stream});
+    const decision = decide(.camera, .stream, grant, present);
+
+    // The only way to act on the allow is to discharge the obligation, which
+    // lights the indicator and hands back the proof. There is no path that
+    // starts capturing while the light is off.
+    var indicator: Indicator = .{};
+    try std.testing.expect(!indicator.isLit(.camera));
+
+    const obligation = decision.allow.capture;
+    const active = obligation.begin(&indicator);
+
+    try std.testing.expect(indicator.isLit(.camera));
+    try std.testing.expectEqual(DeviceClass.camera, active.class);
 }
 
 test "a non-capture device never lights the capture indicator" {
@@ -282,7 +355,8 @@ test "a non-capture device never lights the capture indicator" {
     for ([_]Access{ .read, .stream, .actuate, .configure }) |access| {
         const decision = decide(.radio, access, grant, present);
         if (decision.isAllowed()) {
-            try std.testing.expect(!decision.allow.lights_indicator);
+            try std.testing.expect(!decision.lightsIndicator());
+            try std.testing.expect(decision.allow == .no_capture);
         }
     }
 }
