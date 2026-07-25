@@ -54,6 +54,20 @@ pub const Grant = struct {
     bound_principal: u128,
     /// The methods this capability authorizes.
     scopes: []const Scope,
+    /// The generation the capability was minted at. A message presenting an older
+    /// generation is presenting a handle from before a revocation.
+    generation: u64 = 0,
+    /// When the capability stops being valid, in nanoseconds on the shared clock,
+    /// or null for no expiry.
+    expires_at_ns: ?u64 = null,
+    /// Set once the capability is revoked. Checked at every use, because the gap
+    /// between issue and use is where a revoked handle would otherwise be honored.
+    revoked: bool = false,
+    /// The task the capability is bound to, or null for any. A message from
+    /// another task may not present it.
+    task_binding: ?u128 = null,
+    /// Uses remaining, or null for unlimited. Zero is exhausted.
+    invocations_remaining: ?u32 = null,
 
     fn coversMethod(grant: Grant, method: []const u8) bool {
         for (grant.scopes) |scope| {
@@ -69,6 +83,12 @@ pub const Invocation = struct {
     principal: u128,
     /// The method the envelope invokes.
     method: []const u8,
+    /// The generation the envelope presents for the capability.
+    generation: u64 = 0,
+    /// The task the envelope claims to run under.
+    task: u128 = 0,
+    /// The current time in nanoseconds on the shared clock, for expiry.
+    now_ns: u64 = 0,
 };
 
 /// Why a binding was refused.
@@ -82,6 +102,16 @@ pub const Refusal = enum {
     /// The method name is longer than the boundary will match; out of scope by
     /// construction.
     method_too_long,
+    /// The presented generation predates a revocation of the capability.
+    stale_generation,
+    /// The capability has been revoked.
+    revoked,
+    /// The capability is past its expiry.
+    expired,
+    /// The capability is bound to a task other than the one the message claims.
+    task_binding_violated,
+    /// The capability's uses are spent.
+    invocations_exhausted,
 };
 
 /// The outcome of a binding check.
@@ -105,6 +135,22 @@ pub const Decision = union(enum) {
 pub fn check(grant: Grant, invocation: Invocation) Decision {
     if (invocation.method.len > max_method_bytes) return .{ .refuse = .method_too_long };
     if (grant.bound_principal != invocation.principal) return .{ .refuse = .principal_mismatch };
+
+    // Revalidate the capability's own state at use, not just its shape: a handle
+    // valid when it was minted may have been revoked, expired, spent, or bound to
+    // a task other than the one now presenting it.
+    if (grant.revoked) return .{ .refuse = .revoked };
+    if (invocation.generation != grant.generation) return .{ .refuse = .stale_generation };
+    if (grant.expires_at_ns) |expiry| {
+        if (invocation.now_ns >= expiry) return .{ .refuse = .expired };
+    }
+    if (grant.task_binding) |bound_task| {
+        if (invocation.task != bound_task) return .{ .refuse = .task_binding_violated };
+    }
+    if (grant.invocations_remaining) |remaining| {
+        if (remaining == 0) return .{ .refuse = .invocations_exhausted };
+    }
+
     if (!grant.coversMethod(invocation.method)) return .{ .refuse = .out_of_scope };
     return .authorize;
 }
@@ -122,6 +168,38 @@ const calendar_grant: Grant = .{
 
 fn invoke(principal: u128, method: []const u8) Invocation {
     return .{ .principal = principal, .method = method };
+}
+
+test "a revoked or stale-generation capability is refused at use" {
+    var grant = calendar_grant;
+    grant.generation = 3;
+    // The message presents the current generation and is authorized.
+    try std.testing.expect(check(grant, .{ .principal = holder, .method = "calendar.read", .generation = 3 }).authorized());
+    // A message presenting an older generation is a pre-revocation handle.
+    try std.testing.expectEqual(Refusal.stale_generation, check(grant, .{ .principal = holder, .method = "calendar.read", .generation = 2 }).refuse);
+
+    grant.revoked = true;
+    try std.testing.expectEqual(Refusal.revoked, check(grant, .{ .principal = holder, .method = "calendar.read", .generation = 3 }).refuse);
+}
+
+test "an expired capability is refused at its expiry" {
+    var grant = calendar_grant;
+    grant.expires_at_ns = 1_000;
+    try std.testing.expect(check(grant, .{ .principal = holder, .method = "calendar.read", .now_ns = 999 }).authorized());
+    try std.testing.expectEqual(Refusal.expired, check(grant, .{ .principal = holder, .method = "calendar.read", .now_ns = 1_000 }).refuse);
+}
+
+test "a task-bound capability refuses a message from another task" {
+    var grant = calendar_grant;
+    grant.task_binding = 0x7;
+    try std.testing.expect(check(grant, .{ .principal = holder, .method = "calendar.read", .task = 0x7 }).authorized());
+    try std.testing.expectEqual(Refusal.task_binding_violated, check(grant, .{ .principal = holder, .method = "calendar.read", .task = 0x9 }).refuse);
+}
+
+test "a spent capability is refused" {
+    var grant = calendar_grant;
+    grant.invocations_remaining = 0;
+    try std.testing.expectEqual(Refusal.invocations_exhausted, check(grant, .{ .principal = holder, .method = "calendar.read" }).refuse);
 }
 
 test "a method within a prefix scope is authorized" {
