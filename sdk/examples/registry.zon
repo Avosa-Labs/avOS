@@ -1,0 +1,10 @@
+.{
+    // The closed set of maintained SDK examples: the single source of truth the Zig
+    // registry resolves from and the example-check gate enforces against disk. A name
+    // here must be a real, building example — a directory with a manifest and source —
+    // and a real example must be listed here. Adding or renaming an example is a
+    // deliberate edit to this list, never a silent break of a documentation link.
+    .{ .name = "hello-agent", .path = "examples/hello-agent" },
+    .{ .name = "todo-app", .path = "examples/todo-app" },
+    .{ .name = "camera-capture", .path = "examples/camera-capture" },
+}

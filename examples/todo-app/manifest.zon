@@ -1,0 +1,16 @@
+.{
+    // todo-app's public contract. Both doors — the person's surface and the agent's
+    // capabilities — reach the same domain, and these are the capabilities the agent
+    // door registers. Reading and writing are the agent's own local operations; nothing
+    // here reaches off the device, so nothing here is held for approval.
+    .name = "todo-app",
+    .package = "example.todo-app",
+    .kind = .sdk_example,
+    .requested_capabilities = .{ "todo.read", "todo.write" },
+    .tools = .{
+        .{ .name = "todo.add", .requires_capability = "todo.write" },
+        .{ .name = "todo.complete", .requires_capability = "todo.write" },
+        .{ .name = "todo.list", .requires_capability = "todo.read" },
+    },
+    .signing = .developer,
+}

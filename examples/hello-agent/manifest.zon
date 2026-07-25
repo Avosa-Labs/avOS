@@ -1,0 +1,15 @@
+.{
+    // hello-agent's public contract: the capabilities it requests and the tools it
+    // exposes, each backed by one of those capabilities. The platform's agent host
+    // enforces this at runtime; the SDK validates its coherence at build time, and the
+    // example-check gate holds it identical to the tools the example actually registers.
+    .name = "hello-agent",
+    .package = "example.hello-agent",
+    .kind = .sdk_example,
+    .requested_capabilities = .{ "calendar.free_busy", "calendar.detail" },
+    .tools = .{
+        .{ .name = "availability.free_busy", .requires_capability = "calendar.free_busy" },
+        .{ .name = "availability.detail", .requires_capability = "calendar.detail" },
+    },
+    .signing = .developer,
+}
