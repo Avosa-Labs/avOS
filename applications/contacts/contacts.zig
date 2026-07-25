@@ -1,16 +1,20 @@
 //! Contacts, agent-native: the capabilities the address book is read and maintained
-//! through, with every read confined to the fields that were granted.
+//! through, over the real contacts domain, with every read confined to the granted
+//! fields.
 //!
-//! Adding and editing a contact are local changes an agent may make; reading is
-//! field-scoped so an agent asking for an email cannot sweep up addresses and birthdays
-//! with it. The capabilities are declared for discovery; the field-scope rule keeps a
-//! read to what its grant names.
-//!
-//! This module defines the app's capabilities and its field-scope rule; the shared
-//! frame gates and records.
+//! Adding, editing, and deleting are local changes an agent may make; reading is
+//! field-scoped. The capabilities are declared here for discovery, and each reaches the
+//! one domain that holds the real records and enforces the field scope.
 
 const std = @import("std");
 const framework = @import("../framework/agent_app.zig");
+const domain = @import("domain.zig");
+
+pub const Store = domain.Store;
+pub const App = framework.App;
+pub const Field = domain.Field;
+pub const FieldSet = domain.FieldSet;
+pub const fieldVisible = domain.fieldVisible;
 
 pub const tools = [_]framework.Tool{
     .{ .name = "contact.read", .required_capability = "contacts.read", .effect = .read_only },
@@ -19,26 +23,8 @@ pub const tools = [_]framework.Tool{
     .{ .name = "contact.delete", .required_capability = "contacts.write", .effect = .local_mutation },
 };
 
-const domain = @import("domain.zig");
-pub const Store = domain.Store;
-pub const App = framework.App;
-
-/// Assembles the contacts app over the shared frame: its domain, its registered
-/// capabilities, and the ledger every operation is recorded to. Both the human surface
-/// and an agent reach the one domain through this app.
 pub fn open(store: *Store, ledger: *framework.Ledger) App {
-    return .{ .name = "contacts", .domain = store.domain(), .tools = .{ .tools = &tools }, .ledger = ledger };
-}
-
-
-/// A field of a contact record.
-pub const Field = enum { name, phone, email, address, birthday, notes };
-pub const FieldSet = std.EnumSet(Field);
-
-/// Whether a requested field may be read under a grant. A read returns only fields the
-/// grant names.
-pub fn fieldVisible(granted: FieldSet, requested: Field) bool {
-    return granted.contains(requested);
+    return .{ .name = "Contacts", .domain = store.domain(), .tools = .{ .tools = &tools }, .ledger = ledger };
 }
 
 const testing = std.testing;
@@ -52,6 +38,6 @@ test "a read returns only the granted fields" {
 }
 
 test "maintaining the address book is the agent's own local change" {
-    try testing.expect(!tools[1].effect.needsApproval()); // contact.add
-    try testing.expect(!tools[2].effect.needsApproval()); // contact.edit
+    try testing.expect(!tools[1].effect.needsApproval());
+    try testing.expect(!tools[2].effect.needsApproval());
 }

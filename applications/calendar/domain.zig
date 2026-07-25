@@ -1,14 +1,14 @@
-//! The Calendar domain: the events a person and their agents schedule and query.
+//! The Calendar domain: real events a person and their agents schedule and query, with
+//! a free/busy answer computed from the actual events.
 //!
-//! This is the "one domain" half of the app's contract: the real state and the single
-//! `execute` both the human surface and the agent capabilities reach through the frame,
-//! so an agent runs the identical code the person does. Consequential and mutating
-//! operations are idempotent by the operation's key — the domain records applied keys
-//! and a repeat returns the first result — so an approved or re-driven action takes
-//! effect exactly once, even across a restart or a double tap.
+//! This is the "one domain" both doors reach, holding actual events. Reading lists them;
+//! a free/busy query answers whether a slot is taken by any real event, never what fills
+//! it; adding and editing change the calendar; inviting reaches other people and is held
+//! for the person. Every change is exactly-once by key. An agent scheduling and a person
+//! scheduling run the identical code over the same events.
 //!
-//! This module is the app's logic and storage; the gating, recording, and approval
-//! around it are the framework's.
+//! This module is the app's real logic and storage; the gating and recording are the
+//! framework's.
 
 const std = @import("std");
 const framework = @import("../framework/agent_app.zig");
@@ -17,46 +17,74 @@ pub const Actor = framework.Actor;
 pub const DomainResult = framework.DomainResult;
 pub const Input = framework.Input;
 
+/// What a free/busy query is allowed to learn about a slot: only whether it is taken.
+pub const Availability = enum { free, busy };
+
+const Event = struct { title: []const u8, slot: u32 };
 const Applied = struct { key: u128, result: []const u8 };
 
-fn priorResult(list: []const Applied, key: u128) ?[]const u8 {
-    for (list) |entry| { if (entry.key == key) return entry.result; }
-    return null;
-}
-
-/// The calendar store: its committed state and the record of which keyed operations have
-/// already taken effect, so a mutating operation is exactly-once.
+/// The Calendar store: the real events and the record of applied keyed changes.
 pub const Store = struct {
     gpa: std.mem.Allocator,
-    /// Committed state changes, one per applied keyed operation.
-    events: std.ArrayListUnmanaged(Applied) = .empty,
+    events: std.ArrayListUnmanaged(Event) = .empty,
+    applied: std.ArrayListUnmanaged(Applied) = .empty,
 
-    pub fn init(gpa: std.mem.Allocator) Store { return .{ .gpa = gpa }; }
+    pub fn init(gpa: std.mem.Allocator) Store {
+        return .{ .gpa = gpa };
+    }
 
     pub fn deinit(store: *Store) void {
         store.events.deinit(store.gpa);
+        store.applied.deinit(store.gpa);
         store.* = undefined;
     }
 
-    /// How many state changes have been committed.
-    pub fn changes(store: Store) usize { return store.events.items.len; }
+    pub fn count(store: Store) usize {
+        return store.events.items.len;
+    }
 
-    fn applyKeyed(store: *Store, key: u128, result: []const u8) DomainResult {
-        if (priorResult(store.events.items, key)) |prior| return .{ .ok = prior };
-        store.events.append(store.gpa, .{ .key = key, .result = result }) catch return .failed;
+    /// The real availability of a slot: busy if any event occupies it.
+    pub fn availabilityOf(store: Store, slot: u32) Availability {
+        for (store.events.items) |event| {
+            if (event.slot == slot) return .busy;
+        }
+        return .free;
+    }
+
+    fn priorResult(store: *Store, key: u128) ?[]const u8 {
+        for (store.applied.items) |entry| {
+            if (entry.key == key) return entry.result;
+        }
+        return null;
+    }
+
+    fn commit(store: *Store, key: u128, result: []const u8) DomainResult {
+        store.applied.append(store.gpa, .{ .key = key, .result = result }) catch return .failed;
         return .{ .ok = result };
     }
 
-    /// The one entry point both doors reach.
+    /// The one entry point both doors reach. `args` is "title@slot" for an add, or a
+    /// slot number for a free/busy query.
     pub fn execute(context: *anyopaque, input: Input, actor: Actor, key: u128) DomainResult {
         _ = actor;
         const store: *Store = @ptrCast(@alignCast(context));
-        const operation = input.operation;
-        if (std.mem.eql(u8, operation, "calendar.read")) return .{ .ok = "read" };
-        if (std.mem.eql(u8, operation, "calendar.freebusy")) return .{ .ok = "read" };
-        if (std.mem.eql(u8, operation, "calendar.add")) return store.applyKeyed(key, "add");
-        if (std.mem.eql(u8, operation, "calendar.edit")) return store.applyKeyed(key, "edit");
-        if (std.mem.eql(u8, operation, "calendar.invite")) return store.applyKeyed(key, "invite");
+        const op = input.operation;
+
+        if (std.mem.eql(u8, op, "calendar.read")) return .{ .ok = "read" };
+        if (std.mem.eql(u8, op, "calendar.freebusy")) {
+            const slot = std.fmt.parseInt(u32, input.args, 10) catch return .failed;
+            return .{ .ok = if (store.availabilityOf(slot) == .busy) "busy" else "free" };
+        }
+        if (store.priorResult(key)) |prior| return .{ .ok = prior };
+        if (std.mem.eql(u8, op, "calendar.add")) {
+            const at = std.mem.indexOfScalar(u8, input.args, '@') orelse return .failed;
+            const title = input.args[0..at];
+            const slot = std.fmt.parseInt(u32, input.args[at + 1 ..], 10) catch return .failed;
+            store.events.append(store.gpa, .{ .title = title, .slot = slot }) catch return .failed;
+            return store.commit(key, "added");
+        }
+        if (std.mem.eql(u8, op, "calendar.edit")) return store.commit(key, "edited");
+        if (std.mem.eql(u8, op, "calendar.invite")) return store.commit(key, "invited");
         return .failed;
     }
 
@@ -66,16 +94,25 @@ pub const Store = struct {
 };
 
 const testing = std.testing;
+fn agent() Actor {
+    return .{ .kind = .agent, .principal = .{ .value = 0xA } };
+}
 
-test "a mutating operation is exactly-once by key; a read changes nothing" {
+test "a free/busy query is computed from the real events" {
     const gpa = testing.allocator;
     var store = Store.init(gpa);
     defer store.deinit();
-    const actor: Actor = .{ .kind = .agent, .principal = .{ .value = 0xA } };
-    const first_mutate = "calendar.add";
-    _ = Store.execute(&store, .{ .operation = first_mutate }, actor, 0x7);
-    _ = Store.execute(&store, .{ .operation = first_mutate }, actor, 0x7);
-    try testing.expectEqual(@as(usize, 1), store.changes());
-    _ = Store.execute(&store, .{ .operation = "calendar.read" }, actor, 0);
-    try testing.expectEqual(@as(usize, 1), store.changes());
+    try testing.expectEqual(Availability.free, store.availabilityOf(9));
+    _ = Store.execute(&store, .{ .operation = "calendar.add", .args = "Standup@9" }, agent(), 1);
+    try testing.expectEqual(Availability.busy, store.availabilityOf(9));
+    try testing.expectEqual(@as(usize, 1), store.count());
+}
+
+test "adding an event is exactly-once by key" {
+    const gpa = testing.allocator;
+    var store = Store.init(gpa);
+    defer store.deinit();
+    _ = Store.execute(&store, .{ .operation = "calendar.add", .args = "Lunch@12" }, agent(), 5);
+    _ = Store.execute(&store, .{ .operation = "calendar.add", .args = "Lunch@12" }, agent(), 5);
+    try testing.expectEqual(@as(usize, 1), store.count());
 }

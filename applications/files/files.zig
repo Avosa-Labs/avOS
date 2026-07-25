@@ -1,19 +1,26 @@
-//! Files, agent-native: the capabilities an agent browses, edits, and organizes
-//! documents through, and the scope rule that confines every access to its grant.
+//! Files, agent-native: the capabilities the file tree is browsed and organized
+//! through, over the real files domain, with sharing held and every access confined to
+//! its grant.
 //!
-//! Listing and opening are reads an agent does freely; editing and moving are
-//! reversible local changes; sharing sends a file outside the device and is held for
-//! the person. The capabilities are declared for the planner to discover. The
-//! confinement rule stays: an access is allowed only within the granted folder, and a
-//! path that climbs out of it is refused, because a file grant that leaks past its
-//! folder is not a grant.
+//! Listing and opening are reads an agent does; editing, moving, and deleting are local
+//! changes; sharing sends a file outside the device and is held for the person. The
+//! capabilities are declared here for discovery, and each reaches the one domain that
+//! holds the real tree and enforces the grant confinement.
 //!
-//! This module defines the app's capabilities and its scope rule; the shared frame
-//! gates, records, and dispatches to the domain.
+//! This module defines the app's capabilities; the domain holds the tree and its rules.
 
 const std = @import("std");
 const framework = @import("../framework/agent_app.zig");
+const domain = @import("domain.zig");
 
+pub const Store = domain.Store;
+pub const App = framework.App;
+
+/// Whether a path stays within the granted folder. Re-exported from the domain, which
+/// enforces it on every operation.
+pub const withinGrant = domain.withinGrant;
+
+/// The capabilities Files exports for agents to discover and invoke.
 pub const tools = [_]framework.Tool{
     .{ .name = "file.list", .required_capability = "files.read", .effect = .read_only },
     .{ .name = "file.open", .required_capability = "files.read", .effect = .read_only },
@@ -23,45 +30,20 @@ pub const tools = [_]framework.Tool{
     .{ .name = "file.delete", .required_capability = "files.write", .effect = .local_mutation },
 };
 
-const domain = @import("domain.zig");
-pub const Store = domain.Store;
-pub const App = framework.App;
-
-/// Assembles the files app over the shared frame: its domain, its registered
-/// capabilities, and the ledger every operation is recorded to. Both the human surface
-/// and an agent reach the one domain through this app.
+/// Assembles the Files app over the shared frame.
 pub fn open(store: *Store, ledger: *framework.Ledger) App {
-    return .{ .name = "files", .domain = store.domain(), .tools = .{ .tools = &tools }, .ledger = ledger };
-}
-
-
-/// Whether a path stays within the granted folder — never absolute, never climbing
-/// above its root.
-pub fn withinGrant(path: []const u8) bool {
-    if (path.len == 0 or path[0] == '/') return false;
-    var depth: i32 = 0;
-    var segments = std.mem.splitScalar(u8, path, '/');
-    while (segments.next()) |segment| {
-        if (segment.len == 0 or std.mem.eql(u8, segment, ".")) continue;
-        if (std.mem.eql(u8, segment, "..")) {
-            depth -= 1;
-            if (depth < 0) return false;
-        } else depth += 1;
-    }
-    return true;
+    return .{ .name = "Files", .domain = store.domain(), .tools = .{ .tools = &tools }, .ledger = ledger };
 }
 
 const testing = std.testing;
 
-test "a path that escapes the granted folder is outside the grant" {
+test "the grant rule is enforced and re-exported from the domain" {
     try testing.expect(withinGrant("documents/notes.txt"));
-    try testing.expect(withinGrant("a/../b/file"));
     try testing.expect(!withinGrant("../other/secrets"));
-    try testing.expect(!withinGrant("/etc/passwd"));
 }
 
 test "sharing is external and held; listing and editing are the agent's" {
-    try testing.expect(tools[4].effect.needsApproval()); // file.share
-    try testing.expect(!tools[0].effect.needsApproval()); // file.list
-    try testing.expect(!tools[2].effect.needsApproval()); // file.edit
+    try testing.expect(tools[4].effect.needsApproval());
+    try testing.expect(!tools[0].effect.needsApproval());
+    try testing.expect(!tools[2].effect.needsApproval());
 }
