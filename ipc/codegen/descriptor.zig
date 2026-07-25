@@ -20,6 +20,7 @@
 //! time.
 
 const std = @import("std");
+const routing = @import("../routing/routing.zig");
 
 /// The largest method name a descriptor may declare, kept in step with the
 /// envelope, router, and binding bounds so a generated stub cannot name a method
@@ -111,6 +112,24 @@ pub fn isValid(descriptor: Descriptor) bool {
     return true;
 }
 
+pub const ReconcileError = error{
+    /// A method the descriptor declares is not delivered by any route, so a
+    /// client generated from it would invoke a method that reaches no service.
+    MethodNotRouted,
+};
+
+/// Confirms every method a descriptor declares is delivered by the routing table.
+///
+/// A descriptor and a route table are two views of the same surface, written
+/// separately; if they drift, a client is generated for a method the router will
+/// refuse. This reconciles them: a descriptor method with no route is a defect
+/// caught here rather than at runtime as a mysterious `unavailable`.
+pub fn reconcileWithRoutes(descriptor: Descriptor, table: routing.Table) ReconcileError!void {
+    for (descriptor.methods) |method| {
+        if (!table.handles(method.name)) return ReconcileError.MethodNotRouted;
+    }
+}
+
 /// Emits a client stub for a descriptor.
 ///
 /// The descriptor is validated first, so an invalid one never produces output —
@@ -149,6 +168,23 @@ const sample_methods = [_]Method{
 };
 
 const sample_descriptor: Descriptor = .{ .service = "calendar", .methods = &sample_methods };
+
+test "a descriptor reconciles with a routing table that serves its methods" {
+    const table_routes = [_]routing.Route{
+        .{ .method = "calendar.read", .service = 1 },
+        .{ .method = "calendar.write", .service = 1 },
+        .{ .method = "calendar.share", .service = 1 },
+    };
+    try reconcileWithRoutes(sample_descriptor, .{ .routes = &table_routes });
+}
+
+test "a descriptor method with no route is a reconciliation error" {
+    // The table serves only read; the descriptor also declares write and share.
+    const table_routes = [_]routing.Route{
+        .{ .method = "calendar.read", .service = 1 },
+    };
+    try std.testing.expectError(ReconcileError.MethodNotRouted, reconcileWithRoutes(sample_descriptor, .{ .routes = &table_routes }));
+}
 
 test "a descriptor emits a deterministic client stub" {
     var buffer: [1024]u8 = undefined;
