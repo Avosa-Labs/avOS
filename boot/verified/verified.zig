@@ -63,6 +63,12 @@ pub fn Floors(comptime stage_count: usize) type {
         const Self = @This();
 
         highest: [stage_count]u32 = @splat(0),
+        /// The monotonic-counter value these floors were last sealed at. The
+        /// counter lives in the secure element and only rises; sealing binds the
+        /// floor state to it so a rollback of the writable storage the floors
+        /// live in is detectable — the restored floors carry an old seal that no
+        /// longer matches the counter the hardware still holds.
+        sealed_counter: u64 = 0,
 
         pub fn forStage(floors: Self, stage: usize) u32 {
             return floors.highest[stage];
@@ -72,6 +78,22 @@ pub fn Floors(comptime stage_count: usize) type {
         /// rather than being rejected here; refusing to run is `verify`'s job.
         pub fn raise(floors: *Self, stage: usize, version: u32) void {
             floors.highest[stage] = @max(floors.highest[stage], version);
+        }
+
+        /// Binds the current floor state to a counter value. The caller advances
+        /// the secure element's monotonic counter whenever the floors change and
+        /// seals them to the new value, so the floors and the counter move
+        /// together.
+        pub fn seal(floors: *Self, counter: u64) void {
+            floors.sealed_counter = counter;
+        }
+
+        /// Whether the floors still match the counter the hardware holds. A
+        /// mismatch means the floor storage was rolled back to an earlier state
+        /// while the counter — which cannot be lowered — moved on, so the floors
+        /// must not be trusted and boot fails closed.
+        pub fn isSealedAt(floors: Self, counter: u64) bool {
+            return floors.sealed_counter == counter;
         }
     };
 }
@@ -177,6 +199,24 @@ test "raising one stage's floor leaves the others alone" {
     try std.testing.expectEqual(@as(u32, 0), floors.forStage(0));
     try std.testing.expectEqual(@as(u32, 0), floors.forStage(2));
     try std.testing.expectEqual(@as(u32, 0), floors.forStage(3));
+}
+
+test "sealed floors detect a rollback of their storage against the counter" {
+    var floors: TestFloors = .{};
+    floors.raise(0, 5);
+    // The secure element's counter advanced to 3 when these floors were written.
+    floors.seal(3);
+    try std.testing.expect(floors.isSealedAt(3));
+
+    // The device later advances the counter to 4 (a newer floor was committed).
+    // If the floor storage is then rolled back to this older state, its seal of
+    // 3 no longer matches the counter the hardware holds, so it is not trusted.
+    try std.testing.expect(!floors.isSealedAt(4));
+
+    // Wiping the storage entirely resets the seal to zero, which also fails to
+    // match any advanced counter.
+    const wiped: TestFloors = .{};
+    try std.testing.expect(!wiped.isSealedAt(4));
 }
 
 test "verification changes nothing about the device" {
