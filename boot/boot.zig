@@ -13,6 +13,7 @@ pub const chain = @import("chain/chain.zig");
 pub const early_ui = @import("early-ui/early_ui.zig");
 pub const measurements = @import("measurements/measurements.zig");
 pub const recovery = @import("recovery/recovery.zig");
+pub const slots = @import("slots/slots.zig");
 pub const verified = @import("verified/verified.zig");
 
 test {
@@ -20,5 +21,6 @@ test {
     _ = early_ui;
     _ = measurements;
     _ = recovery;
+    _ = slots;
     _ = verified;
 }
