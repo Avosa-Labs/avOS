@@ -102,6 +102,76 @@ pub const Table = struct {
     }
 };
 
+/// A bounded per-service mailbox: a queue with a ceiling and a backpressure
+/// signal.
+///
+/// A resolved message is enqueued for its service to consume, but a queue with no
+/// ceiling is an exhaustion vector — a fast producer or a stalled consumer grows
+/// it without bound. This holds a fixed number of pending messages and tells a
+/// producer when it is full, which is the backpressure signal: the producer must
+/// slow or shed rather than push into a queue that cannot grow. The consumer
+/// takes messages in arrival order, so ordering per service is preserved.
+///
+/// It owns no allocation; the backing slots are provided by the caller, sized to
+/// the ceiling the service's resource budget allows.
+pub fn Mailbox(comptime T: type) type {
+    return struct {
+        const Self = @This();
+
+        slots: []T,
+        head: usize = 0,
+        len: usize = 0,
+
+        /// Whether an offered message was queued or the mailbox was full.
+        pub const Offer = enum { accepted, full };
+
+        /// Enqueues a message, or reports the mailbox is full so the producer
+        /// observes backpressure instead of overrunning the ceiling.
+        pub fn offer(mailbox: *Self, item: T) Offer {
+            if (mailbox.len == mailbox.slots.len) return .full;
+            const tail = (mailbox.head + mailbox.len) % mailbox.slots.len;
+            mailbox.slots[tail] = item;
+            mailbox.len += 1;
+            return .accepted;
+        }
+
+        /// Dequeues the oldest message, or null when empty.
+        pub fn take(mailbox: *Self) ?T {
+            if (mailbox.len == 0) return null;
+            const item = mailbox.slots[mailbox.head];
+            mailbox.head = (mailbox.head + 1) % mailbox.slots.len;
+            mailbox.len -= 1;
+            return item;
+        }
+
+        pub fn isFull(mailbox: Self) bool {
+            return mailbox.len == mailbox.slots.len;
+        }
+
+        pub fn count(mailbox: Self) usize {
+            return mailbox.len;
+        }
+    };
+}
+
+test "a mailbox accepts up to its ceiling then signals backpressure" {
+    var slots: [2]u32 = undefined;
+    var mailbox: Mailbox(u32) = .{ .slots = &slots };
+
+    try std.testing.expectEqual(Mailbox(u32).Offer.accepted, mailbox.offer(10));
+    try std.testing.expectEqual(Mailbox(u32).Offer.accepted, mailbox.offer(20));
+    // Full: the producer is told to back off rather than growing the queue.
+    try std.testing.expectEqual(Mailbox(u32).Offer.full, mailbox.offer(30));
+    try std.testing.expect(mailbox.isFull());
+
+    // Consumed in arrival order, and space frees for the next offer.
+    try std.testing.expectEqual(@as(?u32, 10), mailbox.take());
+    try std.testing.expectEqual(Mailbox(u32).Offer.accepted, mailbox.offer(30));
+    try std.testing.expectEqual(@as(?u32, 20), mailbox.take());
+    try std.testing.expectEqual(@as(?u32, 30), mailbox.take());
+    try std.testing.expectEqual(@as(?u32, null), mailbox.take());
+}
+
 const sample_routes = [_]Route{
     .{ .method = "calendar.read", .service = 10 },
     .{ .method = "calendar.write", .service = 10 },
