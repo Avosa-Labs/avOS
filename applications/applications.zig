@@ -33,6 +33,7 @@ pub const contacts_domain = @import("contacts/domain.zig");
 pub const contacts = @import("contacts/contacts.zig");
 pub const settings_domain = @import("settings/domain.zig");
 pub const settings = @import("settings/settings.zig");
+pub const settings_surface = @import("settings/surface.zig");
 pub const store_domain = @import("store/domain.zig");
 pub const store = @import("store/store.zig");
 pub const calculator = @import("calculator/calculator.zig");
@@ -57,6 +58,7 @@ test {
     _ = contacts;
     _ = settings_domain;
     _ = settings;
+    _ = settings_surface;
     _ = store_domain;
     _ = store;
     _ = calculator;

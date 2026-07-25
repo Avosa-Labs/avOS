@@ -374,6 +374,7 @@ pub fn build(b: *std.Build) void {
 
     applications_module.addImport("core", core_module);
     applications_module.addImport("agents", agents_module);
+    applications_module.addImport("design", design_module);
 
     const networking_module = b.createModule(.{
         .root_source_file = b.path("networking/networking.zig"),
