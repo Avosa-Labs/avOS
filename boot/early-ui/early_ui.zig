@@ -82,6 +82,12 @@ pub const Surface = struct {
         // Longer text is wrapped on word boundaries rather than truncated. A
         // truncated sentence is a sentence whose meaning depends on what was
         // cut, and the whole point of this surface is being understood.
+        //
+        // The wrap never splits a UTF-8 codepoint: a message may be in any
+        // script, and a line that ended in the middle of a multibyte character
+        // would render as a broken glyph. The line width is a byte width because
+        // the cell buffer is bytes, so a script whose characters are several
+        // bytes each simply shows fewer of them per line, still whole.
         var remaining = text;
         while (remaining.len > 0 and surface.used < rows) {
             const take = if (remaining.len <= columns)
@@ -89,7 +95,7 @@ pub const Surface = struct {
             else if (std.mem.lastIndexOfScalar(u8, remaining[0 .. columns + 1], ' ')) |space|
                 space
             else
-                columns;
+                codepointBoundary(remaining, columns);
 
             @memcpy(surface.cells[surface.used][0..take], remaining[0..take]);
             surface.used += 1;
@@ -97,13 +103,56 @@ pub const Surface = struct {
         }
     }
 
+    /// The largest length no greater than `limit` that ends on a UTF-8 codepoint
+    /// boundary, so a wrap never cuts a multibyte character in half.
+    fn codepointBoundary(text: []const u8, limit: usize) usize {
+        var end = @min(limit, text.len);
+        // The end of the string is always a boundary; only an interior cut can
+        // land mid-character.
+        if (end >= text.len) return end;
+        // A continuation byte is 0b10xxxxxx; back up off any of them.
+        while (end > 0 and (text[end] & 0xC0) == 0x80) end -= 1;
+        return end;
+    }
+
     fn blank(surface: *Surface) void {
         if (surface.used < rows) surface.used += 1;
     }
 };
 
-/// Draws the surface for a state.
+/// The fixed strings this surface shows, named rather than written inline so a
+/// locale can supply its own without the render logic changing.
+pub const Message = enum { repairing, do_not_power_off };
+
+/// The locale to render in. Pre-OS, so the set is small and the catalog is
+/// static, but the seam is here: adding a locale is adding a case, not editing
+/// the render.
+pub const Locale = enum { english, arabic };
+
+/// The string for a message in a locale. The Arabic strings are right-to-left
+/// and multibyte; the codepoint-safe wrap renders them without breaking a glyph.
+pub fn catalog(locale: Locale, message: Message) []const u8 {
+    return switch (locale) {
+        .english => switch (message) {
+            .repairing => "repairing this device",
+            .do_not_power_off => "do not turn the device off",
+        },
+        .arabic => switch (message) {
+            .repairing => "\u{062C}\u{0627}\u{0631}\u{064A} \u{0625}\u{0635}\u{0644}\u{0627}\u{062D} \u{0627}\u{0644}\u{062C}\u{0647}\u{0627}\u{0632}",
+            .do_not_power_off => "\u{0644}\u{0627} \u{062A}\u{0648}\u{0642}\u{0641} \u{062A}\u{0634}\u{063A}\u{064A}\u{0644} \u{0627}\u{0644}\u{062C}\u{0647}\u{0627}\u{0632}",
+        },
+    };
+}
+
+/// Draws the surface for a state in English.
 pub fn render(state: State) Surface {
+    return renderLocalized(state, .english);
+}
+
+/// Draws the surface for a state in a given locale. The fixed strings come from
+/// the catalog; the codepoint-safe wrap keeps a right-to-left, multibyte script
+/// whole within the grid.
+pub fn renderLocalized(state: State, locale: Locale) Surface {
     var surface: Surface = .{};
     switch (state) {
         .halted => |halted| {
@@ -116,11 +165,11 @@ pub fn render(state: State) Surface {
             }
         },
         .recovering => |progress| {
-            surface.write("repairing this device");
+            surface.write(catalog(locale, .repairing));
             surface.blank();
             surface.write(bar(progress.progress));
             surface.blank();
-            surface.write("do not turn the device off");
+            surface.write(catalog(locale, .do_not_power_off));
         },
         .starting => surface.write("starting"),
     }
@@ -298,4 +347,27 @@ test "a device that is merely slow says so without alarming anyone" {
     try std.testing.expect(surface.contains("starting"));
     try std.testing.expect(!surface.contains("could not"));
     try std.testing.expect(!surface.contains("support"));
+}
+
+test "a right-to-left multibyte message renders whole within the grid" {
+    const surface = renderLocalized(.{ .recovering = .{ .progress = 40 } }, .arabic);
+    // The Arabic string is present intact — no codepoint was split by the wrap.
+    try std.testing.expect(surface.contains(catalog(.arabic, .repairing)));
+    try std.testing.expect(surface.contains(catalog(.arabic, .do_not_power_off)));
+
+    // Every line is valid UTF-8: a broken wrap would leave a stray continuation
+    // byte that fails validation.
+    for (surface.lines()) |line| {
+        const trimmed = std.mem.trimEnd(u8, &line, " ");
+        try std.testing.expect(std.unicode.utf8ValidateSlice(trimmed));
+    }
+}
+
+test "the wrap backs off a codepoint boundary rather than splitting a character" {
+    // A run of three-byte characters longer than a line: the boundary helper
+    // must return a multiple of three, never a byte mid-character.
+    const three_byte = "\u{20AC}" ** 20; // 60 bytes of one 3-byte character (euro)
+    const cut = Surface.codepointBoundary(three_byte, columns);
+    try std.testing.expectEqual(@as(usize, 0), cut % 3);
+    try std.testing.expect(cut <= columns);
 }
