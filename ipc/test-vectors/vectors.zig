@@ -113,6 +113,63 @@ fn hex(digest: [Sha256.digest_length]u8) [Sha256.digest_length * 2]u8 {
     return std.fmt.bytesToHex(digest, .lower);
 }
 
+test "an older reader accepts a newer-minor message and skips its unknown field" {
+    // Encode at the current version, then present it as a newer minor with an
+    // extra length-prefixed field the current build does not know. An older
+    // reader must accept it, keeping the fields it understands and skipping the
+    // rest — the old-reader/new-writer compatibility the versioning promises.
+    var base: [envelope.max_message_bytes]u8 = undefined;
+    const encoded = try envelope.encode(vectors[0].message, &base);
+
+    var newer: [envelope.max_message_bytes]u8 = undefined;
+    @memcpy(newer[0..encoded.len], encoded);
+    // Bump the minor version (u16 at offset 6, after protocol and major).
+    newer[6] = envelope.current_version.minor + 1;
+    // Append an unknown field: a u32 length then that many bytes.
+    var cursor = encoded.len;
+    std.mem.writeInt(u32, newer[cursor..][0..4], 3, .little);
+    cursor += 4;
+    @memcpy(newer[cursor..][0..3], &[_]u8{ 0xAA, 0xBB, 0xCC });
+    cursor += 3;
+
+    const decoded = try envelope.decode(newer[0..cursor]);
+    // The known fields survive unchanged; only the minor rose.
+    try std.testing.expectEqual(vectors[0].message.correlation, decoded.correlation);
+    try std.testing.expectEqualStrings(vectors[0].message.method, decoded.method);
+    try std.testing.expectEqual(@as(u16, envelope.current_version.minor + 1), decoded.version.minor);
+}
+
+/// Writes every vector as a language-neutral line — name, hex-encoded canonical
+/// bytes, and the golden digest — so a second implementation can diff against the
+/// same bytes rather than trusting this one's in-process assertions. This is what
+/// makes the vectors shared across runtimes, not merely checked within Zig.
+pub fn exportVectors(writer: *std.Io.Writer) (envelope.DecodeError || std.Io.Writer.Error)!void {
+    var buffer: [envelope.max_message_bytes]u8 = undefined;
+    for (vectors) |vector| {
+        const encoded = try envelope.encode(vector.message, &buffer);
+        try writer.print("{s} ", .{vector.name});
+        for (encoded) |byte| try writer.print("{x:0>2}", .{byte});
+        try writer.print(" {s}\n", .{vector.digest_hex});
+    }
+}
+
+test "the exported vectors are stable and cover every vector" {
+    var first: [8192]u8 = undefined;
+    var second: [8192]u8 = undefined;
+    var writer_first = std.Io.Writer.fixed(&first);
+    var writer_second = std.Io.Writer.fixed(&second);
+    try exportVectors(&writer_first);
+    try exportVectors(&writer_second);
+
+    // Deterministic, and one line per vector so nothing is silently dropped.
+    try std.testing.expectEqualStrings(writer_first.buffered(), writer_second.buffered());
+    var lines: usize = 0;
+    for (writer_first.buffered()) |byte| {
+        if (byte == '\n') lines += 1;
+    }
+    try std.testing.expectEqual(vectors.len, lines);
+}
+
 test "malformed messages are rejected with the right error" {
     // A base encoding of a valid request, then targeted corruptions. Each must
     // fail to decode, and with the specific error, so the decoder's rejections
