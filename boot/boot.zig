@@ -14,6 +14,7 @@ pub const early_ui = @import("early-ui/early_ui.zig");
 pub const measurements = @import("measurements/measurements.zig");
 pub const recovery = @import("recovery/recovery.zig");
 pub const slots = @import("slots/slots.zig");
+pub const recovery_integration = @import("tests/recovery_integration.zig");
 pub const verified = @import("verified/verified.zig");
 
 test {
@@ -22,5 +23,6 @@ test {
     _ = measurements;
     _ = recovery;
     _ = slots;
+    _ = recovery_integration;
     _ = verified;
 }

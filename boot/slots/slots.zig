@@ -63,7 +63,7 @@ pub const Slots = struct {
         return &slots.info[@intFromEnum(slot)];
     }
 
-    fn get(slots: Slots, slot: Slot) SlotInfo {
+    pub fn get(slots: Slots, slot: Slot) SlotInfo {
         return slots.info[@intFromEnum(slot)];
     }
 
