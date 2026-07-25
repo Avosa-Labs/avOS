@@ -7,6 +7,7 @@ const compat = @import("compat");
 const io_adapters = compat.io;
 const fb = @import("framebuffer.zig");
 const paint = @import("paint.zig");
+const phone = @import("phone.zig");
 const home = @import("home.zig");
 const theme = @import("design").theme;
 
@@ -22,10 +23,17 @@ pub fn main(init: std.process.Init) !u8 {
     const args = try io_adapters.args(init, arena);
     const output = if (args.len > 1) args[1] else "home.png";
 
-    var target = try fb.Framebuffer.init(gpa, home.width, home.height, paint.sample(theme.base));
+    var target = try fb.Framebuffer.init(gpa, phone.window_w, phone.window_h, paint.sample(theme.base));
     defer target.deinit();
 
-    home.render(&target);
+    phone.renderDevice(&target);
+    var screen = try phone.blankScreen(gpa);
+    defer screen.deinit();
+    phone.screenWash(&screen);
+    phone.statusBar(&screen);
+    home.render(&screen, home.demo, 0.0);
+    phone.homeIndicator(&screen);
+    phone.composite(&target, screen);
 
     const png = try target.encodePng(gpa);
     defer gpa.free(png);

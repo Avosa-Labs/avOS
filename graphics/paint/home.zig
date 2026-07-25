@@ -1,15 +1,11 @@
-//! The home screen: the day arranged by agents, composed into one rendered frame.
+//! The home screen: the day arranged by agents, on the light phone screen.
 //!
-//! This is the first full surface the render pipeline draws — everything below it (framebuffer,
-//! painter, icons, text) exists so that this can be built as a plain composition. The screen is the
-//! design's home: a calm dark wallpaper with a soft agent-toned glow, a greeting, an agent-activity card
-//! that names what an agent just did, a grid of app tiles each with its label, and a dock of the primary
-//! apps. Nothing here decides anything — it lays out and paints — so a caller can produce the home frame
-//! deterministically and diff it against the reference. The layout is expressed in one function over a
-//! framebuffer; later the same composition is driven from live shell state instead of the fixed
-//! demonstration content.
-//!
-//! Rendered portrait at a phone's proportions.
+//! This is the dashboard the reference design opens to — a light surface with a greeting, a command bar
+//! that invites the next instruction, a live "in motion" list of what the agents are doing, the active
+//! task drawn as a small flow graph, and the dock. It renders its content onto a screen framebuffer the
+//! device frame has already washed light; the status bar, home indicator, and bezel are added around it
+//! by the compositor. Everything here is a plain composition driven by a `Model` the live shell fills
+//! from real agent state, so the frame is deterministic and the same layout serves demo and live.
 
 const std = @import("std");
 const fb = @import("framebuffer.zig");
@@ -20,136 +16,185 @@ const text = @import("text.zig");
 const theme = @import("design").theme;
 
 const Framebuffer = fb.Framebuffer;
-const App = iconography.App;
 
-pub const width: u32 = 390;
-pub const height: u32 = 844;
-
-const Cell = struct { app: App, label: []const u8 };
-
-const grid = [_]Cell{
-    .{ .app = .phone, .label = "Phone" },     .{ .app = .messages, .label = "Messages" },
-    .{ .app = .mail, .label = "Mail" },       .{ .app = .calendar, .label = "Calendar" },
-    .{ .app = .camera, .label = "Camera" },   .{ .app = .maps, .label = "Maps" },
-    .{ .app = .weather, .label = "Weather" }, .{ .app = .notes, .label = "Notes" },
-    .{ .app = .health, .label = "Health" },   .{ .app = .files, .label = "Files" },
-    .{ .app = .agents, .label = "Agents" },   .{ .app = .settings, .label = "Settings" },
-};
-
-const dock = [_]App{ .phone, .messages, .camera, .agents };
+const w: u32 = theme.screen_pro_w;
 
 fn s(colour: theme.Colour) fb.Rgba {
     return paint.sample(colour);
 }
 
-/// The agent-activity card at the top of home — what an agent just did, in a line the person can act
-/// on. The live shell fills this from real agent state; the demo has the same shape.
-pub const AgentCard = struct { title: []const u8, subtitle: []const u8 };
+/// One "in motion" task line on home: a titled row with a coloured presence dot.
+pub const Task = struct { title: []const u8, note: []const u8, hue: theme.Colour };
 
-pub const demo_card = AgentCard{ .title = "Planner arranged your day", .subtitle = "Held your afternoon. Tap to review." };
+/// What the home screen shows, filled from live state.
+pub const Model = struct {
+    greeting: []const u8 = "Good morning",
+    day_line: []const u8 = "Today",
+    tasks: []const Task = &.{},
+    active_title: ?[]const u8 = null,
+};
 
-/// Renders the home screen with a given agent-activity card.
-pub fn renderWith(target: *Framebuffer, agent_card: AgentCard) void {
-    renderHome(target, agent_card);
-}
+pub const demo = Model{
+    .greeting = "Good morning, Noel",
+    .day_line = "Tuesday \u{00B7} 2 agents working",
+    .tasks = &.{
+        .{ .title = "Booking your dentist", .note = "just now \u{00B7} spinning up agents", .hue = theme.teal },
+    },
+    .active_title = "Planning your Lisbon trip",
+};
 
-/// Renders the home screen into a framebuffer sized `width` x `height`.
-pub fn render(target: *Framebuffer) void {
-    renderHome(target, demo_card);
-}
-
-fn renderHome(target: *Framebuffer, agent_card: AgentCard) void {
-    // Wallpaper: a vertical gradient from the base to the panel tone.
-    paint.paint(target, &.{.{ .vgradient = .{
-        .rect = .{ .x = 0, .y = 0, .w = width, .h = height },
-        .top = s(theme.base),
-        .bottom = s(theme.panel),
-    } }});
-    // A soft agent-toned glow near the top, built from faint stacked discs.
-    var glow: u8 = 0;
-    while (glow < 3) : (glow += 1) {
-        const r = @as(f32, @floatFromInt(220 - @as(u32, glow) * 40));
-        vector.fillDisc(target, @floatFromInt(width / 2), 120, r, .{ .r = theme.agent.red, .g = theme.agent.green, .b = theme.agent.blue, .a = 16 });
-    }
-
-    // Status bar: the time on the left, three indicator dots on the right.
-    _ = text.draw(target, 24, 40, "9:41", 17, s(theme.text_primary));
-    var dot: u8 = 0;
-    while (dot < 3) : (dot += 1) {
-        vector.fillDisc(target, @floatFromInt(width - 24 - @as(u32, dot) * 12), 34, 3, s(theme.text_secondary));
-    }
+/// Renders the home content onto a light screen framebuffer. `t` is elapsed seconds, used for the
+/// living motion (the glow dots breathe, the orb turns); pass 0 for a still frame.
+pub fn render(screen: *Framebuffer, model: Model, t: f32) void {
+    const pad: i32 = 22;
 
     // Greeting.
-    _ = text.draw(target, 24, 96, "Good morning", 15, s(theme.text_secondary));
-    _ = text.draw(target, 24, 126, "Your day, arranged by agents", 14, s(theme.agent));
+    _ = text.draw(screen, @floatFromInt(pad), 74, model.greeting, 19, s(theme.screen_text));
+    _ = text.draw(screen, @floatFromInt(pad), 94, model.day_line, 11.5, s(theme.screen_text_muted));
 
-    // Agent activity card.
-    const card: paint.Rect = .{ .x = 24, .y = 150, .w = width - 48, .h = 74 };
-    paint.paint(target, &.{.{ .rounded = .{ .rect = card, .radius = theme.radius_lg, .colour = s(theme.surface) } }});
-    vector.fillDisc(target, 52, 187, 8, s(theme.agent)); // agent presence dot
-    _ = text.draw(target, 74, 183, agent_card.title, 13, s(theme.text_primary));
-    _ = text.draw(target, 74, 204, agent_card.subtitle, 11, s(theme.text_secondary));
-    // Chevron on the right.
-    vector.strokePolyline(target, &.{ .{ .x = width - 44, .y = 180 }, .{ .x = width - 38, .y = 187 }, .{ .x = width - 44, .y = 194 } }, 2, s(theme.text_secondary), false);
+    // Command bar: a white pill with the conic AI orb and a soft prompt.
+    const bar: paint.Rect = .{ .x = pad, .y = 108, .w = @intCast(w - @as(u32, @intCast(pad)) * 2), .h = 50 };
+    card(screen, bar, theme.radius_xl, false);
+    orb(screen, @floatFromInt(bar.x + 26), @floatFromInt(bar.y + 25), 10, t);
+    _ = text.draw(screen, @floatFromInt(bar.x + 46), @floatFromInt(bar.y + 30), "What should we do next?", 13, s(theme.screen_text_faint));
 
-    // App grid: 4 columns, 3 rows.
-    const cols: u32 = 4;
-    const tile: u32 = 62;
-    const margin: u32 = 28;
-    const gap: u32 = (width - 2 * margin - cols * tile) / (cols - 1);
-    const grid_top: u32 = 262;
-    const row_pitch: u32 = 96;
-    for (grid, 0..) |cell, index| {
-        const col: u32 = @intCast(index % cols);
-        const row: u32 = @intCast(index / cols);
-        const x: i32 = @intCast(margin + col * (tile + gap));
-        const y: i32 = @intCast(grid_top + row * row_pitch);
-        iconography.draw(target, .{ .x = x, .y = y, .w = tile, .h = tile }, cell.app);
-        const centre_x = @as(f32, @floatFromInt(x)) + @as(f32, @floatFromInt(tile)) / 2.0;
-        text.drawCentred(target, centre_x, @as(f32, @floatFromInt(y + @as(i32, @intCast(tile)))) + 18.0, cell.label, 12, s(theme.text_primary));
+    // Section label.
+    _ = text.draw(screen, @floatFromInt(pad + 2), 190, "IN MOTION", 11, s(theme.screen_label));
+    const graph_label = "Task graph \u{203A}";
+    _ = text.draw(screen, @as(f32, @floatFromInt(w)) - @as(f32, @floatFromInt(pad)) - text.measure(graph_label, 11), 190, graph_label, 11, s(theme.agent));
+
+    // In-motion task rows.
+    var y: i32 = 204;
+    for (model.tasks) |task| {
+        const row: paint.Rect = .{ .x = pad, .y = y, .w = @intCast(w - @as(u32, @intCast(pad)) * 2), .h = 52 };
+        card(screen, row, theme.radius_xl, false);
+        glowDot(screen, @floatFromInt(row.x + 22), @floatFromInt(row.y + 26), task.hue, t, 0.0);
+        _ = text.draw(screen, @floatFromInt(row.x + 40), @floatFromInt(row.y + 22), task.title, 12.5, s(theme.screen_text_soft));
+        _ = text.draw(screen, @floatFromInt(row.x + 40), @floatFromInt(row.y + 39), task.note, 10.5, s(theme.screen_text_muted));
+        y += @as(i32, @intCast(row.h)) + 10;
     }
 
-    // Dock: a raised bar with the primary apps.
-    const dock_h: u32 = 80;
-    const dock_rect: paint.Rect = .{ .x = 16, .y = @intCast(height - dock_h - 24), .w = width - 32, .h = dock_h };
-    paint.paint(target, &.{.{ .rounded = .{ .rect = dock_rect, .radius = theme.radius_xl, .colour = s(theme.surface_raised) } }});
-    const dock_tile: u32 = 52;
-    const dock_inner = @as(u32, @intCast(dock_rect.w)) - 40;
-    const dock_gap = (dock_inner - dock.len * dock_tile) / (dock.len - 1);
-    const dock_y: i32 = dock_rect.y + @as(i32, @intCast((dock_h - dock_tile) / 2));
-    for (dock, 0..) |app, index| {
-        const x: i32 = dock_rect.x + 20 + @as(i32, @intCast(index * (dock_tile + dock_gap)));
-        iconography.draw(target, .{ .x = x, .y = dock_y, .w = dock_tile, .h = dock_tile }, app);
+    // The active task: a tinted card with a small agent flow graph.
+    if (model.active_title) |title| {
+        const active: paint.Rect = .{ .x = pad, .y = y, .w = @intCast(w - @as(u32, @intCast(pad)) * 2), .h = 128 };
+        card(screen, active, theme.radius_xl + 4, true);
+        glowDot(screen, @floatFromInt(active.x + 22), @floatFromInt(active.y + 24), theme.agent, t, 0.0);
+        _ = text.draw(screen, @floatFromInt(active.x + 40), @floatFromInt(active.y + 20), title, 13.5, s(theme.screen_text_soft));
+        flowGraph(screen, active.x + 20, active.y + 52, active.w - 40, t);
+        y += @as(i32, @intCast(active.h)) + 10;
+    }
+
+    dock(screen);
+}
+
+// --- Pieces ---
+
+/// A white (or warm-tinted) card with the design's soft elevation.
+fn card(screen: *Framebuffer, rect: paint.Rect, radius: u16, tint: bool) void {
+    // A faint drop shadow: a tinted rounded rect offset below.
+    paint.paint(screen, &.{.{ .rounded = .{
+        .rect = .{ .x = rect.x, .y = rect.y + 8, .w = @intCast(rect.w), .h = @intCast(rect.h) },
+        .radius = radius,
+        .colour = .{ .r = 0x6a, .g = 0x4b, .b = 0xb0, .a = 22 },
+    } }});
+    paint.paint(screen, &.{.{ .rounded = .{
+        .rect = rect,
+        .radius = radius,
+        .colour = s(if (tint) theme.screen_card_tint else theme.screen_card),
+    } }});
+}
+
+/// The conic AI orb: approximated by a warm-to-cool stack that slowly turns.
+fn orb(screen: *Framebuffer, cx: f32, cy: f32, r: f32, t: f32) void {
+    const turn = t * 0.6;
+    vector.fillDisc(screen, cx, cy, r, s(theme.agent));
+    // Two offset highlights sweep around to suggest the conic gradient turning.
+    const a1 = turn;
+    const a2 = turn + 2.1;
+    vector.fillDisc(screen, cx + @cos(a1) * r * 0.5, cy + @sin(a1) * r * 0.5, r * 0.5, s(theme.coral));
+    vector.fillDisc(screen, cx + @cos(a2) * r * 0.5, cy + @sin(a2) * r * 0.5, r * 0.5, s(theme.sky));
+    vector.fillDisc(screen, cx, cy, r * 0.42, s(theme.agent_soft));
+}
+
+/// A presence dot that breathes: a coloured core inside a soft halo whose radius pulses.
+fn glowDot(screen: *Framebuffer, cx: f32, cy: f32, hue: theme.Colour, t: f32, phase: f32) void {
+    const pulse = 0.5 + 0.5 * @sin(t * 3.2 + phase);
+    const halo = 6.0 + pulse * 2.0;
+    vector.fillDisc(screen, cx, cy, halo, .{ .r = hue.red, .g = hue.green, .b = hue.blue, .a = 40 });
+    vector.fillDisc(screen, cx, cy, 4.5, s(hue));
+}
+
+/// A tiny agent task graph: a person node, an agent node that spins, and three branch endpoints joined
+/// by soft connector lines — the shape the design draws inside the active task.
+fn flowGraph(screen: *Framebuffer, x: i32, y: i32, width: u32, t: f32) void {
+    const fx: f32 = @floatFromInt(x);
+    const fy: f32 = @floatFromInt(y);
+    const line = s(.{ .red = 0xc9, .green = 0xbf, .blue = 0xe6, .alpha = 255 });
+    const a_x = fx + @as(f32, @floatFromInt(width)) * 0.36;
+    const ends_x = fx + @as(f32, @floatFromInt(width)) * 0.78;
+    // Connectors.
+    vector.strokePolyline(screen, &.{ .{ .x = fx + 10, .y = fy + 24 }, .{ .x = a_x, .y = fy + 24 } }, 2, line, false);
+    var b: u8 = 0;
+    while (b < 3) : (b += 1) {
+        const ey = fy + 8 + @as(f32, @floatFromInt(b)) * 16;
+        vector.strokePolyline(screen, &.{ .{ .x = a_x, .y = fy + 24 }, .{ .x = (a_x + ends_x) / 2, .y = ey }, .{ .x = ends_x, .y = ey } }, 2, line, false);
+        vector.fillDisc(screen, ends_x, ey, 7, s(theme.screen_card));
+        vector.strokeCircle(screen, ends_x, ey, 7, 1.5, s(theme.agent_soft));
+    }
+    // Person node (warm) and the spinning agent node.
+    vector.fillDisc(screen, fx + 10, fy + 24, 9, s(theme.coral));
+    orb(screen, a_x, fy + 24, 9, t);
+}
+
+/// The dock: a translucent bar carrying the primary apps.
+pub const dock_apps = [_]iconography.App{ .phone, .messages, .camera, .agents };
+
+fn dock(screen: *Framebuffer) void {
+    const dh: u32 = 76;
+    const rect: paint.Rect = .{ .x = 16, .y = @intCast(theme.screen_pro_h - dh - 26), .w = w - 32, .h = dh };
+    paint.paint(screen, &.{.{ .rounded = .{ .rect = rect, .radius = theme.radius_xl + 4, .colour = .{ .r = 0xff, .g = 0xff, .b = 0xff, .a = 200 } } }});
+    const tile: u32 = 52;
+    const inner = @as(u32, @intCast(rect.w)) - 44;
+    const gap = (inner - dock_apps.len * tile) / (dock_apps.len - 1);
+    const iy: i32 = rect.y + @as(i32, @intCast((dh - tile) / 2));
+    for (dock_apps, 0..) |app, i| {
+        const ix: i32 = rect.x + 22 + @as(i32, @intCast(i * (tile + gap)));
+        iconography.draw(screen, .{ .x = ix, .y = iy, .w = tile, .h = tile }, app);
     }
 }
 
 const testing = std.testing;
 
-test "the home screen fills the frame and draws its surfaces" {
-    var target = try Framebuffer.init(testing.allocator, width, height, s(theme.base));
-    defer target.deinit();
-    render(&target);
-    // The wallpaper is present at the very top.
-    const top = target.get(width / 2, 2);
-    try testing.expect(top.r != 0 or top.g != 0 or top.b != 0);
-    // The dock area near the bottom is a raised surface (lighter than the base).
-    const dock_px = target.get(width / 2, height - 40);
-    try testing.expect(dock_px.r >= theme.base.red);
-}
-
-test "the grid draws twelve app tiles with white glyphs" {
-    var target = try Framebuffer.init(testing.allocator, width, height, s(theme.base));
-    defer target.deinit();
-    render(&target);
-    // Count near-white pixels in the grid band; twelve labelled tiles produce many.
+test "home renders white cards on a light screen" {
+    var screen = try Framebuffer.init(testing.allocator, theme.screen_pro_w, theme.screen_pro_h, s(theme.screen_top));
+    defer screen.deinit();
+    render(&screen, demo, 0.0);
+    // The command-bar area holds white card pixels over the light wash.
     var whites: u32 = 0;
-    var y: u32 = 262;
-    while (y < 640) : (y += 1) {
-        var x: u32 = 0;
-        while (x < width) : (x += 1) {
-            const p = target.get(x, y);
-            if (p.r > 230 and p.g > 230 and p.b > 230) whites += 1;
+    var yy: u32 = 110;
+    while (yy < 156) : (yy += 1) {
+        var xx: u32 = 24;
+        while (xx < theme.screen_pro_w - 24) : (xx += 1) {
+            const p = screen.get(xx, yy);
+            if (p.r > 250 and p.g > 250 and p.b > 250) whites += 1;
         }
     }
-    try testing.expect(whites > 200);
+    try testing.expect(whites > 300);
+}
+
+test "home text is dark on the light screen" {
+    var screen = try Framebuffer.init(testing.allocator, theme.screen_pro_w, theme.screen_pro_h, s(theme.screen_top));
+    defer screen.deinit();
+    render(&screen, demo, 0.0);
+    // Somewhere in the greeting band there are near-black text pixels.
+    var darks: u32 = 0;
+    var yy: u32 = 60;
+    while (yy < 96) : (yy += 1) {
+        var xx: u32 = 22;
+        while (xx < 260) : (xx += 1) {
+            const p = screen.get(xx, yy);
+            if (p.r < 0x50 and p.g < 0x50 and p.b < 0x60) darks += 1;
+        }
+    }
+    try testing.expect(darks > 20);
 }
