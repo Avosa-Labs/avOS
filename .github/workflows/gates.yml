@@ -133,3 +133,32 @@ jobs:
             exit 1
           fi
           echo "ok  docs/PLATFORM_SPEC.md is not tracked"
+
+  commit-messages:
+    name: commit messages read as human notes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out
+        uses: actions/checkout@v5
+        with:
+          # The whole branch range is judged, so full history is needed.
+          fetch-depth: 0
+
+      # Every commit the pull request adds is checked for terse, human wording:
+      # no attribution, subject discipline, and no generated-prose body. A branch
+      # that reads as machine output is rejected before it can be squashed in.
+      - name: Lint each commit message on the branch
+        run: |
+          base='${{ github.event.pull_request.base.sha }}'
+          head='${{ github.event.pull_request.head.sha }}'
+          status=0
+          for commit in $(git rev-list "$base..$head"); do
+            message=$(mktemp)
+            git log -1 --format=%B "$commit" > "$message"
+            printf '\n--- %s ---\n' "$(git log -1 --format='%h %s' "$commit")"
+            # The commit-msg hook enforces subject discipline and no attribution,
+            # and chains to the tone check, so one call covers every rule.
+            infrastructure/development/hooks/commit-msg "$message" || status=1
+          done
+          exit $status
