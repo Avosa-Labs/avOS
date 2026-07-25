@@ -77,6 +77,7 @@ run_gate 'source-tracked' "$repository_root/infrastructure/ci/source-tracked.sh"
 run_gate 'convention-check' zig build convention-check
 run_gate 'standin-check' zig build standin-check
 run_gate 'image reproducibility' zig build source-repro
+run_gate 'palette-check' zig build palette-check
 run_gate 'brand-check' zig build brand-check
 run_gate 'brand-check (synthetic brand)' zig build brand-check "-Dbrand=$reference_brand"
 run_gate 'simulator (canonical demo)' zig build simulator -- --no-ledger

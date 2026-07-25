@@ -153,6 +153,11 @@ pub fn build(b: *std.Build) void {
             .description = "Verify no brand leak outside the brand resource layer",
         },
         .{
+            .name = "palette-check",
+            .root = "tools/palette-check/main.zig",
+            .description = "Verify raw colour is constructed only in the design token layer",
+        },
+        .{
             .name = "convention-check",
             .root = "tools/convention-check/main.zig",
             .description = "Verify authoring conventions: attribution, comments, and naming",
