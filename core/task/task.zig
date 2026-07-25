@@ -468,6 +468,55 @@ pub const Graph = struct {
         return graph.cancelSubtree(id, id);
     }
 
+    /// What applying a revocation did to a task.
+    pub const RevocationOutcome = enum {
+        /// Cancelled outright: the task had not started, or revocation was immediate.
+        cancelled,
+        /// A running task is winding down to its next cancellation point.
+        winding_down,
+        /// A running task keeps its current step but begins no new one.
+        allowed_to_finish,
+        /// Cancelled, and its already-committed effect must be compensated.
+        compensation_required,
+    };
+
+    /// Applies a revoked capability's behavior to a task that held it. The four
+    /// behaviors produce four distinct in-flight outcomes rather than all
+    /// collapsing to an immediate cancel, so a committed action is not torn down
+    /// mid-flight and a compensable one is flagged for undo.
+    pub fn revoke(
+        graph: *Graph,
+        id: identity.TaskId,
+        behavior: capability_model.RevocationBehavior,
+    ) CancelError!RevocationOutcome {
+        const task = graph.tasks.getPtr(id.value) orelse return error.InvalidInput;
+        if (task.state.isTerminal()) return .cancelled;
+        const was_running = task.state == .running;
+
+        switch (behavior) {
+            .cancel_immediately => {
+                _ = try graph.cancelSubtree(id, id);
+                return if (graph.tasks.getPtr(id.value).?.state == .cancelling)
+                    .winding_down
+                else
+                    .cancelled;
+            },
+            .prevent_next_step, .allow_atomic_completion => {
+                if (was_running) {
+                    // The step in flight finishes; cancellation blocks the next.
+                    task.cancellation_requested = true;
+                    return .allowed_to_finish;
+                }
+                _ = try graph.cancelSubtree(id, id);
+                return .cancelled;
+            },
+            .requires_compensation => {
+                _ = try graph.cancelSubtree(id, id);
+                return .compensation_required;
+            },
+        }
+    }
+
     fn cancelSubtree(
         graph: *Graph,
         id: identity.TaskId,
@@ -659,6 +708,47 @@ const Fixture = struct {
         });
     }
 };
+
+test "revocation behavior decides how in-flight work is treated" {
+    const gpa = std.testing.allocator;
+    var fixture: Fixture = undefined;
+    Fixture.init(gpa, &fixture);
+    defer fixture.deinit();
+
+    const make_running = struct {
+        fn go(f: *Fixture) !identity.TaskId {
+            const id = try f.root("do the thing");
+            try f.graph.transition(id, .runnable);
+            try f.graph.transition(id, .running);
+            return id;
+        }
+    }.go;
+
+    // Immediate revocation of running work winds it down to a cancel point.
+    {
+        const id = try make_running(&fixture);
+        try std.testing.expectEqual(Graph.RevocationOutcome.winding_down, try fixture.graph.revoke(id, .cancel_immediately));
+        try std.testing.expectEqual(State.cancelling, fixture.graph.get(id).?.state);
+    }
+    // Preventing the next step lets the running step finish.
+    {
+        const id = try make_running(&fixture);
+        try std.testing.expectEqual(Graph.RevocationOutcome.allowed_to_finish, try fixture.graph.revoke(id, .prevent_next_step));
+        try std.testing.expectEqual(State.running, fixture.graph.get(id).?.state);
+        try std.testing.expect(fixture.graph.get(id).?.cancellation_requested);
+    }
+    // A compensable effect is cancelled and flagged for undo.
+    {
+        const id = try make_running(&fixture);
+        try std.testing.expectEqual(Graph.RevocationOutcome.compensation_required, try fixture.graph.revoke(id, .requires_compensation));
+    }
+    // Work that never started is simply cancelled.
+    {
+        const id = try fixture.root("not started");
+        try std.testing.expectEqual(Graph.RevocationOutcome.cancelled, try fixture.graph.revoke(id, .cancel_immediately));
+        try std.testing.expectEqual(State.cancelled, fixture.graph.get(id).?.state);
+    }
+}
 
 test "scheduling classes are ordered from most to least urgent" {
     const S = SchedulingClass;
