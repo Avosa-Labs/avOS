@@ -6,10 +6,15 @@ first-class computing principals.
 
 ## Status
 
-Milestone 0 — repository and toolchain. The trusted control plane, agent
-execution plane, runtimes, shell, and session continuity are not implemented
-yet. Nothing here is production software, and no compatibility or handset
-readiness claim is made.
+The trusted control plane, agent execution plane, runtimes, session continuity,
+first-party applications, the store, the developer SDK, and the shell — including
+a native renderer that draws the designed interface — are implemented and run.
+`zig build run` opens the OS in a real, GPU-backed window (Metal on macOS, Vulkan
+or the platform compositor on Linux, through SDL2), driven by real control-plane
+state (see **Run the OS** below). What remains is on-device work: a native
+Vulkan/Metal backend in place of the SDL present path, and hardware bring-up.
+Nothing here is production software, and no handset readiness claim is made; read
+`docs/public/known-limitations.md` before drawing any conclusion.
 
 Qualified compiler lanes:
 
@@ -51,6 +56,52 @@ extracting, and places them in a project-local ignored tool directory.
 `docs/public/developer-quick-start.md` walks through all of this, including how
 to read the demonstration's output.
 
+## Run the OS
+
+```sh
+zig build run
+```
+
+This opens the OS in a real window and runs it. The window is GPU-backed —
+Metal on macOS, Vulkan or the platform compositor on Linux — through SDL2; if
+SDL2 is present at build time the `run` step builds and launches the windowed
+shell, otherwise it falls back to the headless frame renderer below. It runs the
+canonical scenario once for live state, then drives a real render loop: every
+frame it paints the current surface from that run's real audit ledger, registry,
+and store decisions — the actual agents doing the actual work — into a
+framebuffer, uploads it to a GPU texture, and presents it. Click to navigate: the
+home agent card opens the held approval, the app grid opens the activity ledger,
+the dock opens the store, and tapping the header returns home; each navigation
+fades in with the design's spring easing. Press Esc to quit.
+
+Install SDL2 first if it isn't already present (`brew install sdl2` on macOS,
+your distro's `libsdl2-dev` on Linux).
+
+### On a host with no display
+
+The same surfaces render to PNG images with no GPU and no image library — the
+same display list the windowed loop uploads to the GPU drives a software
+rasterizer here, so a frame is a real, viewable artifact on any host. Open the
+output with any image viewer (`open frame.png` on macOS).
+
+```sh
+zig build shell  -- session /tmp/avos_    # the whole live session, boot to rest,
+                                          #   as frames: 00_boot 01_home 02_activity
+                                          #   03_approval 04_principals 05_store 06_rest
+zig build shell  -- home out.png          # a live surface: home|activity|approval|
+                                          #   principals|store|boot|rest
+zig build home   out.png                  # the home screen
+zig build screen -- store out.png         # a shell screen: ledger|approval|
+                                          #   principals|settings|store
+zig build app    -- phone out.png         # an app screen: phone|messages|
+                                          #   calendar|camera
+zig build icons  out.png                  # the app icon sheet
+zig build motion -- /tmp/m_ 10            # the agent-card entrance, as 10 animation frames
+```
+
+The design language, colours, and screen inventory are recorded in
+`docs/design/ui-reference.md`; the concrete tokens live in `design/theme/`.
+
 ## Commands
 
 ```sh
@@ -78,11 +129,17 @@ noninteractively.
 | `services/` | trusted control-plane services |
 | `agents/` | agent execution plane |
 | `runtimes/` | native, WebAssembly, Android, and web runtimes |
-| `shell/` | session shell surfaces |
+| `graphics/` | the render layer: display list, software rasterizer, GPU instance encoder, icons, type, and the screens |
+| `design/` | design tokens, the concrete theme, and accessibility rules |
+| `shell/` | session shell surfaces and form-factor adaptations |
+| `applications/` | first-party applications |
+| `store/` | the application store |
 | `session/` | personal compute instance and endpoint continuity |
-| `sdk/` | developer platform |
-| `simulator/` | first implementation target; runs without AOSP |
-| `tools/` | bootstrap, locking, signing, and inspection tools |
+| `sdk/` | developer platform (native, WASM, web, Android, Swift 6) |
+| `emulator/` | the virtual device |
+| `simulator/` | first implementation target; runs without AOSP; hosts the live shell renderer |
+| `packaging/`, `infrastructure/` | release formats and operational runbooks |
+| `tools/` | bootstrap, locking, signing, supply-chain, and inspection tools |
 | `docs/` | architecture, security, design, and operations documentation |
 
 ## What is demonstrated
