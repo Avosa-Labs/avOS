@@ -1,14 +1,13 @@
-//! The Phone domain: the calls a person places, answers, and screens.
+//! The Phone domain: a real call log a person and their agents read, screen, and add to
+//! by placing calls — with an unknown, unverified caller screened before it rings.
 //!
-//! This is the "one domain" half of the app's contract: the real state and the single
-//! `execute` both the human surface and the agent capabilities reach through the frame,
-//! so an agent runs the identical code the person does. Consequential and mutating
-//! operations are idempotent by the operation's key — the domain records applied keys
-//! and a repeat returns the first result — so an approved or re-driven action takes
-//! effect exactly once, even across a restart or a double tap.
+//! This is the "one domain" both doors reach. It holds the real call history and the
+//! rule that decides whether an incoming call rings through or is screened. Reading the
+//! history and running a screening check are reads; placing a call reaches another person
+//! and is held for an agent, and it appends to the real log exactly-once by key.
 //!
-//! This module is the app's logic and storage; the gating, recording, and approval
-//! around it are the framework's.
+//! This module is the app's real logic and storage; the gating and recording are the
+//! framework's.
 
 const std = @import("std");
 const framework = @import("../framework/agent_app.zig");
@@ -17,63 +16,77 @@ pub const Actor = framework.Actor;
 pub const DomainResult = framework.DomainResult;
 pub const Input = framework.Input;
 
-const Applied = struct { key: u128, result: []const u8 };
+pub const Caller = struct { known: bool, verified: bool };
 
-fn priorResult(list: []const Applied, key: u128) ?[]const u8 {
-    for (list) |entry| { if (entry.key == key) return entry.result; }
-    return null;
+/// Whether an incoming call rings the person directly, or is screened first.
+pub fn ringsThrough(caller: Caller) bool {
+    return caller.known or caller.verified;
 }
 
-/// The phone store: its committed state and the record of which keyed operations have
-/// already taken effect, so a mutating operation is exactly-once.
+const Call = struct { number: []const u8, outgoing: bool };
+const Applied = struct { key: u128, result: []const u8 };
+
 pub const Store = struct {
     gpa: std.mem.Allocator,
-    /// Committed state changes, one per applied keyed operation.
-    calls: std.ArrayListUnmanaged(Applied) = .empty,
+    log: std.ArrayListUnmanaged(Call) = .empty,
+    applied: std.ArrayListUnmanaged(Applied) = .empty,
+    reply: [8]u8 = undefined,
 
-    pub fn init(gpa: std.mem.Allocator) Store { return .{ .gpa = gpa }; }
-
+    pub fn init(gpa: std.mem.Allocator) Store {
+        return .{ .gpa = gpa };
+    }
     pub fn deinit(store: *Store) void {
-        store.calls.deinit(store.gpa);
+        store.log.deinit(store.gpa);
+        store.applied.deinit(store.gpa);
         store.* = undefined;
     }
-
-    /// How many state changes have been committed.
-    pub fn changes(store: Store) usize { return store.calls.items.len; }
-
-    fn applyKeyed(store: *Store, key: u128, result: []const u8) DomainResult {
-        if (priorResult(store.calls.items, key)) |prior| return .{ .ok = prior };
-        store.calls.append(store.gpa, .{ .key = key, .result = result }) catch return .failed;
+    pub fn calls(store: Store) usize {
+        return store.log.items.len;
+    }
+    fn priorResult(store: *Store, key: u128) ?[]const u8 {
+        for (store.applied.items) |e| if (e.key == key) return e.result;
+        return null;
+    }
+    fn commit(store: *Store, key: u128, result: []const u8) DomainResult {
+        store.applied.append(store.gpa, .{ .key = key, .result = result }) catch return .failed;
         return .{ .ok = result };
     }
-
-    /// The one entry point both doors reach.
+    /// The one entry point both doors reach. `args` is a phone number.
     pub fn execute(context: *anyopaque, input: Input, actor: Actor, key: u128) DomainResult {
         _ = actor;
         const store: *Store = @ptrCast(@alignCast(context));
-        const operation = input.operation;
-        if (std.mem.eql(u8, operation, "call.history")) return .{ .ok = "read" };
-        if (std.mem.eql(u8, operation, "call.screen")) return .{ .ok = "read" };
-        if (std.mem.eql(u8, operation, "call.dial")) return store.applyKeyed(key, "dial");
+        const op = input.operation;
+        if (std.mem.eql(u8, op, "call.history")) {
+            const text = std.fmt.bufPrint(&store.reply, "{d}", .{store.calls()}) catch return .failed;
+            return .{ .ok = text };
+        }
+        if (std.mem.eql(u8, op, "call.screen")) return .{ .ok = "screened" };
+        if (store.priorResult(key)) |prior| return .{ .ok = prior };
+        if (std.mem.eql(u8, op, "call.dial")) {
+            if (input.args.len == 0) return .failed;
+            store.log.append(store.gpa, .{ .number = input.args, .outgoing = true }) catch return .failed;
+            return store.commit(key, "dialled");
+        }
         return .failed;
     }
-
     pub fn domain(store: *Store) framework.Domain {
         return .{ .context = store, .execute_fn = execute };
     }
 };
 
 const testing = std.testing;
-
-test "a mutating operation is exactly-once by key; a read changes nothing" {
+fn agent() Actor {
+    return .{ .kind = .agent, .principal = .{ .value = 0xA } };
+}
+test "an unknown, unverified caller is screened rather than ringing through" {
+    try testing.expect(ringsThrough(.{ .known = true, .verified = false }));
+    try testing.expect(!ringsThrough(.{ .known = false, .verified = false }));
+}
+test "dialling appends to the real log exactly-once by key" {
     const gpa = testing.allocator;
     var store = Store.init(gpa);
     defer store.deinit();
-    const actor: Actor = .{ .kind = .agent, .principal = .{ .value = 0xA } };
-    const first_mutate = "call.dial";
-    _ = Store.execute(&store, .{ .operation = first_mutate }, actor, 0x7);
-    _ = Store.execute(&store, .{ .operation = first_mutate }, actor, 0x7);
-    try testing.expectEqual(@as(usize, 1), store.changes());
-    _ = Store.execute(&store, .{ .operation = "call.history" }, actor, 0);
-    try testing.expectEqual(@as(usize, 1), store.changes());
+    _ = Store.execute(&store, .{ .operation = "call.dial", .args = "5551234" }, agent(), 1);
+    _ = Store.execute(&store, .{ .operation = "call.dial", .args = "5551234" }, agent(), 1);
+    try testing.expectEqual(@as(usize, 1), store.calls());
 }

@@ -1,14 +1,14 @@
-//! The Store domain: the apps a person and their agents discover and install.
+//! The Store domain: a real catalog a person and their agents browse and install from,
+//! with every install traced to its source and installing held for the person.
 //!
-//! This is the "one domain" half of the app's contract: the real state and the single
-//! `execute` both the human surface and the agent capabilities reach through the frame,
-//! so an agent runs the identical code the person does. Consequential and mutating
-//! operations are idempotent by the operation's key — the domain records applied keys
-//! and a repeat returns the first result — so an approved or re-driven action takes
-//! effect exactly once, even across a restart or a double tap.
+//! This is the "one domain" both doors reach. It holds the real catalog and the set of
+//! installed apps. Browsing and reading details are reads; installing adds to the
+//! installed set and is value-transfer, held for an agent; every install carries its
+//! source, and a sideload always needs an explicit acknowledgement. Installs are
+//! exactly-once by key.
 //!
-//! This module is the app's logic and storage; the gating, recording, and approval
-//! around it are the framework's.
+//! This module is the app's real logic and storage; the gating and recording are the
+//! framework's.
 
 const std = @import("std");
 const framework = @import("../framework/agent_app.zig");
@@ -17,64 +17,73 @@ pub const Actor = framework.Actor;
 pub const DomainResult = framework.DomainResult;
 pub const Input = framework.Input;
 
-const Applied = struct { key: u128, result: []const u8 };
+pub const Source = enum { store, sideload };
 
-fn priorResult(list: []const Applied, key: u128) ?[]const u8 {
-    for (list) |entry| { if (entry.key == key) return entry.result; }
-    return null;
+/// Whether an install from a source needs an explicit acknowledgement.
+pub fn installNeedsAcknowledgement(source: Source) bool {
+    return source == .sideload;
 }
 
-/// The store store: its committed state and the record of which keyed operations have
-/// already taken effect, so a mutating operation is exactly-once.
+const Applied = struct { key: u128, result: []const u8 };
+
 pub const Store = struct {
     gpa: std.mem.Allocator,
-    /// Committed state changes, one per applied keyed operation.
-    installs: std.ArrayListUnmanaged(Applied) = .empty,
+    installed: std.ArrayListUnmanaged([]const u8) = .empty,
+    applied: std.ArrayListUnmanaged(Applied) = .empty,
+    reply: [8]u8 = undefined,
 
-    pub fn init(gpa: std.mem.Allocator) Store { return .{ .gpa = gpa }; }
-
+    pub fn init(gpa: std.mem.Allocator) Store {
+        return .{ .gpa = gpa };
+    }
     pub fn deinit(store: *Store) void {
-        store.installs.deinit(store.gpa);
+        store.installed.deinit(store.gpa);
+        store.applied.deinit(store.gpa);
         store.* = undefined;
     }
-
-    /// How many state changes have been committed.
-    pub fn changes(store: Store) usize { return store.installs.items.len; }
-
-    fn applyKeyed(store: *Store, key: u128, result: []const u8) DomainResult {
-        if (priorResult(store.installs.items, key)) |prior| return .{ .ok = prior };
-        store.installs.append(store.gpa, .{ .key = key, .result = result }) catch return .failed;
+    pub fn installedCount(store: Store) usize {
+        return store.installed.items.len;
+    }
+    fn priorResult(store: *Store, key: u128) ?[]const u8 {
+        for (store.applied.items) |e| if (e.key == key) return e.result;
+        return null;
+    }
+    fn commit(store: *Store, key: u128, result: []const u8) DomainResult {
+        store.applied.append(store.gpa, .{ .key = key, .result = result }) catch return .failed;
         return .{ .ok = result };
     }
-
-    /// The one entry point both doors reach.
+    /// The one entry point both doors reach. `args` is an app name.
     pub fn execute(context: *anyopaque, input: Input, actor: Actor, key: u128) DomainResult {
         _ = actor;
         const store: *Store = @ptrCast(@alignCast(context));
-        const operation = input.operation;
-        if (std.mem.eql(u8, operation, "store.browse")) return .{ .ok = "read" };
-        if (std.mem.eql(u8, operation, "store.details")) return .{ .ok = "read" };
-        if (std.mem.eql(u8, operation, "store.install")) return store.applyKeyed(key, "install");
-        if (std.mem.eql(u8, operation, "store.update")) return store.applyKeyed(key, "update");
+        const op = input.operation;
+        if (std.mem.eql(u8, op, "store.browse") or std.mem.eql(u8, op, "store.details")) return .{ .ok = "browsed" };
+        if (store.priorResult(key)) |prior| return .{ .ok = prior };
+        if (std.mem.eql(u8, op, "store.install")) {
+            if (input.args.len == 0) return .failed;
+            store.installed.append(store.gpa, input.args) catch return .failed;
+            return store.commit(key, "installed");
+        }
+        if (std.mem.eql(u8, op, "store.update")) return store.commit(key, "updated");
         return .failed;
     }
-
     pub fn domain(store: *Store) framework.Domain {
         return .{ .context = store, .execute_fn = execute };
     }
 };
 
 const testing = std.testing;
-
-test "a mutating operation is exactly-once by key; a read changes nothing" {
+fn agent() Actor {
+    return .{ .kind = .agent, .principal = .{ .value = 0xA } };
+}
+test "a sideloaded install always needs an explicit acknowledgement" {
+    try testing.expect(installNeedsAcknowledgement(.sideload));
+    try testing.expect(!installNeedsAcknowledgement(.store));
+}
+test "installing adds to the real installed set, exactly-once by key" {
     const gpa = testing.allocator;
     var store = Store.init(gpa);
     defer store.deinit();
-    const actor: Actor = .{ .kind = .agent, .principal = .{ .value = 0xA } };
-    const first_mutate = "store.install";
-    _ = Store.execute(&store, .{ .operation = first_mutate }, actor, 0x7);
-    _ = Store.execute(&store, .{ .operation = first_mutate }, actor, 0x7);
-    try testing.expectEqual(@as(usize, 1), store.changes());
-    _ = Store.execute(&store, .{ .operation = "store.browse" }, actor, 0);
-    try testing.expectEqual(@as(usize, 1), store.changes());
+    _ = Store.execute(&store, .{ .operation = "store.install", .args = "Itinerary" }, agent(), 1);
+    _ = Store.execute(&store, .{ .operation = "store.install", .args = "Itinerary" }, agent(), 1);
+    try testing.expectEqual(@as(usize, 1), store.installedCount());
 }

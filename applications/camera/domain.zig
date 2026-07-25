@@ -1,14 +1,13 @@
-//! The Camera domain: the shots a person captures and a person or agent reviews and shares.
+//! The Camera domain: real shots a person captures and a person or agent reviews and
+//! shares — with capture the person's own act, never an agent's.
 //!
-//! This is the "one domain" half of the app's contract: the real state and the single
-//! `execute` both the human surface and the agent capabilities reach through the frame,
-//! so an agent runs the identical code the person does. Consequential and mutating
-//! operations are idempotent by the operation's key — the domain records applied keys
-//! and a repeat returns the first result — so an approved or re-driven action takes
-//! effect exactly once, even across a restart or a double tap.
+//! This is the "one domain" both doors reach. It holds the real shots. Previewing and
+//! reviewing are reads; capture appends a shot and is reachable only through the human
+//! door (no agent capability names it); sharing sends a shot outside the device and is
+//! held for the person, exactly-once by key.
 //!
-//! This module is the app's logic and storage; the gating, recording, and approval
-//! around it are the framework's.
+//! This module is the app's real logic and storage; the gating and recording are the
+//! framework's.
 
 const std = @import("std");
 const framework = @import("../framework/agent_app.zig");
@@ -17,63 +16,77 @@ pub const Actor = framework.Actor;
 pub const DomainResult = framework.DomainResult;
 pub const Input = framework.Input;
 
-const Applied = struct { key: u128, result: []const u8 };
-
-fn priorResult(list: []const Applied, key: u128) ?[]const u8 {
-    for (list) |entry| { if (entry.key == key) return entry.result; }
-    return null;
+/// Whether a capture may proceed: only while the visible indicator is lit and the app
+/// is foreground.
+pub fn mayCapture(indicator_lit: bool, foreground: bool) bool {
+    return indicator_lit and foreground;
 }
 
-/// The camera store: its committed state and the record of which keyed operations have
-/// already taken effect, so a mutating operation is exactly-once.
+const Applied = struct { key: u128, result: []const u8 };
+
 pub const Store = struct {
     gpa: std.mem.Allocator,
-    /// Committed state changes, one per applied keyed operation.
-    shots: std.ArrayListUnmanaged(Applied) = .empty,
+    shots: usize = 0,
+    applied: std.ArrayListUnmanaged(Applied) = .empty,
+    reply: [8]u8 = undefined,
 
-    pub fn init(gpa: std.mem.Allocator) Store { return .{ .gpa = gpa }; }
-
+    pub fn init(gpa: std.mem.Allocator) Store {
+        return .{ .gpa = gpa };
+    }
     pub fn deinit(store: *Store) void {
-        store.shots.deinit(store.gpa);
+        store.applied.deinit(store.gpa);
         store.* = undefined;
     }
-
-    /// How many state changes have been committed.
-    pub fn changes(store: Store) usize { return store.shots.items.len; }
-
-    fn applyKeyed(store: *Store, key: u128, result: []const u8) DomainResult {
-        if (priorResult(store.shots.items, key)) |prior| return .{ .ok = prior };
-        store.shots.append(store.gpa, .{ .key = key, .result = result }) catch return .failed;
+    fn priorResult(store: *Store, key: u128) ?[]const u8 {
+        for (store.applied.items) |e| if (e.key == key) return e.result;
+        return null;
+    }
+    fn commit(store: *Store, key: u128, result: []const u8) DomainResult {
+        store.applied.append(store.gpa, .{ .key = key, .result = result }) catch return .failed;
         return .{ .ok = result };
     }
-
-    /// The one entry point both doors reach.
+    /// The human door's capture, keyed so a held shutter fires once. Not an agent
+    /// capability; only the person's surface calls this.
+    pub fn capture(store: *Store, key: u128) DomainResult {
+        if (store.priorResult(key)) |prior| return .{ .ok = prior };
+        store.shots += 1;
+        return store.commit(key, "captured");
+    }
+    /// The one entry point the framework doors reach.
     pub fn execute(context: *anyopaque, input: Input, actor: Actor, key: u128) DomainResult {
         _ = actor;
         const store: *Store = @ptrCast(@alignCast(context));
-        const operation = input.operation;
-        if (std.mem.eql(u8, operation, "camera.preview")) return .{ .ok = "read" };
-        if (std.mem.eql(u8, operation, "camera.review")) return .{ .ok = "read" };
-        if (std.mem.eql(u8, operation, "camera.share")) return store.applyKeyed(key, "share");
+        const op = input.operation;
+        if (std.mem.eql(u8, op, "camera.preview")) return .{ .ok = "preview" };
+        if (std.mem.eql(u8, op, "camera.review")) {
+            const text = std.fmt.bufPrint(&store.reply, "{d}", .{store.shots}) catch return .failed;
+            return .{ .ok = text };
+        }
+        if (store.priorResult(key)) |prior| return .{ .ok = prior };
+        if (std.mem.eql(u8, op, "camera.share")) {
+            if (store.shots == 0) return .failed;
+            return store.commit(key, "shared");
+        }
         return .failed;
     }
-
     pub fn domain(store: *Store) framework.Domain {
         return .{ .context = store, .execute_fn = execute };
     }
 };
 
 const testing = std.testing;
-
-test "a mutating operation is exactly-once by key; a read changes nothing" {
+fn agent() Actor {
+    return .{ .kind = .agent, .principal = .{ .value = 0xA } };
+}
+test "capture proceeds only while the indicator is lit and the app is foreground" {
+    try testing.expect(mayCapture(true, true));
+    try testing.expect(!mayCapture(false, true));
+}
+test "the person's capture appends a real shot, exactly-once by key" {
     const gpa = testing.allocator;
     var store = Store.init(gpa);
     defer store.deinit();
-    const actor: Actor = .{ .kind = .agent, .principal = .{ .value = 0xA } };
-    const first_mutate = "camera.share";
-    _ = Store.execute(&store, .{ .operation = first_mutate }, actor, 0x7);
-    _ = Store.execute(&store, .{ .operation = first_mutate }, actor, 0x7);
-    try testing.expectEqual(@as(usize, 1), store.changes());
-    _ = Store.execute(&store, .{ .operation = "camera.preview" }, actor, 0);
-    try testing.expectEqual(@as(usize, 1), store.changes());
+    _ = store.capture(1);
+    _ = store.capture(1);
+    try testing.expectEqual(@as(usize, 1), store.shots);
 }
