@@ -140,6 +140,11 @@ pub const Constraints = struct {
     delegation_depth: u8 = 0,
     /// How in-flight work is treated on revocation.
     revocation_behavior: RevocationBehavior = .cancel_immediately,
+    /// Whether this grant may cross the issuer's policy domain. False by
+    /// default: authority stays within one domain unless a grant explicitly
+    /// reaches across, and a delegation can never turn this on if its parent did
+    /// not already allow it.
+    permit_cross_domain: bool = false,
 };
 
 /// The context of one attempted use, checked against the constraints.
@@ -221,6 +226,7 @@ pub const Refusal = enum {
     monetary_limit_exceeded,
     delegation_forbidden,
     delegation_would_widen,
+    cross_domain,
 
     /// The error a refusal surfaces to the caller. Several distinct refusals
     /// map onto one error deliberately: the caller learns it may not proceed,
@@ -232,6 +238,7 @@ pub const Refusal = enum {
             .holder_not_authorized,
             .operation_not_granted,
             .resource_not_covered,
+            .cross_domain,
             => error.Unauthorized,
             .stale_handle => error.IntegrityFailure,
             .revoked, .issuer_revoked => error.CapabilityRevoked,
@@ -348,7 +355,15 @@ pub const Store = struct {
         if (!grant.provenance.permits(.capability_request)) return error.Unauthorized;
 
         const issuer = try store.principals.authorize(grant.issuer);
-        _ = try store.principals.authorize(grant.holder);
+        const holder = try store.principals.authorize(grant.holder);
+
+        // Authority stays within the issuer's policy domain unless the grant
+        // explicitly reaches across it.
+        if (!grant.constraints.permit_cross_domain and
+            !std.mem.eql(u8, issuer.policy_domain, holder.policy_domain))
+        {
+            return store.refuse(.cross_domain);
+        }
 
         const id = store.ids.next(identity.CapabilityId);
         const owned_resource: ResourceSelector = .{
@@ -392,7 +407,7 @@ pub const Store = struct {
         const parent = try store.resolve(parent_handle);
 
         if (parent.constraints.delegation_depth == 0) return store.refuse(.delegation_forbidden);
-        _ = try store.principals.authorize(new_holder);
+        const recipient = try store.principals.authorize(new_holder);
 
         // A delegation must not exceed the parent in any dimension.
         if (!operations.subsetOf(parent.operations)) return store.refuse(.delegation_would_widen);
@@ -401,6 +416,17 @@ pub const Store = struct {
         if (widensMonetaryLimit(parent.constraints, constraints)) return store.refuse(.delegation_would_widen);
         if (constraints.delegation_depth >= parent.constraints.delegation_depth) {
             return store.refuse(.delegation_would_widen);
+        }
+        if (constraints.permit_cross_domain and !parent.constraints.permit_cross_domain) {
+            return store.refuse(.delegation_would_widen);
+        }
+        // Handing authority to a holder in another domain crosses a domain, so it
+        // needs the same explicit permission an original cross-domain grant does.
+        const delegator = try store.principals.authorize(parent.holder);
+        if (!constraints.permit_cross_domain and
+            !std.mem.eql(u8, delegator.policy_domain, recipient.policy_domain))
+        {
+            return store.refuse(.cross_domain);
         }
         if (parent.constraints.local_processing_only and !constraints.local_processing_only) {
             return store.refuse(.delegation_would_widen);
@@ -1288,6 +1314,39 @@ test "revoking a grant revokes what was delegated from it" {
         .operation = .read,
         .resource = .{ .kind = "calendar" },
     }));
+}
+
+test "a grant does not cross policy domains without explicit permission" {
+    const gpa = std.testing.allocator;
+    var fixture: Fixture = undefined;
+    try Fixture.init(gpa, &fixture);
+    defer fixture.deinit();
+
+    // A holder in a different domain from the issuer.
+    const offshore = try fixture.registry.enroll(.{
+        .kind = .agent,
+        .display_name = "offshore",
+        .policy_domain = "work",
+        .expires_at = .fromSeconds(100_000),
+        .issuer = fixture.human,
+    });
+
+    // The human is in "local"; issuing to a "work" holder crosses a domain.
+    try std.testing.expectError(error.Unauthorized, fixture.store.issue(.{
+        .issuer = fixture.human,
+        .holder = offshore,
+        .resource = .{ .kind = "calendar" },
+        .operations = fixture.readOnly(),
+    }));
+
+    // With the crossing made explicit, the same grant is allowed.
+    _ = try fixture.store.issue(.{
+        .issuer = fixture.human,
+        .holder = offshore,
+        .resource = .{ .kind = "calendar" },
+        .operations = fixture.readOnly(),
+        .constraints = .{ .permit_cross_domain = true },
+    });
 }
 
 test "a capability request from unvalidated model output is refused" {
