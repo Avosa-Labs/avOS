@@ -6,6 +6,7 @@
 //! for native, wasm, Android, and web. One boundary, one answer.
 
 pub const host_capability = @import("host_capability.zig");
+const acceptance = @import("acceptance.zig");
 
 pub const Bridge = host_capability.Bridge;
 pub const Request = host_capability.Request;
@@ -14,4 +15,5 @@ pub const Denial = host_capability.Denial;
 
 test {
     _ = host_capability;
+    _ = acceptance;
 }
