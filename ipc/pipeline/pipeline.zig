@@ -54,7 +54,7 @@ pub fn receive(
 ) Outcome {
     // Authenticate and decode. A bad signature, an unknown sender, a malformed
     // body, or a replay stops here as a fault, before any authority is consulted.
-    const decoded = verifier.accept(message) catch |err| return .{ .fault = faultForAccept(err) };
+    const decoded = verifier.accept(message, @intCast(now_ns)) catch |err| return .{ .fault = faultForAccept(err) };
 
     // Turn the presented capability into its current grant state. The resolver is
     // the only source of authority; an unknown capability authorizes nothing.
