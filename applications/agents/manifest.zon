@@ -1,0 +1,15 @@
+.{
+    // The package identity, declared capabilities, and signing requirement for the
+    // Agents app. A default app is present, not installed, but it carries the same
+    // manifest every app does: the capabilities it may register, so what an agent can
+    // discover in it is exactly what is declared here and verified against its tools.
+    .name = "Agents",
+    .package = "default.agents",
+    .kind = .default_app,
+    // The capabilities this package registers on install. Must match the app's
+    // declared tools; a mismatch is a build error via the manifest conformance test.
+    .capabilities = .{ "agents.observe", "agents.intervene" },
+    // A default app ships in the signed system image; a Store app additionally carries
+    // its own package signature. Present here so the field exists uniformly.
+    .signing = .system_image,
+}

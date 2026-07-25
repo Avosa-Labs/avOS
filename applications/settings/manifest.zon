@@ -1,0 +1,9 @@
+.{
+    // The package identity, declared capabilities, and signing requirement for the
+    // Settings app.
+    .name = "Settings",
+    .package = "default.settings",
+    .kind = .default_app,
+    .capabilities = .{ "settings.read", "settings.toggle", "settings.set", "settings.sensitive_change" },
+    .signing = .system_image,
+}
