@@ -115,7 +115,7 @@ pub const Chain = struct {
         const index = @intFromEnum(staged.stage);
         const digest = try verified.verify(
             staged.image,
-            chain.stage_keys[index],
+            .{ .key = chain.stage_keys[index] },
             chain.floors.forStage(index),
         );
 
@@ -160,7 +160,7 @@ pub const Chain = struct {
         const failure = chain.halted_by orelse return null;
         return recovery.choose(
             switch (failure) {
-                error.SignatureRejected => .signature_rejected,
+                error.SignatureRejected, error.KeyRevoked, error.AlgorithmUnsupported => .signature_rejected,
                 error.RollbackRefused => .rollback_refused,
                 error.OutOfOrder => .out_of_order,
                 error.LogFull => .unmeasurable,
