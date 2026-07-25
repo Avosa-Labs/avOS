@@ -109,6 +109,7 @@ pub fn build(b: *std.Build) void {
     runtime_native_module.addImport("core", core_module);
     runtime_android_module.addImport("core", core_module);
     services_module.addImport("core", core_module);
+    services_module.addImport("ipc", ipc_module);
     session_module.addImport("core", core_module);
     storage_module.addImport("core", core_module);
     shell_module.addImport("core", core_module);
