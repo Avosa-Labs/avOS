@@ -8,10 +8,15 @@
 //! bounded, and private, testable without a GPU.
 
 pub const color = @import("color/color.zig");
+pub const linear = @import("color/linear.zig");
 pub const compositor = @import("compositor/compositor.zig");
 pub const surfaces = @import("surfaces/surfaces.zig");
 pub const renderer = @import("renderer/renderer.zig");
 pub const scene = @import("scene/scene.zig");
+pub const scene_tree = @import("scene/tree.zig");
+pub const scene_damage = @import("scene/damage.zig");
+pub const scene_hittest = @import("scene/hittest.zig");
+pub const compositor_layers = @import("compositor/layers.zig");
 pub const animation = @import("animation/animation.zig");
 pub const interpolate = @import("animation/interpolate.zig");
 pub const effects = @import("effects/effects.zig");
@@ -42,10 +47,15 @@ pub const motion = @import("paint/motion.zig");
 
 test {
     _ = color;
+    _ = linear;
     _ = compositor;
     _ = surfaces;
     _ = renderer;
     _ = scene;
+    _ = scene_tree;
+    _ = scene_damage;
+    _ = scene_hittest;
+    _ = compositor_layers;
     _ = animation;
     _ = interpolate;
     _ = effects;
