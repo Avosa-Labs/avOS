@@ -52,6 +52,12 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const runtime_bridge_module = b.createModule(.{
+        .root_source_file = b.path("runtimes/bridge/bridge.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const design_module = b.createModule(.{
         .root_source_file = b.path("design/design.zig"),
         .target = target,
@@ -107,7 +113,10 @@ pub fn build(b: *std.Build) void {
     });
 
     runtime_native_module.addImport("core", core_module);
+    runtime_native_module.addImport("host_bridge", runtime_bridge_module);
     runtime_android_module.addImport("core", core_module);
+    runtime_android_module.addImport("host_bridge", runtime_bridge_module);
+    runtime_bridge_module.addImport("core", core_module);
     services_module.addImport("core", core_module);
     services_module.addImport("ipc", ipc_module);
     session_module.addImport("core", core_module);
@@ -263,12 +272,15 @@ pub fn build(b: *std.Build) void {
     addModuleTests(b, test_step, "ipc", ipc_module);
     addModuleTests(b, test_step, "runtime-native", runtime_native_module);
     addModuleTests(b, test_step, "runtime-android", runtime_android_module);
+    addModuleTests(b, test_step, "runtime-bridge", runtime_bridge_module);
 
     const runtime_web_module = b.createModule(.{
         .root_source_file = b.path("runtimes/web/web.zig"),
         .target = target,
         .optimize = optimize,
     });
+    runtime_web_module.addImport("core", core_module);
+    runtime_web_module.addImport("host_bridge", runtime_bridge_module);
     addModuleTests(b, test_step, "runtime-web", runtime_web_module);
 
     const runtime_apple_module = b.createModule(.{

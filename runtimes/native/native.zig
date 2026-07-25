@@ -7,8 +7,10 @@
 
 pub const sandbox = @import("sandbox/sandbox.zig");
 pub const host = @import("host/host.zig");
+pub const lifecycle = @import("lifecycle/lifecycle.zig");
 
 test {
     _ = sandbox;
     _ = host;
+    _ = lifecycle;
 }
