@@ -30,6 +30,7 @@ pub const store = @import("store/install_source.zig");
 pub const support = @import("support/bundle.zig");
 pub const locator = @import("locator/command.zig");
 pub const credentials = @import("credentials/passkey.zig");
+pub const agents = @import("agents/console.zig");
 
 test {
     _ = phone;
@@ -50,4 +51,5 @@ test {
     _ = support;
     _ = locator;
     _ = credentials;
+    _ = agents;
 }
