@@ -22,6 +22,21 @@ pub const settings = @import("settings/settings.zig");
 pub const quick_controls = @import("quick-controls/quick_controls.zig");
 pub const multitasking = @import("multitasking/recents.zig");
 
+// Additional shell surfaces.
+pub const privacy = @import("privacy/privacy.zig");
+pub const emergency = @import("emergency/emergency.zig");
+pub const recovery = @import("recovery/recovery.zig");
+pub const update = @import("update/update.zig");
+pub const activity = @import("activity/activity.zig");
+pub const search = @import("search/search.zig");
+pub const files = @import("files/files.zig");
+pub const library = @import("library/library.zig");
+pub const resources = @import("resources/resources.zig");
+pub const offline = @import("offline/offline.zig");
+pub const endpoints = @import("endpoints/endpoints.zig");
+pub const developer = @import("developer/developer.zig");
+pub const acceptance_tests = @import("tests/acceptance.zig");
+
 // Form-factor adaptations: identity and task graphs move across endpoints, but each form factor's
 // capabilities are its own — a deliberate reduction from, or extension of, the phone baseline.
 pub const phone = @import("phone/adaptation.zig");
@@ -51,6 +66,18 @@ test {
     _ = settings;
     _ = quick_controls;
     _ = multitasking;
+    _ = privacy;
+    _ = emergency;
+    _ = recovery;
+    _ = update;
+    _ = activity;
+    _ = search;
+    _ = files;
+    _ = library;
+    _ = resources;
+    _ = offline;
+    _ = endpoints;
+    _ = developer;
     _ = phone;
     _ = tablet;
     _ = desktop;
@@ -60,4 +87,5 @@ test {
     _ = room;
     _ = robot;
     _ = screenless;
+    _ = acceptance_tests;
 }
