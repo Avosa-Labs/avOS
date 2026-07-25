@@ -1,0 +1,13 @@
+.{
+    // camera-capture's public contract. Its one tool reaches the world — it takes a
+    // photo — so it is external, and the framework holds an agent's request for a person
+    // rather than running it on the capability alone.
+    .name = "camera-capture",
+    .package = "example.camera-capture",
+    .kind = .sdk_example,
+    .requested_capabilities = .{"camera.capture"},
+    .tools = .{
+        .{ .name = "camera.capture", .requires_capability = "camera.capture" },
+    },
+    .signing = .developer,
+}

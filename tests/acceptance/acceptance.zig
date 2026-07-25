@@ -10,6 +10,7 @@ pub const android_compatibility = @import("android_compatibility.zig");
 pub const session_continuity = @import("session_continuity.zig");
 pub const integrated_demonstration = @import("integrated_demonstration.zig");
 pub const crash_recovery = @import("crash_recovery.zig");
+pub const example_walkthrough = @import("example_walkthrough.zig");
 
 test {
     _ = agent_shell;
@@ -17,4 +18,5 @@ test {
     _ = session_continuity;
     _ = integrated_demonstration;
     _ = crash_recovery;
+    _ = example_walkthrough;
 }

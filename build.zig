@@ -173,6 +173,11 @@ pub fn build(b: *std.Build) void {
             .description = "Verify no stand-in reaches production code",
         },
         .{
+            .name = "example-check",
+            .root = "tools/example-check/main.zig",
+            .description = "Verify the SDK example registry and the examples on disk are the same set",
+        },
+        .{
             .name = "image-build",
             .root = "tools/image-build/main.zig",
             .description = "Reduce a directory to a system image digest, deterministically",
@@ -375,6 +380,19 @@ pub fn build(b: *std.Build) void {
     applications_module.addImport("core", core_module);
     applications_module.addImport("agents", agents_module);
     applications_module.addImport("design", design_module);
+
+    // The SDK's worked examples are real programs on the application frame: they import
+    // the same core and the same framework a shipped app does, so a passing example is
+    // proof the real path runs, not that a mock did.
+    const examples_module = b.createModule(.{
+        .root_source_file = b.path("examples/examples.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    examples_module.addImport("core", core_module);
+    examples_module.addImport("applications", applications_module);
+    examples_module.addImport("sdk", sdk_module);
+    addModuleTests(b, test_step, "examples", examples_module);
 
     const networking_module = b.createModule(.{
         .root_source_file = b.path("networking/networking.zig"),
@@ -662,6 +680,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "runtime_android", .module = runtime_android_module },
             .{ .name = "session", .module = session_module },
             .{ .name = "storage", .module = storage_module },
+            .{ .name = "examples", .module = examples_module },
         },
     });
     addModuleTests(b, test_step, "acceptance", acceptance_module);
