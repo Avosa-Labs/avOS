@@ -111,6 +111,49 @@ test "the message envelope decoder survives mutations of valid messages" {
     }
 }
 
+test "the frame reader never frames past the bytes it was given" {
+    var prng = generator(base_seed +% 5);
+    const random = prng.random();
+    var buffer: [max_generated_bytes]u8 = undefined;
+    for (0..iterations) |_| {
+        const input = randomInput(random, &buffer);
+        switch (ipc.framing.frame(input)) {
+            .complete => |complete| {
+                // A frame it calls complete must lie entirely within the input.
+                try std.testing.expect(complete.total_bytes <= input.len);
+                try std.testing.expect(complete.body_offset + complete.body_bytes <= input.len);
+            },
+            .incomplete, .oversized => {},
+        }
+    }
+}
+
+test "the verifier survives arbitrary signed bodies" {
+    const gpa = std.testing.allocator;
+    const Ed25519 = std.crypto.sign.Ed25519;
+    const identity: ipc.authenticator.SigningIdentity = .{
+        .service = 0x1,
+        .key_pair = try Ed25519.KeyPair.generateDeterministic(@splat(5)),
+    };
+    var verifier = ipc.authenticator.Verifier.init(gpa);
+    defer verifier.deinit();
+    try verifier.trust(identity.service, identity.publicKey());
+
+    var prng = generator(base_seed +% 6);
+    const random = prng.random();
+    var body_buffer: [max_generated_bytes]u8 = undefined;
+    for (0..iterations) |_| {
+        const body = randomInput(random, &body_buffer);
+        // Sign the arbitrary body with the trusted key so verification passes and
+        // the decoder and replay path see the random bytes, not just the reject.
+        const message = try ipc.authenticator.sign(identity, body);
+        if (verifier.accept(message, 0)) |decoded| {
+            try expectWithin(decoded.method, body);
+            try expectWithin(decoded.payload, body);
+        } else |_| {}
+    }
+}
+
 test "the journal reader survives arbitrary bytes" {
     const gpa = std.testing.allocator;
     var prng = generator(base_seed +% 2);
