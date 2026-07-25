@@ -58,3 +58,8 @@ zig-out/
 /session_*.png
 /shell.png
 /motion_*.png
+
+# rendered artifacts — build outputs, never source
+out.png
+tour.png
+*.render.png

@@ -359,6 +359,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     agents_module.addImport("core", core_module);
+    agents_module.addImport("ipc", ipc_module);
     addModuleTests(b, test_step, "agents", agents_module);
 
     const networking_module = b.createModule(.{
