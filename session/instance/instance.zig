@@ -157,7 +157,11 @@ pub const Instance = struct {
         description: []const u8,
         claiming_endpoint: identity.PrincipalId,
     ) !void {
-        _ = instance.endpoints.authorize(claiming_endpoint, instance.human, .input) catch
+        // Claiming an effect is authorizing an external, irreversible action, so it
+        // requires approval authority — not merely input authority. An endpoint the
+        // person allowed to type but not to approve (a shared desktop) must not be able
+        // to drive a payment-class effect.
+        _ = instance.endpoints.authorize(claiming_endpoint, instance.human, .approve) catch
             return error.EndpointNotPermitted;
 
         if (instance.effects.get(key)) |existing| {
@@ -192,12 +196,23 @@ pub const Instance = struct {
     }
 
     /// Records what became of a claimed effect.
+    ///
+    /// Only a still-`claimed` effect may be settled. Once an effect reaches a
+    /// terminal state — `performed`, `outcome_unknown`, or `failed` — its record
+    /// is fixed. Without this guard a `performed` effect could be driven back to
+    /// `failed`, which `permitsReclaim` treats as reclaimable, letting a caller
+    /// re-run a consequential action that already took effect. The exactly-once
+    /// guarantee is that terminal transition being one-way.
     pub fn settleEffect(
         instance: *Instance,
         key: u128,
         state: Effect.State,
     ) Error!void {
         const entry = instance.effects.getPtr(key) orelse return error.UnknownEffect;
+        if (entry.state != .claimed) return switch (entry.state) {
+            .outcome_unknown => error.OutcomeUnknown,
+            else => error.AlreadyPerformed,
+        };
         entry.state = state;
     }
 
@@ -292,6 +307,9 @@ const Fixture = struct {
     phone: identity.PrincipalId,
     desktop: identity.PrincipalId,
     display: identity.PrincipalId,
+    /// An endpoint the human may type through but not approve through — a shared
+    /// keyboard on a kiosk. It has input authority but no approval authority.
+    typist: identity.PrincipalId,
 
     fn init(gpa: std.mem.Allocator, fixture: *Fixture) !void {
         fixture.* = .{
@@ -304,6 +322,7 @@ const Fixture = struct {
             .phone = .none,
             .desktop = .none,
             .display = .none,
+            .typist = .none,
         };
         const clock = fixture.manual.clock();
         fixture.endpoints = .init(gpa, &fixture.ids, clock);
@@ -324,6 +343,11 @@ const Fixture = struct {
             .human = fixture.human,
             .name = "Room display",
             .permissions = .present_only,
+        });
+        fixture.typist = try fixture.endpoints.enrol(.{
+            .human = fixture.human,
+            .name = "Kiosk keyboard",
+            .permissions = .{ .may_present = true, .may_send_input = true, .may_approve = false },
         });
     }
 
@@ -438,6 +462,50 @@ test "a presenting-only endpoint cannot claim an effect" {
     try std.testing.expectError(
         error.EndpointNotPermitted,
         fixture.instance.claimEffect(0xaaa, "send a confirmation", fixture.display),
+    );
+}
+
+test "an endpoint that may type but not approve cannot claim an effect" {
+    const gpa = std.testing.allocator;
+    var fixture: Fixture = undefined;
+    try Fixture.init(gpa, &fixture);
+    defer fixture.deinit();
+
+    try fixture.instance.present(fixture.typist);
+
+    // Claiming an effect commits the human to a consequential action. Input
+    // authority is not approval authority: a shared kiosk keyboard the human
+    // types through must not be able to authorize a payment.
+    try std.testing.expectError(
+        error.EndpointNotPermitted,
+        fixture.instance.claimEffect(0xcafe, "pay the deposit", fixture.typist),
+    );
+}
+
+test "a performed effect cannot be settled again into a reclaimable state" {
+    const gpa = std.testing.allocator;
+    var fixture: Fixture = undefined;
+    try Fixture.init(gpa, &fixture);
+    defer fixture.deinit();
+
+    try fixture.instance.present(fixture.phone);
+    const key: u128 = 0x0ff;
+
+    try fixture.instance.claimEffect(key, "pay the deposit", fixture.phone);
+    try fixture.instance.settleEffect(key, .performed);
+
+    // The effect took effect. Driving it back to `failed` would make it
+    // reclaimable and let it run a second time. The terminal state is one-way.
+    try std.testing.expectError(
+        error.AlreadyPerformed,
+        fixture.instance.settleEffect(key, .failed),
+    );
+    try std.testing.expectEqual(Effect.State.performed, fixture.instance.effectState(key).?);
+
+    // And it therefore still cannot be reclaimed on another endpoint.
+    try std.testing.expectError(
+        error.AlreadyPerformed,
+        fixture.instance.claimEffect(key, "pay the deposit", fixture.desktop),
     );
 }
 
