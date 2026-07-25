@@ -158,6 +158,11 @@ pub fn build(b: *std.Build) void {
             .description = "Verify raw colour is constructed only in the design token layer",
         },
         .{
+            .name = "boundary-check",
+            .root = "tools/boundary-check/main.zig",
+            .description = "Verify a default app reaches the system only through its framework",
+        },
+        .{
             .name = "convention-check",
             .root = "tools/convention-check/main.zig",
             .description = "Verify authoring conventions: attribution, comments, and naming",
@@ -366,6 +371,10 @@ pub fn build(b: *std.Build) void {
     agents_module.addImport("core", core_module);
     agents_module.addImport("ipc", ipc_module);
     addModuleTests(b, test_step, "agents", agents_module);
+
+    applications_module.addImport("core", core_module);
+    applications_module.addImport("agents", agents_module);
+    applications_module.addImport("design", design_module);
 
     const networking_module = b.createModule(.{
         .root_source_file = b.path("networking/networking.zig"),

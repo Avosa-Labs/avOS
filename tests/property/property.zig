@@ -17,29 +17,27 @@ const emulator = @import("emulator");
 const shell = @import("shell");
 
 test "property: a camera capture always has the use indicator lit" {
-    // Fail-closed: over every combination of grant, foreground, and indicator, a permitted capture
-    // implies the visible indicator was active.
-    for ([_]bool{ false, true }) |grant| {
-        for ([_]bool{ false, true }) |foreground| {
-            for ([_]bool{ false, true }) |indicator| {
-                const request = applications.camera.Request{
-                    .has_camera_grant = grant,
-                    .is_foreground = foreground,
-                    .indicator_active = indicator,
-                };
-                if (applications.camera.mayCapture(request)) {
-                    try std.testing.expect(indicator);
-                }
+    // Fail-closed: over every combination of foreground and indicator, a permitted
+    // capture implies the visible indicator was active.
+    for ([_]bool{ false, true }) |foreground| {
+        for ([_]bool{ false, true }) |indicator| {
+            if (applications.camera.mayCapture(indicator, foreground)) {
+                try std.testing.expect(indicator);
             }
         }
     }
 }
 
-test "property: delivered location never exceeds the granted precision" {
-    // The exact precision is delivered only under a precise grant.
-    for ([_]applications.maps.Grant{ .none, .approximate, .precise }) |grant| {
-        if (applications.maps.deliver(grant) == .exact) {
-            try std.testing.expectEqual(applications.maps.Grant.precise, grant);
+test "property: a contacts read never exceeds the granted fields" {
+    // Fail-closed: a field is visible only when the grant explicitly names it.
+    const Field = applications.contacts.Field;
+    for (std.enums.values(Field)) |granted_field| {
+        var grant: applications.contacts.FieldSet = .initEmpty();
+        grant.insert(granted_field);
+        for (std.enums.values(Field)) |requested| {
+            if (applications.contacts.fieldVisible(grant, requested)) {
+                try std.testing.expectEqual(granted_field, requested);
+            }
         }
     }
 }

@@ -1,0 +1,7 @@
+.{
+    .name = "Contacts",
+    .package = "default.contacts",
+    .kind = .default_app,
+    .capabilities = .{ "contact.read", "contact.add", "contact.edit", "contact.delete" },
+    .signing = .system_image,
+}

@@ -41,9 +41,9 @@ test "flow: a session handed to a shared display shows nothing sensitive it shou
 }
 
 test "flow: an install reaches a device only through source acknowledgement and channel maturity" {
-    // A sideloaded package is gated on acknowledgement...
-    try std.testing.expect(applications.store.decide(.external, false) != .proceed);
-    try std.testing.expect(applications.store.decide(.external, true) == .proceed);
+    // A sideloaded package always requires an explicit acknowledgement; a Store one does not.
+    try std.testing.expect(applications.store.installNeedsAcknowledgement(.sideload));
+    try std.testing.expect(!applications.store.installNeedsAcknowledgement(.store));
     // ...and a build reaches a stable device only if mature and forward.
     try std.testing.expect(packaging.channel.mayOffer(.{ .maturity = .stable, .version = 5 }, .stable, 4));
     try std.testing.expect(!packaging.channel.mayOffer(.{ .maturity = .beta, .version = 5 }, .stable, 4));

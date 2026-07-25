@@ -1,0 +1,7 @@
+.{
+    .name = "Calendar",
+    .package = "default.calendar",
+    .kind = .default_app,
+    .capabilities = .{ "calendar.read", "calendar.freebusy", "calendar.add", "calendar.edit", "calendar.invite" },
+    .signing = .system_image,
+}

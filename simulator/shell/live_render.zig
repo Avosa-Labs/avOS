@@ -351,18 +351,17 @@ pub fn renderStore(screen: *Framebuffer) void {
     const catalog = [_]Catalog{
         .{ .name = "Itinerary", .publisher = "Reviewed \u{00B7} signed", .source = .store, .acknowledged = false, .colour = theme.teal },
         .{ .name = "Ledger Notes", .publisher = "Reviewed \u{00B7} signed", .source = .store, .acknowledged = false, .colour = theme.agent },
-        .{ .name = "Field Tools", .publisher = "Outside source", .source = .external, .acknowledged = true, .colour = theme.amber },
-        .{ .name = "Unknown Build", .publisher = "Unreviewed source", .source = .external, .acknowledged = false, .colour = theme.denied },
+        .{ .name = "Field Tools", .publisher = "Outside source", .source = .sideload, .acknowledged = true, .colour = theme.amber },
+        .{ .name = "Unknown Build", .publisher = "Unreviewed source", .source = .sideload, .acknowledged = false, .colour = theme.denied },
     };
 
     var y: i32 = 120;
     for (catalog) |item| {
-        const decision = install_source.decide(item.source, item.acknowledged);
-        const action: []const u8 = switch (decision) {
-            .proceed => "Get",
-            .require_acknowledgement => "Acknowledge",
-            .refuse => "Blocked",
-        };
+        // A Store install proceeds; a sideload needs the person's acknowledgement, and
+        // an unacknowledged sideload is blocked.
+        const needs_ack = install_source.installNeedsAcknowledgement(item.source);
+        const blocked = needs_ack and !item.acknowledged;
+        const action: []const u8 = if (blocked) "Blocked" else if (needs_ack) "Acknowledge" else "Get";
         const rect = card(screen, y, 66);
         paint.paint(screen, &.{.{ .rounded_vgradient = .{
             .rect = .{ .x = rect.x + 16, .y = rect.y + 15, .w = 36, .h = 36 },
@@ -372,7 +371,7 @@ pub fn renderStore(screen: *Framebuffer) void {
         } }});
         _ = text.draw(screen, @floatFromInt(rect.x + 64), @floatFromInt(rect.y + 28), item.name, 13, s(theme.screen_text));
         _ = text.draw(screen, @floatFromInt(rect.x + 64), @floatFromInt(rect.y + 46), item.publisher, 10.5, s(theme.screen_text_muted));
-        const hue = if (decision == .refuse) theme.denied else theme.agent;
+        const hue = if (blocked) theme.denied else theme.agent;
         const bw = text.measure(action, 11);
         paint.paint(screen, &.{.{ .rounded = .{ .rect = .{ .x = rightI(rect) - 20 - @as(i32, @intFromFloat(bw)) - 20, .y = rect.y + 20, .w = @as(u32, @intFromFloat(bw)) + 24, .h = 26 }, .radius = 13, .colour = s(hue) } }});
         text.drawCentred(screen, rightF(rect) - 20 - bw / 2 - 12, @floatFromInt(rect.y + 37), action, 11, s(theme.screen_card));
