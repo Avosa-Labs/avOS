@@ -14,6 +14,7 @@ pub const permissions = @import("permissions/permissions.zig");
 pub const bridge = @import("bridge/bridge.zig");
 pub const downloads = @import("downloads/downloads.zig");
 pub const navigation = @import("engine/navigation.zig");
+pub const engine = @import("engine/engine.zig");
 
 test {
     _ = origins;
@@ -21,4 +22,5 @@ test {
     _ = bridge;
     _ = downloads;
     _ = navigation;
+    _ = engine;
 }
