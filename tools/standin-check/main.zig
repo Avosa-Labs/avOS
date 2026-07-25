@@ -290,8 +290,9 @@ fn collectFindings(
         const code = withoutComment(text);
         for (names) |name| {
             if (!containsWord(code, name)) continue;
-            // The file that declares a stand-in necessarily names it.
-            if (declaresName(contents, name)) continue;
+            // The file that defines a stand-in necessarily names it; an alias is
+            // a use, not a definition, and is not exempt.
+            if (definesName(contents, name)) continue;
             // A stand-in is built out of stand-in machinery. Reporting the
             // software element for generating a key deterministically would be
             // reporting it for being what it says it is.
@@ -367,25 +368,86 @@ fn declaredName(text: []const u8) ?[]const u8 {
     return null;
 }
 
-/// Whether this file declares the name itself.
-fn declaresName(contents: []const u8, name: []const u8) bool {
+/// Whether this file itself *defines* the stand-in — as a type or a function —
+/// rather than merely aliasing or importing one under the same name.
+///
+/// The file that defines a stand-in necessarily names it, and must not flag
+/// itself. But a plain alias — `const ManualClock = other.ManualClock;` — is not
+/// a definition; it is a use, dressed in a declaration. Keying the exemption on
+/// bare name-equality let such an alias exempt every use of the stand-in in the
+/// file, smuggling it onto a production path. So the exemption is granted only for
+/// a genuine definition: `fn Name(` or `const Name = struct|union|enum|opaque`.
+fn definesName(contents: []const u8, name: []const u8) bool {
     var lines = std.mem.splitScalar(u8, contents, '\n');
     while (lines.next()) |text| {
         const trimmed = std.mem.trimStart(u8, text, " \t");
-        const forms = [_][]const u8{ "pub const ", "const ", "pub fn ", "fn " };
-        for (forms) |form| {
-            if (!std.mem.startsWith(u8, trimmed, form)) continue;
-            const rest = trimmed[form.len..];
-            if (!std.mem.startsWith(u8, rest, name)) continue;
-            if (rest.len == name.len) return true;
-            if (!isIdentifierCharacter(rest[name.len])) return true;
+        const body = if (std.mem.startsWith(u8, trimmed, "pub "))
+            trimmed["pub ".len..]
+        else
+            trimmed;
+
+        // A function definition: `fn Name(`.
+        if (std.mem.startsWith(u8, body, "fn ")) {
+            const rest = body["fn ".len..];
+            if (identifierIs(rest, name) and nextNonSpace(rest[name.len..]) == '(') return true;
+        }
+
+        // A type definition: `const Name = struct|union|enum|opaque ...`.
+        if (std.mem.startsWith(u8, body, "const ")) {
+            const rest = body["const ".len..];
+            if (!identifierIs(rest, name)) continue;
+            const after = std.mem.trimStart(u8, rest[name.len..], " \t");
+            if (!std.mem.startsWith(u8, after, "=")) continue;
+            const value = std.mem.trimStart(u8, after[1..], " \t");
+            const type_forms = [_][]const u8{ "struct", "union", "enum", "opaque", "packed ", "extern " };
+            for (type_forms) |form| {
+                if (std.mem.startsWith(u8, value, form)) return true;
+            }
         }
     }
     return false;
 }
 
+/// Whether `rest` begins with `name` as a whole identifier.
+fn identifierIs(rest: []const u8, name: []const u8) bool {
+    if (!std.mem.startsWith(u8, rest, name)) return false;
+    return rest.len == name.len or !isIdentifierCharacter(rest[name.len]);
+}
+
+/// The first non-space character of `rest`, or 0 if there is none.
+fn nextNonSpace(rest: []const u8) u8 {
+    const trimmed = std.mem.trimStart(u8, rest, " \t");
+    return if (trimmed.len == 0) 0 else trimmed[0];
+}
+
+/// The text of a line with any line comment removed. A `//` inside a string or
+/// character literal is not a comment: truncating there would hide any stand-in
+/// named after it on the same line, so string and char literals are tracked and
+/// only a `//` outside them ends the code.
 fn withoutComment(text: []const u8) []const u8 {
-    if (std.mem.indexOf(u8, text, "//")) |position| return text[0..position];
+    var index: usize = 0;
+    var in_string = false;
+    var in_char = false;
+    while (index < text.len) : (index += 1) {
+        const character = text[index];
+        if ((in_string or in_char) and character == '\\') {
+            index += 1; // Skip the escaped character.
+            continue;
+        }
+        if (!in_char and character == '"') {
+            in_string = !in_string;
+            continue;
+        }
+        if (!in_string and character == '\'') {
+            in_char = !in_char;
+            continue;
+        }
+        if (!in_string and !in_char and character == '/' and
+            index + 1 < text.len and text[index + 1] == '/')
+        {
+            return text[0..index];
+        }
+    }
     return text;
 }
 
@@ -677,6 +739,46 @@ test "a longer identifier that contains a stand-in name is not a use" {
         \\    var thing: SoftwareElementFactoryish = .{};
         \\    _ = thing;
         \\}
+        \\
+    ;
+    try std.testing.expectEqual(@as(usize, 0), try countFindings(source));
+}
+
+test "a stand-in after a string containing a comment marker is still a use" {
+    // The string holds `//`; a comment stripper that truncated there would drop
+    // the stand-in that follows on the same line, hiding it from the scan.
+    const source =
+        \\pub fn start() void {
+        \\    const label = "scheme//host"; var e: secure_element.SoftwareElement = .{}; _ = e; _ = label;
+        \\}
+        \\
+    ;
+    try std.testing.expectEqual(@as(usize, 1), try countFindings(source));
+}
+
+test "an alias of a stand-in under its own name is a use, not a definition" {
+    // Re-binding the stand-in to its own name is not defining it; keying the
+    // exemption on bare name-equality would let this smuggle it onto the path.
+    const source =
+        \\const ManualClock = @import("core").time.ManualClock;
+        \\pub fn start() void {
+        \\    var c: ManualClock = .{};
+        \\    _ = c;
+        \\}
+        \\
+    ;
+    try std.testing.expect((try countFindings(source)) >= 1);
+}
+
+test "the file that defines a stand-in function may name it" {
+    // A genuine `fn Name(` definition — as opposed to an alias — stays exempt.
+    const source =
+        \\pub const Source = struct {
+        \\    pub fn initDeterministic(seed: u64) Source {
+        \\        _ = seed;
+        \\        return .{};
+        \\    }
+        \\};
         \\
     ;
     try std.testing.expectEqual(@as(usize, 0), try countFindings(source));
