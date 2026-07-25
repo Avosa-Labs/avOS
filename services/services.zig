@@ -10,6 +10,7 @@ pub const dispatch = @import("endpoint/dispatch.zig");
 pub const meter = @import("endpoint/meter.zig");
 pub const journal = @import("endpoint/journal.zig");
 pub const payload = @import("endpoint/payload.zig");
+pub const endpoint_harness = @import("endpoint/harness.zig");
 pub const background_work = @import("background-work/background_work.zig");
 pub const notification = @import("notification/notification.zig");
 pub const supervisor = @import("supervisor/supervisor.zig");
@@ -50,6 +51,7 @@ pub const capability_service = @import("capability/service.zig");
 pub const task_admission = @import("task/admission.zig");
 pub const resource_admission = @import("resource/admission.zig");
 pub const audit_append = @import("audit/append.zig");
+pub const audit_service = @import("audit/service.zig");
 pub const provenance_flow = @import("provenance/flow.zig");
 
 test {
@@ -58,6 +60,7 @@ test {
     _ = meter;
     _ = journal;
     _ = payload;
+    _ = endpoint_harness;
     _ = background_work;
     _ = notification;
     _ = supervisor;
@@ -98,5 +101,6 @@ test {
     _ = task_admission;
     _ = resource_admission;
     _ = audit_append;
+    _ = audit_service;
     _ = provenance_flow;
 }

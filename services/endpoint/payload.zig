@@ -56,6 +56,27 @@ pub const Reader = struct {
         return std.mem.readInt(u128, slice[0..16], .little);
     }
 
+    /// Reads a fixed-size byte array, e.g. a hash. The size is known at compile time,
+    /// so a short payload is a truncation rather than a variable-length surprise.
+    pub fn array(reader: *Reader, comptime n: usize) Error![n]u8 {
+        const slice = try reader.take(n);
+        var out: [n]u8 = undefined;
+        @memcpy(&out, slice[0..n]);
+        return out;
+    }
+
+    /// Reads a length-prefixed byte string: a u16 length then that many bytes. The
+    /// returned slice borrows the payload and lives as long as it does.
+    pub fn blob(reader: *Reader) Error![]const u8 {
+        const length = try reader.u16_();
+        return reader.take(length);
+    }
+
+    pub fn u16_(reader: *Reader) Error!u16 {
+        const slice = try reader.take(2);
+        return std.mem.readInt(u16, slice[0..2], .little);
+    }
+
     /// Whether every byte has been consumed. A handler that expects a fixed payload
     /// checks this so trailing bytes are rejected rather than ignored.
     pub fn atEnd(reader: Reader) bool {
@@ -96,6 +117,17 @@ pub const Writer = struct {
     pub fn putU128(writer: *Writer, value: u128) Error!void {
         const slice = try writer.room(16);
         std.mem.writeInt(u128, slice[0..16], value, .little);
+    }
+
+    pub fn putU16(writer: *Writer, value: u16) Error!void {
+        const slice = try writer.room(2);
+        std.mem.writeInt(u16, slice[0..2], value, .little);
+    }
+
+    /// Writes a fixed-size byte array, e.g. a hash, with no length prefix.
+    pub fn putArray(writer: *Writer, value: []const u8) Error!void {
+        const slice = try writer.room(value.len);
+        @memcpy(slice, value);
     }
 
     /// The bytes written so far, for handing to a reply.
