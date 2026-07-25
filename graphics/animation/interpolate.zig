@@ -20,9 +20,11 @@
 
 const std = @import("std");
 const design = @import("design");
+const tree = @import("../scene/tree.zig");
 
 const theme = design.theme;
 pub const Colour = theme.Colour;
+pub const Transform = tree.Transform;
 
 /// Evaluates a cubic Bézier component with endpoints pinned at 0 and 1 and the two
 /// control values `c1` and `c2`, at parameter `t`. This is one axis of the curve;
@@ -132,6 +134,39 @@ pub fn lerpColour(from: Colour, to: Colour, fraction: f32) Colour {
     };
 }
 
+/// Interpolates between two affine transforms component by component. This is correct
+/// for the translations and axis scales an interface animates; a transform carrying
+/// rotation would need its rotation decomposed and slerped, which the reference motion
+/// does not use, so the honest, simple thing is a component lerp with that caveat
+/// stated rather than a wrong rotation blend hidden behind a fancier signature.
+pub fn lerpTransform(from: Transform, to: Transform, fraction: f32) Transform {
+    return .{
+        .a = lerp(from.a, to.a, fraction),
+        .b = lerp(from.b, to.b, fraction),
+        .c = lerp(from.c, to.c, fraction),
+        .d = lerp(from.d, to.d, fraction),
+        .tx = lerp(from.tx, to.tx, fraction),
+        .ty = lerp(from.ty, to.ty, fraction),
+    };
+}
+
+/// The eased value at `progress` for a motion, with reduced motion honoured by
+/// substituting the curve rather than removing the change.
+///
+/// When a person has asked for less motion, the answer is not to freeze — a surface
+/// that simply stopped moving would leave them unable to tell that anything happened.
+/// Instead the curve is substituted: the springy, overshooting motion becomes a plain
+/// linear cross-fade over the same progress, so the state change still reads but the
+/// movement that conveys it is quieted. This is the one place a motion's shape is
+/// chosen, so the substitution happens once, at resolve time, for every animator.
+pub fn easedForMotion(progress: f32, reduce_motion: bool) f32 {
+    if (reduce_motion) {
+        // A plain linear fade: the change is still conveyed, the movement is not.
+        return std.math.clamp(progress, 0, 1);
+    }
+    return spring(progress);
+}
+
 // --- Tests ---
 
 const testing = std.testing;
@@ -203,4 +238,28 @@ test "colour interpolation carries alpha" {
     const clear: Colour = .{ .red = 100, .green = 100, .blue = 100, .alpha = 0 };
     const solid: Colour = .{ .red = 100, .green = 100, .blue = 100, .alpha = 255 };
     try testing.expectEqual(@as(u8, 128), lerpColour(clear, solid, 0.5).alpha);
+}
+
+test "transform interpolation moves translation and scale to the midpoint" {
+    const from = Transform.identity;
+    const to = Transform{ .a = 2, .b = 0, .c = 0, .d = 2, .tx = 10, .ty = 20 };
+    const mid = lerpTransform(from, to, 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 1.5), mid.a, 1e-6); // scale 1 -> 2
+    try testing.expectApproxEqAbs(@as(f32, 5), mid.tx, 1e-6); // translate 0 -> 10
+    try testing.expectApproxEqAbs(@as(f32, 10), mid.ty, 1e-6);
+}
+
+test "reduced motion substitutes a linear fade for the spring but keeps the change" {
+    // Under reduced motion the eased value is exactly the (clamped) progress — a plain
+    // fade — and never overshoots, while the full motion springs past 1 somewhere.
+    var progress: f32 = 0;
+    var full_overshot = false;
+    while (progress <= 1.0) : (progress += 0.02) {
+        try testing.expectApproxEqAbs(std.math.clamp(progress, 0, 1), easedForMotion(progress, true), 1e-6);
+        if (easedForMotion(progress, false) > 1.0001) full_overshot = true;
+    }
+    try testing.expect(full_overshot);
+    // Both still reach the endpoints — the state change is conveyed either way.
+    try testing.expectEqual(@as(f32, 1), easedForMotion(1, true));
+    try testing.expectEqual(@as(f32, 1), easedForMotion(1, false));
 }

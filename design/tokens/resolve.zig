@@ -254,3 +254,29 @@ test "resolution carries the appearance it was asked for" {
     try testing.expectEqual(Appearance.dark, resolve(.reference, .dark).appearance);
     try testing.expectEqual(Appearance.light, resolve(.reference, .light).appearance);
 }
+
+test "the reference resolution matches the committed design conformance vector" {
+    // The conformance guard: these are the exact values extracted from the visual
+    // reference and committed here, so any future edit that would fork the resolution
+    // away from the design — a rebrand, a redesign, a well-meaning contractor — fails
+    // this test rather than silently changing what ships. When the reference design
+    // itself changes, this vector is updated in the same commit, deliberately.
+    const p = resolve(.reference, .dark).palette;
+    const g = resolve(.reference, .dark).geometry;
+
+    // Signature colours the whole system is recognised by.
+    try testing.expectEqual(rgb(0x0b, 0x0a, 0x11), p.base);
+    try testing.expectEqual(rgb(0x9a, 0x6c, 0xff), p.agent); // the agent purple
+    try testing.expectEqual(rgb(0x5a, 0xa8, 0xff), p.human);
+    try testing.expectEqual(rgb(0xe4, 0x6a, 0x6a), p.denied); // the denial red
+    try testing.expectEqual(rgb(0xf4, 0xf5, 0xf7), p.text_primary);
+    try testing.expectEqual(rgb(0xff, 0xff, 0xff), p.screen_card);
+
+    // Signature geometry.
+    try testing.expectEqual(@as(u16, 8), g.spacing_step);
+    try testing.expectEqual(@as(u16, 12), g.radius_md);
+    try testing.expectEqual(@as(u32, 393), g.screen_pro_w);
+    // The signature spring's overshoot is part of the identity.
+    try testing.expectEqual(@as(i16, 1100), g.spring.y2);
+    try testing.expect(g.spring.overshoots());
+}

@@ -130,6 +130,11 @@ pub const Node = struct {
     is_layer: bool = false,
     /// How this node blends over what is beneath it.
     blend: BlendMode = .normal,
+    /// Whether this node's content is protected — a password field, a payment sheet,
+    /// a private message. A protected node is shown on the physical screen but must
+    /// never be captured into a screenshot or recording. The compositor enforces this
+    /// at the boundary; a policy that only forbids it elsewhere would not.
+    secure: bool = false,
     /// Whether the node's content changed this frame, seeding damage.
     dirty: bool = false,
 };

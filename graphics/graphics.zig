@@ -17,6 +17,7 @@ pub const scene_tree = @import("scene/tree.zig");
 pub const scene_damage = @import("scene/damage.zig");
 pub const scene_hittest = @import("scene/hittest.zig");
 pub const compositor_layers = @import("compositor/layers.zig");
+pub const accessibility_frame = @import("accessibility/frame.zig");
 pub const animation = @import("animation/animation.zig");
 pub const interpolate = @import("animation/interpolate.zig");
 pub const effects = @import("effects/effects.zig");
@@ -56,6 +57,7 @@ test {
     _ = scene_damage;
     _ = scene_hittest;
     _ = compositor_layers;
+    _ = accessibility_frame;
     _ = animation;
     _ = interpolate;
     _ = effects;

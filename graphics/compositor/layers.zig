@@ -27,28 +27,49 @@ pub const BlendMode = scene.BlendMode;
 /// is dropped rather than composited.
 pub const min_visible_opacity: f32 = 1.0 / 512.0;
 
+/// What a flattened frame is being composited for: the physical screen a person
+/// looks at, or a capture — a screenshot or recording — that leaves the device's
+/// display. The difference is not cosmetic: a protected layer is drawn to the screen
+/// and withheld from a capture, and that decision has to be made here, at the one
+/// boundary every rendered frame crosses, or it is not enforced at all.
+pub const Target = enum {
+    /// The physical display. Everything visible is composited.
+    screen,
+    /// A screenshot or screen recording. Protected layers are withheld.
+    capture,
+};
+
 /// One composited layer: which node it is, the clipped rectangle it occupies in world
-/// space, the opacity it is drawn at, and how it blends over what is beneath it.
+/// space, the opacity it is drawn at, how it blends, and whether it is protected.
 pub const Layer = struct {
     node: usize,
     bounds: Rect,
     opacity: f32,
     blend: BlendMode,
+    secure: bool,
 };
 
-/// Flattens the tree into the ordered list of layers to composite, back to front.
+/// Flattens the tree into the ordered list of layers to composite for the screen.
+pub fn flatten(tree: Tree, buffer: []Layer) []const Layer {
+    return flattenForTarget(tree, buffer, .screen);
+}
+
+/// Flattens the tree into the ordered draw list for a target, back to front.
 ///
 /// Every node is considered in tree order, which is paint order. A node whose visible
 /// bounds are empty — clipped entirely away — or whose inherited opacity is below the
 /// visible floor is skipped, because compositing it would cost work for no visible
-/// result. The rest are written into `buffer` with their resolved world rectangle,
-/// opacity, and blend, and the filled prefix is returned. The caller sizes the buffer
-/// to the node count; a smaller buffer stops early, which is reported by the returned
-/// length being less than the visible count would be.
-pub fn flatten(tree: Tree, buffer: []Layer) []const Layer {
+/// result. And when the target is a capture, a protected node is withheld entirely: a
+/// screenshot or recording never receives a secure layer, enforced here at the
+/// composite boundary rather than trusted to a policy elsewhere. The rest are written
+/// into `buffer` and the filled prefix is returned.
+pub fn flattenForTarget(tree: Tree, buffer: []Layer, target: Target) []const Layer {
     var count: usize = 0;
-    for (tree.nodes, 0..) |_, index| {
+    for (tree.nodes, 0..) |node, index| {
         if (count >= buffer.len) break;
+        // The security enforcement: a protected layer is never composited into a
+        // capture. On screen it is drawn normally.
+        if (target == .capture and node.secure) continue;
         const opacity = tree.worldOpacity(index);
         if (opacity < min_visible_opacity) continue;
         const bounds = tree.visibleBounds(index);
@@ -57,11 +78,21 @@ pub fn flatten(tree: Tree, buffer: []Layer) []const Layer {
             .node = index,
             .bounds = bounds,
             .opacity = opacity,
-            .blend = tree.nodes[index].blend,
+            .blend = node.blend,
+            .secure = node.secure,
         };
         count += 1;
     }
     return buffer[0..count];
+}
+
+/// Whether any layer in a list is protected — for a caller confirming a capture path
+/// carries no secure content before it encodes.
+pub fn containsSecure(layers: []const Layer) bool {
+    for (layers) |layer| {
+        if (layer.secure) return true;
+    }
+    return false;
 }
 
 /// Whether an upper layer, fully opaque and normal-blended, completely covers a lower
@@ -135,8 +166,8 @@ test "a layer clipped entirely away is dropped" {
 }
 
 test "an opaque layer occludes one it fully covers, but not a peeking one" {
-    const covered: Layer = .{ .node = 0, .bounds = .{ .x = 10, .y = 10, .width = 10, .height = 10 }, .opacity = 1, .blend = .normal };
-    const cover: Layer = .{ .node = 1, .bounds = .{ .x = 0, .y = 0, .width = 100, .height = 100 }, .opacity = 1, .blend = .normal };
+    const covered: Layer = .{ .node = 0, .bounds = .{ .x = 10, .y = 10, .width = 10, .height = 10 }, .opacity = 1, .blend = .normal, .secure = false };
+    const cover: Layer = .{ .node = 1, .bounds = .{ .x = 0, .y = 0, .width = 100, .height = 100 }, .opacity = 1, .blend = .normal, .secure = false };
     try testing.expect(covers(cover, covered));
 
     // A translucent cover never occludes.
@@ -145,17 +176,38 @@ test "an opaque layer occludes one it fully covers, but not a peeking one" {
     try testing.expect(!covers(translucent, covered));
 
     // A cover that does not fully contain the lower layer never occludes it.
-    const partial: Layer = .{ .node = 2, .bounds = .{ .x = 0, .y = 0, .width = 15, .height = 100 }, .opacity = 1, .blend = .normal };
+    const partial: Layer = .{ .node = 2, .bounds = .{ .x = 0, .y = 0, .width = 15, .height = 100 }, .opacity = 1, .blend = .normal, .secure = false };
     try testing.expect(!covers(partial, covered));
 }
 
 test "occlusion looks only at layers drawn above" {
     const layers = [_]Layer{
-        .{ .node = 0, .bounds = .{ .x = 10, .y = 10, .width = 10, .height = 10 }, .opacity = 1, .blend = .normal },
-        .{ .node = 1, .bounds = .{ .x = 0, .y = 0, .width = 100, .height = 100 }, .opacity = 1, .blend = .normal },
+        .{ .node = 0, .bounds = .{ .x = 10, .y = 10, .width = 10, .height = 10 }, .opacity = 1, .blend = .normal, .secure = false },
+        .{ .node = 1, .bounds = .{ .x = 0, .y = 0, .width = 100, .height = 100 }, .opacity = 1, .blend = .normal, .secure = false },
     };
     // Layer 0 is covered by layer 1 which is drawn after it.
     try testing.expect(occluded(&layers, 0));
     // The top layer is occluded by nothing.
     try testing.expect(!occluded(&layers, 1));
+}
+
+test "a protected layer is drawn to the screen but withheld from a capture" {
+    const nodes = [_]Node{
+        .{ .parent = scene.no_parent, .bounds = .{ .x = 0, .y = 0, .width = 100, .height = 100 } },
+        // A protected node: a payment sheet, say.
+        .{ .parent = 0, .secure = true, .bounds = .{ .x = 10, .y = 10, .width = 50, .height = 50 } },
+    };
+    const tree: Tree = .{ .nodes = &nodes };
+    var buffer: [8]Layer = undefined;
+
+    // On screen, the protected layer is composited.
+    const on_screen = flattenForTarget(tree, &buffer, .screen);
+    try testing.expectEqual(@as(usize, 2), on_screen.len);
+    try testing.expect(containsSecure(on_screen));
+
+    // Into a capture, it is withheld — the screenshot never receives it.
+    var capture_buffer: [8]Layer = undefined;
+    const captured = flattenForTarget(tree, &capture_buffer, .capture);
+    try testing.expectEqual(@as(usize, 1), captured.len);
+    try testing.expect(!containsSecure(captured));
 }
