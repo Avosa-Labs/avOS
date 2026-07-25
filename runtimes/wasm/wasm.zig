@@ -8,9 +8,15 @@
 pub const engine = @import("host/engine.zig");
 pub const component = @import("host/component.zig");
 pub const vectors = @import("host/vectors.zig");
+pub const metering = @import("metering/metering.zig");
+pub const interruption = @import("interruption/interruption.zig");
+pub const wit = @import("wit/wit.zig");
 
 test {
     _ = engine;
     _ = component;
     _ = vectors;
+    _ = metering;
+    _ = interruption;
+    _ = wit;
 }
