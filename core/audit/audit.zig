@@ -251,6 +251,9 @@ pub const Ledger = struct {
     /// The digest of the most recently appended event, folded into the next
     /// event's digest so the whole ledger is a hash chain. Genesis is all zero.
     last_digest: ContentDigest = .{ .bytes = @splat(0) },
+    /// Event id to its position, so a lookup by id is constant time instead of a
+    /// scan. Without it, following a causal chain would be quadratic.
+    index_of: std.AutoHashMapUnmanaged(u128, usize) = .empty,
 
     pub fn init(gpa: std.mem.Allocator, ids: *identity.Source, clock: time.Clock) Ledger {
         return .{ .gpa = gpa, .ids = ids, .clock = clock };
@@ -262,6 +265,7 @@ pub const Ledger = struct {
         ledger.kinds.deinit(ledger.gpa);
         for (ledger.segments.items) |segment| ledger.gpa.free(segment);
         ledger.segments.deinit(ledger.gpa);
+        ledger.index_of.deinit(ledger.gpa);
         ledger.* = undefined;
     }
 
@@ -288,6 +292,9 @@ pub const Ledger = struct {
             try ledger.segments.append(ledger.gpa, segment);
             ledger.filled_in_last = 0;
         }
+        // The map entry is put before the counters advance, so a failed put
+        // leaves the ledger unchanged and the written slot is reused next time.
+        try ledger.index_of.put(ledger.gpa, event.id.value, ledger.total);
         ledger.segments.items[ledger.segments.items.len - 1][ledger.filled_in_last] = event;
         ledger.filled_in_last += 1;
         ledger.total += 1;
@@ -343,11 +350,8 @@ pub const Ledger = struct {
     }
 
     pub fn find(ledger: Ledger, id: identity.AuditEventId) ?Event {
-        for (0..ledger.total) |index| {
-            const event = ledger.at(index).?;
-            if (event.id.eql(id)) return event;
-        }
-        return null;
+        const index = ledger.index_of.get(id.value) orelse return null;
+        return ledger.at(index);
     }
 
     /// Every event belonging to one task, in the order it was recorded.
@@ -391,6 +395,63 @@ pub const Ledger = struct {
             if (event.outcome == .denied) try collected.append(gpa, event);
         }
         return collected.toOwnedSlice(gpa);
+    }
+
+    /// A page of results: skip `offset`, return at most `limit`. The
+    /// explainability views ask for a page rather than the whole history, so a
+    /// long-lived ledger never forces an unbounded slice into memory.
+    pub const Window = struct { offset: usize, limit: usize };
+
+    /// A page of the events matching `filter`, in record order. Caller owns the
+    /// returned slice.
+    fn pageWhere(
+        ledger: Ledger,
+        gpa: std.mem.Allocator,
+        window: Window,
+        context: anytype,
+        comptime matches: fn (@TypeOf(context), Event) bool,
+    ) ![]Event {
+        var collected: std.ArrayList(Event) = .empty;
+        errdefer collected.deinit(gpa);
+        var seen: usize = 0;
+        for (0..ledger.total) |index| {
+            if (collected.items.len == window.limit) break;
+            const event = ledger.at(index).?;
+            if (!matches(context, event)) continue;
+            if (seen < window.offset) {
+                seen += 1;
+                continue;
+            }
+            try collected.append(gpa, event);
+        }
+        return collected.toOwnedSlice(gpa);
+    }
+
+    /// A page of one task's events.
+    pub fn eventsForTaskPage(ledger: Ledger, gpa: std.mem.Allocator, task: identity.TaskId, window: Window) ![]Event {
+        return ledger.pageWhere(gpa, window, task, struct {
+            fn matches(wanted: identity.TaskId, event: Event) bool {
+                return event.task.eql(wanted);
+            }
+        }.matches);
+    }
+
+    /// A page of one actor's events.
+    pub fn eventsForActorPage(ledger: Ledger, gpa: std.mem.Allocator, actor: identity.PrincipalId, window: Window) ![]Event {
+        return ledger.pageWhere(gpa, window, actor, struct {
+            fn matches(wanted: identity.PrincipalId, event: Event) bool {
+                return event.actor.eql(wanted);
+            }
+        }.matches);
+    }
+
+    /// A page of denials.
+    pub fn denialsPage(ledger: Ledger, gpa: std.mem.Allocator, window: Window) ![]Event {
+        return ledger.pageWhere(gpa, window, {}, struct {
+            fn matches(_: void, event: Event) bool {
+                return event.outcome == .denied;
+            }
+        }.matches);
     }
 
     /// Whether anything recorded here left the device.
@@ -521,6 +582,23 @@ test "a truncated ledger fails sequence verification" {
     // a lost record would.
     fixture.ledger.segments.items[0][1].sequence = 99;
     try std.testing.expect(!fixture.ledger.verifySequence());
+}
+
+test "a page of denials skips an offset and caps its length" {
+    const gpa = std.testing.allocator;
+    var fixture: Fixture = undefined;
+    Fixture.init(gpa, &fixture);
+    defer fixture.deinit();
+
+    for (0..5) |_| {
+        _ = try fixture.ledger.append(.{ .actor = fixture.agent, .action = .action_denied, .outcome = .denied });
+        _ = try fixture.ledger.append(.{ .actor = fixture.agent, .action = .capability_used, .outcome = .succeeded });
+    }
+
+    const page = try fixture.ledger.denialsPage(gpa, .{ .offset = 1, .limit = 2 });
+    defer gpa.free(page);
+    try std.testing.expectEqual(@as(usize, 2), page.len);
+    for (page) |event| try std.testing.expectEqual(Outcome.denied, event.outcome);
 }
 
 test "the hash chain catches an edit that keeps the sequence intact" {
