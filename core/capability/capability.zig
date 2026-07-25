@@ -542,18 +542,36 @@ pub const Store = struct {
     /// Withdraws a grant. Outstanding handles become stale immediately.
     ///
     /// Delegations below this grant are withdrawn with it: authority that was
-    /// derived from a withdrawn grant cannot outlive it.
+    /// derived from a withdrawn grant cannot outlive it. The whole delegation
+    /// subtree is revoked, not just the immediate children — a grandchild grant
+    /// derived from a withdrawn ancestor must not survive, or revocation would
+    /// fail to contain delegated authority.
+    ///
+    /// The sweep is a fixpoint over the entry table rather than a recursive walk
+    /// so it allocates nothing: revocation is a containment action that must
+    /// succeed even under memory pressure. Each pass revokes any grant whose
+    /// parent is now revoked; passes repeat until one changes nothing. The pass
+    /// count is bounded by the delegation depth, and the table shrinks its set of
+    /// live descendants every pass, so it terminates.
     pub fn revoke(store: *Store, id: identity.CapabilityId) DomainError!void {
-        const entry = store.entries.getPtr(id.value) orelse return error.Unauthorized;
-        if (entry.revoked) return; // Idempotent.
-        entry.revoked = true;
-        entry.generation += 1;
+        const root = store.entries.getPtr(id.value) orelse return error.Unauthorized;
+        if (root.revoked) return; // Idempotent.
+        root.revoked = true;
+        root.generation += 1;
 
-        var iterator = store.entries.valueIterator();
-        while (iterator.next()) |candidate| {
-            if (candidate.delegated_from.eql(id) and !candidate.revoked) {
-                candidate.revoked = true;
-                candidate.generation += 1;
+        var changed = true;
+        while (changed) {
+            changed = false;
+            var iterator = store.entries.valueIterator();
+            while (iterator.next()) |candidate| {
+                if (candidate.revoked) continue;
+                if (candidate.delegated_from.eql(.none)) continue;
+                const parent = store.entries.get(candidate.delegated_from.value) orelse continue;
+                if (parent.revoked) {
+                    candidate.revoked = true;
+                    candidate.generation += 1;
+                    changed = true;
+                }
             }
         }
     }
@@ -1255,6 +1273,47 @@ test "revoking a grant revokes what was delegated from it" {
     try std.testing.expect(fixture.store.lookup(child.id).?.revoked);
     try std.testing.expectError(error.IntegrityFailure, fixture.store.check(child, .{
         .holder = fixture.other_agent,
+        .operation = .read,
+        .resource = .{ .kind = "calendar" },
+    }));
+}
+
+test "revoking a grant revokes the whole delegation subtree, not only its children" {
+    const gpa = std.testing.allocator;
+    var fixture: Fixture = undefined;
+    try Fixture.init(gpa, &fixture);
+    defer fixture.deinit();
+
+    // A third agent to hold the grandchild grant.
+    const third_agent = try fixture.registry.enroll(.{
+        .kind = .agent,
+        .display_name = "documents",
+        .policy_domain = "local",
+        .expires_at = .fromSeconds(100_000),
+        .issuer = fixture.human,
+    });
+
+    // A three-deep chain: human → agent → other_agent → third_agent.
+    const parent = try fixture.store.issue(.{
+        .issuer = fixture.human,
+        .holder = fixture.agent,
+        .resource = .{ .kind = "calendar" },
+        .operations = fixture.readOnly(),
+        .constraints = .{ .delegation_depth = 2 },
+    });
+    const child = try fixture.store.delegate(parent, fixture.other_agent, fixture.readOnly(), .{ .kind = "calendar" }, .{ .delegation_depth = 1 });
+    const grandchild = try fixture.store.delegate(child, third_agent, fixture.readOnly(), .{ .kind = "calendar" }, .{});
+
+    // The grandchild works before revocation.
+    _ = try fixture.store.check(grandchild, .{ .holder = third_agent, .operation = .read, .resource = .{ .kind = "calendar" } });
+
+    // Revoking the root withdraws every grant derived from it, at any depth.
+    try fixture.store.revoke(parent.id);
+
+    try std.testing.expect(fixture.store.lookup(child.id).?.revoked);
+    try std.testing.expect(fixture.store.lookup(grandchild.id).?.revoked);
+    try std.testing.expectError(error.IntegrityFailure, fixture.store.check(grandchild, .{
+        .holder = third_agent,
         .operation = .read,
         .resource = .{ .kind = "calendar" },
     }));

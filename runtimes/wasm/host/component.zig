@@ -170,25 +170,30 @@ const Fixture = struct {
     }
 
     fn package(fixture: *Fixture, contents: []const u8) !package_model.Package {
-        var operations: core.capability.OperationSet = .initEmpty();
-        operations.insert(.execute);
-        const package_identity: package_model.Identity = .ofContents(contents);
-        return .{
-            .identity = package_identity,
-            .manifest = .{
-                .name = "component",
-                .publisher = "reference publisher",
-                .version = .{ .major = 1, .minor = 0, .patch = 0 },
-                .declared_capabilities = &.{
-                    .{
-                        .resource_kind = "compute",
-                        .operations = operations,
-                        .justification = "run the packaged component",
-                    },
+        // Comptime so the declared-capabilities literal has static storage; a
+        // runtime set would make `&.{...}` point at a stack temporary.
+        const operations = comptime blk: {
+            var set: core.capability.OperationSet = .initEmpty();
+            set.insert(.execute);
+            break :blk set;
+        };
+        const manifest: package_model.Manifest = .{
+            .name = "component",
+            .publisher = "reference publisher",
+            .version = .{ .major = 1, .minor = 0, .patch = 0 },
+            .declared_capabilities = &.{
+                .{
+                    .resource_kind = "compute",
+                    .operations = operations,
+                    .justification = "run the packaged component",
                 },
             },
+        };
+        return .{
+            .identity = .ofContents(contents),
+            .manifest = manifest,
             .contents = contents,
-            .signature = try package_model.sign(fixture.key_pair, package_identity),
+            .signature = try package_model.sign(fixture.key_pair, manifest, contents),
         };
     }
 };

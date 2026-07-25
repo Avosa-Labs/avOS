@@ -136,7 +136,74 @@ pub const Manifest = struct {
         }
         return required;
     }
+
+    /// The digest a signature commits to: every manifest field and the contents,
+    /// bound together. Signing only the contents would leave the declared
+    /// capabilities, network destinations, version, publisher, and delegation
+    /// depth free to be altered on an otherwise validly-signed package, so the
+    /// whole manifest is folded in here. Fields are fed canonically — a domain
+    /// tag first, then each field length-prefixed or fixed-width — so two
+    /// distinct manifests can never hash the same way and no field boundary is
+    /// ambiguous.
+    pub fn signingDigest(manifest: Manifest, contents: []const u8) [digest_bytes]u8 {
+        var hasher = Sha256.init(.{});
+        hasher.update("package.manifest.signature.v1");
+        hashField(&hasher, manifest.name);
+        hashField(&hasher, manifest.publisher);
+        hashInt(&hasher, u32, manifest.version.major);
+        hashInt(&hasher, u32, manifest.version.minor);
+        hashInt(&hasher, u32, manifest.version.patch);
+        hashInt(&hasher, u8, @intFromBool(manifest.runs_in_background));
+        hashInt(&hasher, u8, manifest.max_delegation_depth);
+
+        hashInt(&hasher, u32, @intCast(manifest.declared_capabilities.len));
+        for (manifest.declared_capabilities) |declared| {
+            hashField(&hasher, declared.resource_kind);
+            hashInt(&hasher, u64, operationBits(declared.operations));
+            hashField(&hasher, declared.justification);
+            hashInt(&hasher, u8, @intFromBool(declared.optional));
+        }
+
+        hashInt(&hasher, u32, @intCast(manifest.network_destinations.len));
+        for (manifest.network_destinations) |destination| {
+            hashField(&hasher, destination);
+        }
+
+        // The contents' own digest, so a signature over the manifest is also a
+        // signature over exactly these bytes.
+        var contents_digest: [digest_bytes]u8 = undefined;
+        Sha256.hash(contents, &contents_digest, .{});
+        hasher.update(&contents_digest);
+
+        var digest: [digest_bytes]u8 = undefined;
+        hasher.final(&digest);
+        return digest;
+    }
 };
+
+fn hashInt(hasher: *Sha256, comptime T: type, value: T) void {
+    var buffer: [@sizeOf(T)]u8 = undefined;
+    std.mem.writeInt(T, &buffer, value, .little);
+    hasher.update(&buffer);
+}
+
+/// A length-prefixed field: the u32 length first, then the bytes, so a field's
+/// contents can never be confused with the start of the next field.
+fn hashField(hasher: *Sha256, bytes: []const u8) void {
+    hashInt(hasher, u32, @intCast(bytes.len));
+    hasher.update(bytes);
+}
+
+/// The operation set as a stable integer, so the exact set of permitted
+/// operations is committed to. The enum has at most 64 members.
+fn operationBits(operations: capability_model.OperationSet) u64 {
+    var bits: u64 = 0;
+    var iterator = operations.iterator();
+    while (iterator.next()) |operation| {
+        bits |= @as(u64, 1) << @intFromEnum(operation);
+    }
+    return bits;
+}
 
 /// A package as presented for installation.
 pub const Package = struct {
@@ -216,11 +283,14 @@ pub const Installer = struct {
             return error.UnknownPublisher;
         const public_key = Ed25519.PublicKey.fromBytes(key_bytes) catch return error.IntegrityFailure;
 
-        // The signature covers the identity, which covers the contents. Signing
-        // the digest rather than the bytes keeps verification constant in the
-        // size of the package.
+        // The signature covers the manifest bound to the contents, not the
+        // contents alone. Signing this digest, rather than the raw bytes, keeps
+        // verification constant in the size of the package while still committing
+        // to every declared capability, network destination, and version — so
+        // none of them can be altered on a validly-signed package.
+        const digest = package.manifest.signingDigest(package.contents);
         const parsed: Ed25519.Signature = .fromBytes(signature);
-        parsed.verify(&package.identity.digest, public_key) catch return error.IntegrityFailure;
+        parsed.verify(&digest, public_key) catch return error.IntegrityFailure;
     }
 
     /// Verifies and records a package as installed.
@@ -262,9 +332,11 @@ pub const Installer = struct {
     }
 };
 
-/// Signs a package's identity.
-pub fn sign(key_pair: Ed25519.KeyPair, package_identity: Identity) ![signature_bytes]u8 {
-    const signature = try key_pair.sign(&package_identity.digest, null);
+/// Signs a package: the manifest bound to its contents, so the signature commits
+/// to every declared field and not merely to the bytes.
+pub fn sign(key_pair: Ed25519.KeyPair, manifest: Manifest, contents: []const u8) ![signature_bytes]u8 {
+    const digest = manifest.signingDigest(contents);
+    const signature = try key_pair.sign(&digest, null);
     return signature.toBytes();
 }
 
@@ -293,8 +365,13 @@ const Fixture = struct {
 
     fn manifest(fixture: *Fixture) Manifest {
         _ = fixture;
-        var operations: capability_model.OperationSet = .initEmpty();
-        operations.insert(.read);
+        // Comptime so the declared-capabilities literal has static storage; a
+        // runtime set would make `&.{...}` point at a stack temporary.
+        const operations = comptime blk: {
+            var set: capability_model.OperationSet = .initEmpty();
+            set.insert(.read);
+            break :blk set;
+        };
         return .{
             .name = "calendar agent",
             .publisher = "reference publisher",
@@ -310,12 +387,19 @@ const Fixture = struct {
     }
 
     fn package(fixture: *Fixture, contents: []const u8) !Package {
-        const package_identity: Identity = .ofContents(contents);
+        return fixture.signed(fixture.manifest(), contents);
+    }
+
+    /// Builds a package whose signature is valid for the given manifest and
+    /// contents. Tests that need a variant manifest sign it here rather than
+    /// mutating a package after signing, which the manifest-bound signature
+    /// (correctly) rejects.
+    fn signed(fixture: *Fixture, declared: Manifest, contents: []const u8) !Package {
         return .{
-            .identity = package_identity,
-            .manifest = fixture.manifest(),
+            .identity = .ofContents(contents),
+            .manifest = declared,
             .contents = contents,
-            .signature = try sign(fixture.key_pair, package_identity),
+            .signature = try sign(fixture.key_pair, declared, contents),
         };
     }
 };
@@ -394,7 +478,42 @@ test "a package signed by the wrong publisher is refused" {
     const impostor: Ed25519.KeyPair = try .generateDeterministic(other_seed);
 
     var package = try fixture.package("component bytes");
-    package.signature = try sign(impostor, package.identity);
+    package.signature = try sign(impostor, package.manifest, package.contents);
+
+    try std.testing.expectError(error.IntegrityFailure, fixture.installer.verify(package));
+}
+
+test "altering a declared capability on a validly-signed package is refused" {
+    const gpa = std.testing.allocator;
+    var fixture: Fixture = undefined;
+    try Fixture.init(gpa, &fixture);
+    defer fixture.deinit();
+
+    var package = try fixture.package("component bytes");
+    // The signature is valid for the manifest as signed; widen the declared
+    // authority after signing. Because the signature commits to the manifest,
+    // the altered package must fail to verify.
+    var widened: capability_model.OperationSet = .initEmpty();
+    widened.insert(.read);
+    widened.insert(.write);
+    var declared = [_]DeclaredCapability{.{
+        .resource_kind = "calendar",
+        .operations = widened,
+        .justification = "read scheduled events to prepare a summary",
+    }};
+    package.manifest.declared_capabilities = &declared;
+
+    try std.testing.expectError(error.IntegrityFailure, fixture.installer.verify(package));
+}
+
+test "altering the version on a validly-signed package is refused" {
+    const gpa = std.testing.allocator;
+    var fixture: Fixture = undefined;
+    try Fixture.init(gpa, &fixture);
+    defer fixture.deinit();
+
+    var package = try fixture.package("component bytes");
+    package.manifest.version = .{ .major = 9, .minor = 9, .patch = 9 };
 
     try std.testing.expectError(error.IntegrityFailure, fixture.installer.verify(package));
 }
@@ -430,12 +549,13 @@ test "a downgrade is refused" {
     try Fixture.init(gpa, &fixture);
     defer fixture.deinit();
 
-    var newer = try fixture.package("version two bytes");
-    newer.manifest.version = .{ .major = 2, .minor = 0, .patch = 0 };
-    _ = try fixture.installer.install(newer);
+    var newer_manifest = fixture.manifest();
+    newer_manifest.version = .{ .major = 2, .minor = 0, .patch = 0 };
+    _ = try fixture.installer.install(try fixture.signed(newer_manifest, "version two bytes"));
 
-    var older = try fixture.package("version one bytes");
-    older.manifest.version = .{ .major = 1, .minor = 0, .patch = 0 };
+    var older_manifest = fixture.manifest();
+    older_manifest.version = .{ .major = 1, .minor = 0, .patch = 0 };
+    const older = try fixture.signed(older_manifest, "version one bytes");
 
     try std.testing.expectError(error.RollbackRefused, fixture.installer.install(older));
     try std.testing.expectEqual(
@@ -497,14 +617,14 @@ test "declaring a capability is not being granted it" {
     var everything: capability_model.OperationSet = .initEmpty();
     for (std.enums.values(capability_model.Operation)) |operation| everything.insert(operation);
 
-    var greedy = try fixture.package("component bytes");
-    greedy.manifest.declared_capabilities = &.{
-        .{
-            .resource_kind = "mail",
-            .operations = everything,
-            .justification = "asks for everything",
-        },
-    };
+    const greedy_capabilities = [_]DeclaredCapability{.{
+        .resource_kind = "mail",
+        .operations = everything,
+        .justification = "asks for everything",
+    }};
+    var greedy_manifest = fixture.manifest();
+    greedy_manifest.declared_capabilities = &greedy_capabilities;
+    const greedy = try fixture.signed(greedy_manifest, "component bytes");
 
     // Installation records the declaration. It confers nothing: the installer
     // returns no capability, and a grant is a separate policy decision.
