@@ -199,6 +199,33 @@ pub const Face = struct {
     }
 };
 
+/// A 2x3 affine transform in font units: point' = (a·x + c·y + e, b·x + d·y + f).
+/// Composite glyphs place a component under one of these; the base case is identity.
+const Affine = struct {
+    a: f32 = 1,
+    b: f32 = 0,
+    c: f32 = 0,
+    d: f32 = 1,
+    e: f32 = 0,
+    f: f32 = 0,
+
+    fn apply(t: Affine, x: f32, y: f32) [2]f32 {
+        return .{ t.a * x + t.c * y + t.e, t.b * x + t.d * y + t.f };
+    }
+
+    /// The transform that applies `child` first, then `parent`.
+    fn compose(parent: Affine, child: Affine) Affine {
+        return .{
+            .a = parent.a * child.a + parent.c * child.b,
+            .b = parent.b * child.a + parent.d * child.b,
+            .c = parent.a * child.c + parent.c * child.d,
+            .d = parent.b * child.c + parent.d * child.d,
+            .e = parent.a * child.e + parent.c * child.f + parent.e,
+            .f = parent.b * child.e + parent.d * child.f + parent.f,
+        };
+    }
+};
+
 /// A point on a contour in font units. `on` marks an on-curve point; off-curve points
 /// are quadratic control points.
 const OutlinePoint = struct { x: f32, y: f32, on: bool };
@@ -211,8 +238,7 @@ const Edge = struct { x0: f32, y0: f32, x1: f32, y1: f32 };
 fn collectEdges(
     face: Face,
     glyph: u16,
-    ox: f32,
-    oy: f32,
+    transform: Affine,
     depth: u8,
     edges: *std.ArrayList(Edge),
     gpa: std.mem.Allocator,
@@ -225,7 +251,7 @@ fn collectEdges(
     off += 10; // skip bounding box
 
     if (num_contours < 0) {
-        try collectComposite(face, off, ox, oy, depth, edges, gpa);
+        try collectComposite(face, off, transform, depth, edges, gpa);
         return;
     }
 
@@ -302,7 +328,7 @@ fn collectEdges(
             start = end + 1;
             continue;
         }
-        try emitContour(xs, ys, flags, start, end, ox, oy, edges, gpa);
+        try emitContour(xs, ys, flags, start, end, transform, edges, gpa);
         start = end + 1;
     }
 }
@@ -313,8 +339,7 @@ fn emitContour(
     flags: []const u8,
     start: usize,
     end: usize,
-    ox: f32,
-    oy: f32,
+    transform: Affine,
     edges: *std.ArrayList(Edge),
     gpa: std.mem.Allocator,
 ) Error!void {
@@ -325,7 +350,8 @@ fn emitContour(
     defer pts.deinit(gpa);
     for (0..count) |k| {
         const idx = start + k;
-        try pts.append(gpa, .{ .x = xs[idx] + ox, .y = ys[idx] + oy, .on = (flags[idx] & 0x01) != 0 });
+        const p = transform.apply(xs[idx], ys[idx]);
+        try pts.append(gpa, .{ .x = p[0], .y = p[1], .on = (flags[idx] & 0x01) != 0 });
     }
 
     // Reorder so the sequence begins on-curve, synthesizing a start midpoint if the
@@ -401,11 +427,14 @@ fn flattenQuadratic(p0: [2]f32, p1: [2]f32, p2: [2]f32, ring: *std.ArrayList([2]
     }
 }
 
+fn f2dot14(r: Reader, off: usize) Error!f32 {
+    return @as(f32, @floatFromInt(try r.i16At(off))) / 16384.0;
+}
+
 fn collectComposite(
     face: Face,
     start_off: u32,
-    ox: f32,
-    oy: f32,
+    transform: Affine,
     depth: u8,
     edges: *std.ArrayList(Edge),
     gpa: std.mem.Allocator,
@@ -427,11 +456,28 @@ fn collectComposite(
             dy = @floatFromInt(@as(i8, @bitCast(try r.u8At(off + 1))));
             off += 2;
         }
-        // Skip any scale fields; a UI face's components are translate-only in practice.
-        if (flags & 0x0008 != 0) off += 2; // WE_HAVE_A_SCALE
-        if (flags & 0x0040 != 0) off += 4; // X_AND_Y_SCALE
-        if (flags & 0x0080 != 0) off += 8; // 2x2
-        try collectEdges(face, component, ox + dx, oy + dy, depth + 1, edges, gpa);
+        // The component's 2x2 linear part. A glyph like "9" is another glyph placed
+        // under a rotation or reflection; ignoring the matrix drops it in the wrong
+        // place at the wrong orientation, which is exactly what a translate-only reader
+        // does wrong.
+        var component_transform: Affine = .{ .e = dx, .f = dy };
+        if (flags & 0x0008 != 0) { // WE_HAVE_A_SCALE
+            const scale = try f2dot14(r, off);
+            component_transform.a = scale;
+            component_transform.d = scale;
+            off += 2;
+        } else if (flags & 0x0040 != 0) { // X_AND_Y_SCALE
+            component_transform.a = try f2dot14(r, off);
+            component_transform.d = try f2dot14(r, off + 2);
+            off += 4;
+        } else if (flags & 0x0080 != 0) { // 2x2
+            component_transform.a = try f2dot14(r, off);
+            component_transform.b = try f2dot14(r, off + 2);
+            component_transform.c = try f2dot14(r, off + 4);
+            component_transform.d = try f2dot14(r, off + 6);
+            off += 8;
+        }
+        try collectEdges(face, component, transform.compose(component_transform), depth + 1, edges, gpa);
         if (flags & 0x0020 == 0) break; // no MORE_COMPONENTS
     }
 }
@@ -457,7 +503,7 @@ pub const Bitmap = struct {
 pub fn rasterize(face: Face, glyph: u16, pixel_size: f32, gpa: std.mem.Allocator) Error!Bitmap {
     var edges: std.ArrayList(Edge) = .empty;
     defer edges.deinit(gpa);
-    try collectEdges(face, glyph, 0, 0, 0, &edges, gpa);
+    try collectEdges(face, glyph, .{}, 0, &edges, gpa);
 
     const scale = pixel_size / @as(f32, @floatFromInt(face.units_per_em));
     if (edges.items.len == 0) {
@@ -597,6 +643,26 @@ test "the rasterizer fills a covered interior for a real glyph" {
     var max_cov: u8 = 0;
     for (bitmap.coverage) |c| max_cov = @max(max_cov, c);
     try testing.expect(max_cov > 200);
+}
+
+test "a composite glyph is placed by its transform, aligned with a simple one" {
+    // '9' in Sora is a composite glyph — another glyph under a transform. A reader that
+    // ignored the transform placed it far above the em; it must land on the same line as
+    // a simple digit like '4'.
+    const face = try Face.parse(design.fonts.sora_regular);
+    const nine = face.glyphIndex('9');
+    const four = face.glyphIndex('4');
+
+    var b9 = try rasterize(face, nine, 30.0, testing.allocator);
+    defer b9.deinit(testing.allocator);
+    var b4 = try rasterize(face, four, 30.0, testing.allocator);
+    defer b4.deinit(testing.allocator);
+
+    // Both cap-height digits: their tops sit within a few pixels of each other, and well
+    // inside the em (never dozens of pixels above the baseline).
+    try testing.expect(b9.top < 0 and b9.top > -34);
+    try testing.expect(@abs(b9.top - b4.top) <= 3);
+    try testing.expect(@abs(b9.left) <= 3);
 }
 
 test "an unmapped codepoint is the missing glyph and a space has no outline" {

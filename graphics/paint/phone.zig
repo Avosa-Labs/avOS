@@ -77,7 +77,7 @@ pub fn composite(window: *Framebuffer, screen: Framebuffer) void {
 /// The status bar on a light screen: the clock left, signal/battery indicators right. Drawn in the
 /// screen's own coordinates near the top, clear of the rounded corners.
 pub fn statusBar(screen: *Framebuffer) void {
-    _ = text.draw(screen, 26, 22, "9:41", 15, s(theme.screen_text));
+    _ = text.draw(screen, 30, 30, "9:41", 14, s(theme.screen_text));
     // Three signal-strength bars, rising.
     var bar: u8 = 0;
     while (bar < 3) : (bar += 1) {
