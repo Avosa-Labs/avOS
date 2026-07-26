@@ -20,6 +20,7 @@ pub const layouts = @import("layouts/layouts.zig");
 pub const icons = @import("icons/icons.zig");
 pub const materials = @import("materials/materials.zig");
 pub const theme = @import("theme/theme.zig");
+pub const fonts = @import("fonts/fonts.zig");
 
 test {
     _ = tokens;
