@@ -173,6 +173,11 @@ pub fn build(b: *std.Build) void {
             .description = "Verify no stand-in reaches production code",
         },
         .{
+            .name = "engine-lock",
+            .root = "tools/engine-lock/main.zig",
+            .description = "Verify every pinned C engine has a source, digest, licence, adapter, and ADR",
+        },
+        .{
             .name = "example-check",
             .root = "tools/example-check/main.zig",
             .description = "Verify the SDK example registry and the examples on disk are the same set",

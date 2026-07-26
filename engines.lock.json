@@ -1,0 +1,19 @@
+{
+  "generated_at": "2026-07-26T14:44:34Z",
+  "selection_rule": "each engine pinned exactly to a released tag, resolved from its project's official source; the digest is the SHA-256 of that upstream archive; adding one is a deliberate act recorded in an ADR",
+  "engines": [
+    {
+      "name": "vulkan-headers",
+      "role": "gpu-api",
+      "purpose": "The Vulkan API definition: the C headers and the vk.xml registry. Vulkan is the primary GPU API, and the Zig device binds against these headers. The loader is the platform's own libvulkan, resolved at runtime, so no binary is vendored here — only the API definition is pinned.",
+      "upstream": "https://github.com/KhronosGroup/Vulkan-Headers",
+      "version": "vulkan-sdk-1.4.350.1",
+      "commit": "8864cdc896bbc2a9b6eb36b3218fc9ef57908d77",
+      "source": "https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/vulkan-sdk-1.4.350.1.tar.gz",
+      "sha256": "6d1bb65e49520344cc0a48af3dc02e993781efff14c7ebdcb8ae9fa23ddf7e83",
+      "license": "Apache-2.0",
+      "adapter": "graphics/device/vulkan",
+      "adr": "docs/decisions/0004-vulkan-primary-gpu-api.md"
+    }
+  ]
+}
