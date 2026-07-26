@@ -92,6 +92,9 @@ pub const Palette = struct {
     icon_weather: Gradient,
     icon_notes: Gradient,
     icon_maps: Gradient,
+    // The brand mark: the diagonal blue-to-cyan of the boot logo, top-left to
+    // bottom-right. `top` is the upper-left indigo, `bottom` the lower-right cyan.
+    logo: Gradient,
 };
 
 /// The resolved geometry: the corner radii, elevation shadow, spacing step, and
@@ -183,6 +186,7 @@ fn referencePalette() Palette {
         .icon_weather = .{ .top = rgb(0x5a, 0xc8, 0xff), .bottom = rgb(0x2f, 0x9f, 0xe0) },
         .icon_notes = .{ .top = rgb(0xff, 0xd1, 0x5c), .bottom = rgb(0xf0, 0xa5, 0x2f) },
         .icon_maps = .{ .top = rgb(0x4f, 0xd0, 0x8a), .bottom = rgb(0x2a, 0x9e, 0x86) },
+        .logo = .{ .top = rgb(0x3b, 0x5c, 0xf6), .bottom = rgb(0x1a, 0xb8, 0xff) },
     };
 }
 

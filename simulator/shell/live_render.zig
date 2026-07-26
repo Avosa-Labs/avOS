@@ -20,6 +20,7 @@ const applications = @import("applications");
 pub const Host = simulator.host.Host;
 const Framebuffer = graphics.framebuffer.Framebuffer;
 const phone = graphics.phone;
+const logo = graphics.logo;
 const home = graphics.home;
 const paint = graphics.paint;
 const vector = graphics.vector;
@@ -193,17 +194,17 @@ pub fn renderBoot(screen: *Framebuffer, t: f32) void {
     paint.paint(screen, &.{.{ .solid = .{ .rect = .{ .x = 0, .y = 0, .w = phone.screen_w, .h = phone.screen_h }, .colour = s(theme.base) } }});
     const cx: f32 = @floatFromInt(phone.screen_w / 2);
     const cy: f32 = @floatFromInt(phone.screen_h / 2);
-    // A soft glow that breathes.
+    const mark_r: f32 = 64.0;
+    // A soft glow behind the mark that breathes, in the logo's own blue.
     const pulse = 0.5 + 0.5 * @sin(t * 1.4);
     var g: u8 = 0;
     while (g < 4) : (g += 1) {
-        const r = (150.0 + pulse * 20.0) - @as(f32, @floatFromInt(g)) * 30.0;
-        vector.fillDisc(screen, cx, cy, r, .{ .r = theme.agent.red, .g = theme.agent.green, .b = theme.agent.blue, .a = 22 });
+        const r = (mark_r + 84.0 + pulse * 20.0) - @as(f32, @floatFromInt(g)) * 30.0;
+        vector.fillDisc(screen, cx, cy, r, .{ .r = theme.logo.top.red, .g = theme.logo.top.green, .b = theme.logo.top.blue, .a = 20 });
     }
-    // The mark: an agent ring with a human bar, turning slowly.
-    vector.strokeCircle(screen, cx, cy - 6, 46, 12, s(theme.agent));
-    vector.fillDisc(screen, cx + 34, cy - 6, 9, s(theme.coral));
-    text.drawCentred(screen, cx, cy + 92, "Starting your world", 15, s(theme.text_primary));
+    // The brand mark.
+    logo.draw(screen, cx, cy, mark_r);
+    text.drawCentred(screen, cx, cy + mark_r + 58.0, "Starting your world", 15, s(theme.text_primary));
 }
 
 pub fn renderRest(screen: *Framebuffer) void {

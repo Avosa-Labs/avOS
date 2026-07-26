@@ -39,6 +39,7 @@ pub const vector = @import("paint/vector.zig");
 pub const iconography = @import("paint/iconography.zig");
 pub const text = @import("paint/text.zig");
 pub const phone = @import("paint/phone.zig");
+pub const logo = @import("paint/logo.zig");
 pub const home = @import("paint/home.zig");
 pub const screens = @import("paint/screens.zig");
 pub const apps = @import("paint/apps.zig");
