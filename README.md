@@ -79,24 +79,12 @@ your distro's `libsdl2-dev` on Linux).
 
 ### On a host with no display
 
-The same surfaces render to PNG images with no GPU and no image library — the
-same display list the windowed loop uploads to the GPU drives a software
-rasterizer here, so a frame is a real, viewable artifact on any host. Open the
-output with any image viewer (`open frame.png` on macOS).
+No SDL2 or no window? Render the same surfaces to PNG instead:
 
 ```sh
-zig build shell  -- session /tmp/avos_    # the whole live session, boot to rest,
-                                          #   as frames: 00_boot 01_home 02_activity
-                                          #   03_approval 04_principals 05_store 06_rest
-zig build shell  -- home out.png          # a live surface: home|activity|approval|
-                                          #   principals|store|boot|rest
-zig build home   out.png                  # the home screen
-zig build screen -- store out.png         # a shell screen: ledger|approval|
-                                          #   principals|settings|store
-zig build app    -- phone out.png         # an app screen: phone|messages|
-                                          #   calendar|camera
-zig build icons  out.png                  # the app icon sheet
-zig build motion -- /tmp/m_ 10            # the agent-card entrance, as 10 animation frames
+zig build shell -- home out.png      # one surface: boot, home, activity,
+                                     #   approval, principals, store, rest
+zig build shell -- session frames_   # the whole boot-to-rest session, numbered
 ```
 
 The design language, colours, and screen inventory are recorded in
