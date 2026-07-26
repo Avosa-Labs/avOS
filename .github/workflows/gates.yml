@@ -107,6 +107,13 @@ jobs:
       - name: Confirm the running compiler is the pinned one
         run: zig version
 
+      # Fetch and verify the pinned graphics engines so the device adapters
+      # (built only when their headers are present) are compiled and their
+      # tests run in CI, catching a binding regression that a checkout without
+      # the headers would skip. The digest is re-verified before extraction.
+      - name: Vendor the pinned engines
+        run: zig build vendor-engines
+
       # Release feeds rate limit anonymous callers, and a gate that fails on
       # rate limiting teaches people to ignore it. The token is read-only and
       # scoped to this run.
