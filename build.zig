@@ -471,6 +471,36 @@ pub fn build(b: *std.Build) void {
         addModuleTests(b, test_step, "device-vulkan", vulkan_module);
     }
 
+    // The FreeType glyph rasterizer (ADR 0005) is compiled from the vendored source where it is
+    // present, and its tests rasterize real glyphs. Absent, the shell falls back to the
+    // pure-Zig rasterizer. The module list is narrowed to what the text path needs (see
+    // graphics/text/freetype/ftmodules.h), selected with FT_CONFIG_MODULES_H.
+    if (freetypeRoot(b)) |root| {
+        const freetype_module = b.createModule(.{
+            .root_source_file = b.path("graphics/text/freetype/freetype.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        freetype_module.addImport("design", design_module);
+        freetype_module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{root}) });
+        freetype_module.addIncludePath(b.path("graphics/text/freetype")); // the custom ftmodules.h
+        freetype_module.link_libc = true;
+        const ft_flags = [_][]const u8{ "-DFT2_BUILD_LIBRARY", "-DFT_CONFIG_MODULES_H=<ftmodules.h>" };
+        freetype_module.addCSourceFiles(.{
+            .root = .{ .cwd_relative = root },
+            .files = &.{
+                "src/base/ftbase.c",       "src/base/ftinit.c",   "src/base/ftsystem.c",
+                "src/base/ftdebug.c",      "src/base/ftbbox.c",   "src/base/ftbitmap.c",
+                "src/base/ftglyph.c",      "src/base/ftmm.c",     "src/truetype/truetype.c",
+                "src/sfnt/sfnt.c",         "src/smooth/smooth.c", "src/autofit/autofit.c",
+                "src/psnames/psnames.c",   "src/raster/raster.c", "src/cff/cff.c",
+                "src/pshinter/pshinter.c", "src/psaux/psaux.c",   "src/gzip/ftgzip.c",
+            },
+            .flags = &ft_flags,
+        });
+        addModuleTests(b, test_step, "text-freetype", freetype_module);
+    }
+
     addModuleTests(b, test_step, "simulator", simulator_module);
     addModuleTests(b, test_step, "emulator", emulator_module);
 
@@ -967,6 +997,16 @@ fn vulkanHeadersRoot(b: *std.Build) ?[]const u8 {
     const marker = include ++ "/vulkan/vulkan_core.h";
     b.build_root.handle.access(io, marker, .{}) catch return null;
     return include;
+}
+
+/// The root of the vendored FreeType source, or null if it is not present. The glyph adapter
+/// (ADR 0005) compiles from this source only when it is vendored; `zig build vendor-engines`
+/// fetches and verifies it into the cache this looks for.
+fn freetypeRoot(b: *std.Build) ?[]const u8 {
+    const io = b.graph.io;
+    const root = ".engines/freetype";
+    b.build_root.handle.access(io, root ++ "/src/base/ftbase.c", .{}) catch return null;
+    return root;
 }
 
 /// The developer-local reference-design path, from the environment or a git-ignored local
