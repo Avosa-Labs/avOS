@@ -24,21 +24,29 @@ const vertex_spirv align(4) = @embedFile("shaders/rounded.vert.spv").*;
 const fragment_spirv align(4) = @embedFile("shaders/rounded.frag.spv").*;
 
 /// A rounded rectangle to fill: its rectangle in pixels (top-left origin), corner radius in
-/// pixels, and colour. This is what a designed card contributes to a GPU frame.
+/// pixels, and a vertical gradient from `top` to `bottom`. A solid card passes equal colours.
+/// This is what a designed card contributes to a GPU frame.
 pub const Card = struct {
     x: f32,
     y: f32,
     width: f32,
     height: f32,
     radius: f32,
-    color: [4]f32,
+    top: [4]f32,
+    bottom: [4]f32,
+
+    /// A solid card: the same colour top and bottom.
+    pub fn solid(x: f32, y: f32, width: f32, height: f32, radius: f32, color: [4]f32) Card {
+        return .{ .x = x, .y = y, .width = width, .height = height, .radius = radius, .top = color, .bottom = color };
+    }
 };
 
-// The push constant a draw carries: the quad's clip rectangle (for the vertex stage), the colour,
-// the box centre and half-extent in pixels, and the corner radius (for the fragment SDF).
+// The push constant a draw carries: the quad's clip rectangle (for the vertex stage), the top and
+// bottom gradient colours, the box centre and half-extent in pixels, and the corner radius.
 const Push = extern struct {
     clip_rect: [4]f32,
-    color: [4]f32,
+    color_top: [4]f32,
+    color_bottom: [4]f32,
     geom: [4]f32,
     radius: [4]f32,
 };
@@ -67,7 +75,8 @@ pub fn composite(device: *device_mod.Device, gpa: std.mem.Allocator, width: u32,
         const radius = @min(card.radius, @min(half_w, half_h)); // a radius cannot exceed the half-extent
         const push = Push{
             .clip_rect = .{ card.x / fw * 2.0 - 1.0, card.y / fh * 2.0 - 1.0, card.width / fw * 2.0, card.height / fh * 2.0 },
-            .color = card.color,
+            .color_top = card.top,
+            .color_bottom = card.bottom,
             .geom = .{ card.x + half_w, card.y + half_h, half_w, half_h },
             .radius = .{ radius, 0, 0, 0 },
         };
@@ -83,7 +92,7 @@ const testing = std.testing;
 const env = @import("env.zig");
 const instance_mod = @import("instance.zig");
 
-test "a rounded card fills its interior and cuts its corners" {
+test "a solid rounded card fills its interior and cuts its corners" {
     var instance = instance_mod.Instance.create("rounded-test") catch return;
     defer instance.deinit();
     var device = device_mod.Device.create(&instance, testing.allocator) catch {
@@ -92,8 +101,7 @@ test "a rounded card fills its interior and cuts its corners" {
     };
     defer device.deinit();
 
-    // A green card at (12,12) 40x40 with a 12px radius, on a black clear.
-    const cards = [_]Card{.{ .x = 12, .y = 12, .width = 40, .height = 40, .radius = 12, .color = .{ 0, 1, 0, 1 } }};
+    const cards = [_]Card{Card.solid(12, 12, 40, 40, 12, .{ 0, 1, 0, 1 })}; // green, on a black clear
     var frame = try composite(&device, testing.allocator, 64, 64, .{ 0, 0, 0, 1 }, &cards);
     defer frame.deinit(testing.allocator);
 
@@ -102,4 +110,25 @@ test "a rounded card fills its interior and cuts its corners" {
     try testing.expectEqual(green, frame.at(32, 32)); // centre: filled
     try testing.expectEqual(green, frame.at(32, 14)); // top edge midpoint: filled (straight edge)
     try testing.expectEqual(black, frame.at(13, 13)); // near the box corner but outside the arc: cut
+}
+
+test "a card's vertical gradient runs from its top colour to its bottom colour" {
+    var instance = instance_mod.Instance.create("gradient-test") catch return;
+    defer instance.deinit();
+    var device = device_mod.Device.create(&instance, testing.allocator) catch {
+        if (env.deviceRequired()) return error.VulkanCallFailed;
+        return;
+    };
+    defer device.deinit();
+
+    // A full-frame card, red at the top grading to blue at the bottom.
+    const cards = [_]Card{.{ .x = 0, .y = 0, .width = 64, .height = 64, .radius = 0, .top = .{ 1, 0, 0, 1 }, .bottom = .{ 0, 0, 1, 1 } }};
+    var frame = try composite(&device, testing.allocator, 64, 64, .{ 0, 0, 0, 1 }, &cards);
+    defer frame.deinit(testing.allocator);
+
+    const near_top = frame.at(32, 2);
+    const near_bottom = frame.at(32, 61);
+    try testing.expect(near_top.r > 200 and near_top.b < 60); // top is red
+    try testing.expect(near_bottom.b > 200 and near_bottom.r < 60); // bottom is blue
+    try testing.expect(near_bottom.b > near_top.b); // blue grows downward
 }
