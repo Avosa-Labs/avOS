@@ -70,6 +70,9 @@ pub const sky = palette.sky;
 
 // --- The physical device ---
 
+/// The brand mark's diagonal gradient, used by the boot logo.
+pub const logo = palette.logo;
+
 pub const desktop_top = palette.desktop_top;
 pub const desktop_bottom = palette.desktop_bottom;
 pub const bezel_top = palette.bezel_top;
