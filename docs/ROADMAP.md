@@ -512,3 +512,43 @@ home) is shipping now. The next branches, in order:
 Each track is one large branch, finished and merged before the next opens, with
 every module meeting the definition of done above. Progress is tracked in the
 live task list and crossed off only after verification.
+
+---
+
+## Part IV — Graphics-rebuild infrastructure decisions
+
+The graphics rebuild (retained Zig compositor owning every frame; Skia, HarfBuzz,
+FreeType, and the GPU APIs as engines behind Zig adapters) fixed two CI
+infrastructure decisions so the engine and GPU work is verified, not deferred.
+
+### Engine build cache
+
+Vendored C/C++ engines are compiled from source (built-when-present), but CI
+builds each **once per pin, not once per run**. Zig content-addresses every
+object by its source bytes, flags, target, and compiler, so an engine whose pin
+is unchanged resolves to the same cache entry and is not rebuilt. The gates
+workflow caches `.zig-cache` keyed on the pin manifests (`engines.lock.json`,
+`toolchain.lock.json`) plus the build files, so the built objects persist across
+runs and a pin bump rebuilds exactly once — on the upgrade branch, where full
+verification already runs. The `engine-cache` gate asserts the property: after a
+warm build, a rebuild recompiles no vendored engine source. "HarfBuzz costs a
+long compile" is therefore true once per pin, not once per run.
+
+### Correctness on lavapipe, performance on hardware
+
+The GPU pipeline is verified headless against **Mesa lavapipe** (a conformant,
+CPU-only Vulkan implementation), so the swapchain, render passes, pipelines,
+command buffers, the Skia-on-Vulkan adapter, and every pixel-conformance and
+cross-backend test run in CI deterministically — with no vendor variance, which
+is better for pixel-diff gates than a real GPU. The device layer is developed and
+tested live against lavapipe; nothing is built blind.
+
+Gates split accordingly:
+
+- **Correctness and conformance** gates run on lavapipe in CI.
+- **Performance** gates (frame-time p99, 120 Hz, thermal) are **hardware** gates.
+  They run on a real-GPU runner, provisioned separately, and until then are
+  reported as pending — visibly skipped by name, never silently green (the same
+  rule as the design-extract skip). The performance lane blocks only Checkpoint
+  G3's timing assertions; every checkpoint before it is fully verified on
+  lavapipe.
