@@ -21,6 +21,7 @@ pub const scene_hittest = @import("scene/hittest.zig");
 pub const compositor_layers = @import("compositor/layers.zig");
 pub const scheduler = @import("compositor/scheduler.zig");
 pub const raster = @import("compositor/raster.zig");
+pub const present = @import("compositor/present.zig");
 pub const accessibility_frame = @import("accessibility/frame.zig");
 pub const animation = @import("animation/animation.zig");
 pub const interpolate = @import("animation/interpolate.zig");
