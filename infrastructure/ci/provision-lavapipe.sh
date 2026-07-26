@@ -33,8 +33,10 @@ pinned_sha=$(field sha256)
 icd=$(field icd)
 library=$(field library)
 
+# Recommends are installed too: lavapipe needs its full runtime (the LLVM library it JITs
+# through), and omitting it leaves an ICD that loads but cannot create a device.
 sudo apt-get update
-sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1 vulkan-tools
+sudo apt-get install -y mesa-vulkan-drivers libvulkan1 vulkan-tools
 
 installed_version=$(dpkg-query -W -f='${Version}' mesa-vulkan-drivers)
 [ -f "$library" ] || {
@@ -61,6 +63,16 @@ if [ "$installed_sha" != "$pinned_sha" ]; then
     echo "provision-lavapipe: the lavapipe library digest changed — re-verify pixel conformance and re-pin, do not float" >&2
     exit 1
 fi
+
+# Confirm the implementation actually works, not just that its files are present: lavapipe
+# must enumerate a device through the loader. This catches a broken install here rather than
+# deep in the test suite, and proves the lane the device tests are about to trust.
+if ! VK_ICD_FILENAMES="$icd" vulkaninfo --summary >/tmp/vulkaninfo.txt 2>&1 || ! grep -qi 'llvmpipe' /tmp/vulkaninfo.txt; then
+    echo 'provision-lavapipe: lavapipe did not enumerate a device' >&2
+    sed -n '1,40p' /tmp/vulkaninfo.txt >&2
+    exit 1
+fi
+echo "provision-lavapipe: lavapipe presents $(grep -i -m1 'deviceName' /tmp/vulkaninfo.txt | sed 's/^[[:space:]]*//')"
 
 # Verified: point the loader at lavapipe and make the device tests strict on this lane.
 echo "VK_ICD_FILENAMES=${icd}" >> "$GITHUB_ENV"

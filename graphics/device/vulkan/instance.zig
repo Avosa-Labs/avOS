@@ -45,6 +45,11 @@ pub const Instance = struct {
         const create_instance = loader.global(c.PFN_vkCreateInstance, "vkCreateInstance") orelse
             return error.MissingEntryPoint;
 
+        // Request the version we target, but never above what the loader supports: asking for a
+        // higher instance version than the implementation reports makes vkCreateInstance return
+        // VK_ERROR_INCOMPATIBLE_DRIVER. The device path uses only what this version offers.
+        const requested = if (supported < targetApiVersion()) supported else targetApiVersion();
+
         const engine_version = c.VK_MAKE_API_VERSION(0, 1, 0, 0);
         var application = c.VkApplicationInfo{
             .sType = c.VK_STRUCTURE_TYPE_APPLICATION_INFO,
@@ -52,7 +57,7 @@ pub const Instance = struct {
             .applicationVersion = engine_version,
             .pEngineName = "compositor",
             .engineVersion = engine_version,
-            .apiVersion = targetApiVersion(),
+            .apiVersion = requested,
         };
         var info = c.VkInstanceCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
