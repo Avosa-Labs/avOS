@@ -14,6 +14,7 @@
 const std = @import("std");
 const c = @import("bindings.zig").c;
 const loader_mod = @import("loader.zig");
+const env = @import("env.zig");
 
 pub const Error = loader_mod.Error || error{ IncompatibleDriver, InstanceCreationFailed };
 
@@ -44,6 +45,11 @@ pub const Instance = struct {
         const create_instance = loader.global(c.PFN_vkCreateInstance, "vkCreateInstance") orelse
             return error.MissingEntryPoint;
 
+        // Request the version we target, but never above what the loader supports: asking for a
+        // higher instance version than the implementation reports makes vkCreateInstance return
+        // VK_ERROR_INCOMPATIBLE_DRIVER. The device path uses only what this version offers.
+        const requested = if (supported < targetApiVersion()) supported else targetApiVersion();
+
         const engine_version = c.VK_MAKE_API_VERSION(0, 1, 0, 0);
         var application = c.VkApplicationInfo{
             .sType = c.VK_STRUCTURE_TYPE_APPLICATION_INFO,
@@ -51,7 +57,7 @@ pub const Instance = struct {
             .applicationVersion = engine_version,
             .pEngineName = "compositor",
             .engineVersion = engine_version,
-            .apiVersion = targetApiVersion(),
+            .apiVersion = requested,
         };
         var info = c.VkInstanceCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
@@ -95,6 +101,7 @@ test "an instance is created where a driver exists, or the reason is typed" {
         try std.testing.expect(instance.handle != null);
         instance.deinit();
     } else |err| {
+        if (env.deviceRequired()) return err; // the lavapipe lane must bring an instance up
         try std.testing.expect(err == error.LoaderNotFound or
             err == error.IncompatibleDriver or
             err == error.InstanceCreationFailed or

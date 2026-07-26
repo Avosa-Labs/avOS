@@ -10,6 +10,7 @@
 
 const std = @import("std");
 const c = @import("bindings.zig").c;
+const env = @import("env.zig");
 
 pub const Error = error{ LoaderNotFound, MissingEntryPoint };
 
@@ -70,6 +71,7 @@ test "opening the loader yields a usable entry point or a clean absence" {
         defer loader.close();
         try std.testing.expect(loader.get_instance_proc_addr != null);
     } else |err| {
+        if (env.deviceRequired()) return err; // the lavapipe lane guarantees a loader
         try std.testing.expectEqual(Error.LoaderNotFound, err);
     }
 }

@@ -17,6 +17,7 @@ const c = @import("bindings.zig").c;
 const loader_mod = @import("loader.zig");
 const instance_mod = @import("instance.zig");
 const select = @import("select.zig");
+const env = @import("env.zig");
 
 pub const Error = error{
     NoPhysicalDevice,
@@ -103,6 +104,7 @@ test "a device is brought up where a GPU exists, or the reason is typed" {
     // Robust on any host: bring up an instance, then a device; on a GPU host it creates and
     // tears both down, on a headless one the first step already reports a typed absence.
     var instance = instance_mod.Instance.create("device-bring-up-test") catch |err| {
+        if (env.deviceRequired()) return err; // the lavapipe lane must reach a device
         try std.testing.expect(err == error.LoaderNotFound or
             err == error.IncompatibleDriver or
             err == error.InstanceCreationFailed or
@@ -117,6 +119,7 @@ test "a device is brought up where a GPU exists, or the reason is typed" {
         try std.testing.expect(device.graphics_queue != null);
         device.deinit();
     } else |err| {
+        if (env.deviceRequired()) return err; // lavapipe presents a device; creation must work
         try std.testing.expect(err == error.NoPhysicalDevice or
             err == error.NoSuitableDevice or
             err == error.NoGraphicsQueue or

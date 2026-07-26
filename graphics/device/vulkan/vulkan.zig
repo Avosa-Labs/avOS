@@ -48,6 +48,7 @@ test {
     _ = @import("select.zig");
     _ = @import("capabilities.zig");
     _ = @import("swapchain.zig");
+    _ = @import("env.zig");
 }
 
 test "the packed version helpers read the components the target encodes" {

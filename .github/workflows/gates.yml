@@ -40,8 +40,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # The Linux runner image is pinned, not "latest", so the software Vulkan
+          # implementation the correctness lane renders against does not float with the image.
           - host: linux-x86_64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - host: macos-aarch64
             runner: macos-latest
 
@@ -109,6 +111,18 @@ jobs:
 
       - name: Confirm the running compiler is the pinned one
         run: zig version
+
+      # Provision the pinned software Vulkan implementation (Mesa lavapipe) so the GPU device
+      # adapter is verified headless and deterministically — no vendor variance, which suits
+      # pixel-diff gates better than a real GPU. Linux only: it is the correctness lane. The
+      # install is pinned and digest-verified against infrastructure/ci/vulkan-runtime.lock.json,
+      # so a Mesa update cannot silently shift a rendered pixel. On success the script exports
+      # VK_ICD_FILENAMES and REQUIRE_VULKAN_DEVICE (which makes the bring-up tests strict here);
+      # the macOS lane, without an implementation, stays tolerant. Performance gates are hardware
+      # gates and do not run against lavapipe.
+      - name: Provision the pinned software Vulkan implementation (lavapipe)
+        if: matrix.host == 'linux-x86_64'
+        run: infrastructure/ci/provision-lavapipe.sh
 
       # Fetch and verify the pinned graphics engines so the device adapters
       # (built only when their headers are present) are compiled and their
