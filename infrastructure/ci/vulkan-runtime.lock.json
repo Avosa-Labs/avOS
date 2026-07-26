@@ -1,0 +1,11 @@
+{
+  "selection_rule": "the CI software Vulkan implementation is pinned to an exact Mesa lavapipe build on a pinned runner image; the digest is the SHA-256 of the installed lavapipe ICD library, so a Mesa update that would shift deterministic rendering fails the gate until pixel conformance is re-verified and the pin is deliberately updated",
+  "runner_image": "ubuntu-24.04",
+  "mesa": {
+    "package": "mesa-vulkan-drivers",
+    "icd": "/usr/share/vulkan/icd.d/lvp_icd.x86_64.json",
+    "library": "/usr/lib/x86_64-linux-gnu/libvulkan_lvp.so",
+    "version": "PENDING-FIRST-RESOLUTION",
+    "sha256": "PENDING-FIRST-RESOLUTION"
+  }
+}

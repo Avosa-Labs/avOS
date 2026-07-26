@@ -14,6 +14,7 @@
 const std = @import("std");
 const c = @import("bindings.zig").c;
 const loader_mod = @import("loader.zig");
+const env = @import("env.zig");
 
 pub const Error = loader_mod.Error || error{ IncompatibleDriver, InstanceCreationFailed };
 
@@ -95,6 +96,7 @@ test "an instance is created where a driver exists, or the reason is typed" {
         try std.testing.expect(instance.handle != null);
         instance.deinit();
     } else |err| {
+        if (env.deviceRequired()) return err; // the lavapipe lane must bring an instance up
         try std.testing.expect(err == error.LoaderNotFound or
             err == error.IncompatibleDriver or
             err == error.InstanceCreationFailed or
