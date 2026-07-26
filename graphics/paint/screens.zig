@@ -14,7 +14,7 @@ const std = @import("std");
 const fb = @import("framebuffer.zig");
 const paint = @import("paint.zig");
 const vector = @import("vector.zig");
-const text = @import("text.zig");
+const text = @import("font.zig");
 const theme = @import("design").theme;
 
 const Framebuffer = fb.Framebuffer;
