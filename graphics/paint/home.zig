@@ -17,7 +17,7 @@ const theme = @import("design").theme;
 
 const Framebuffer = fb.Framebuffer;
 
-const w: u32 = theme.screen_pro_w;
+const w: u32 = theme.screen_w;
 
 fn s(colour: theme.Colour) fb.Rgba {
     return paint.sample(colour);
@@ -160,7 +160,7 @@ pub const dock_apps = [_]iconography.App{ .phone, .messages, .camera, .agents };
 
 fn dock(screen: *Framebuffer) void {
     const dh: u32 = 76;
-    const rect: paint.Rect = .{ .x = 16, .y = @intCast(theme.screen_pro_h - dh - 26), .w = w - 32, .h = dh };
+    const rect: paint.Rect = .{ .x = 16, .y = @intCast(theme.screen_h - dh - 26), .w = w - 32, .h = dh };
     paint.paint(screen, &.{.{ .rounded = .{ .rect = rect, .radius = theme.radius_xl + 4, .colour = sa(theme.screen_card, 200) } }});
     const tile: u32 = 52;
     const inner = @as(u32, @intCast(rect.w)) - 44;
@@ -175,7 +175,7 @@ fn dock(screen: *Framebuffer) void {
 const testing = std.testing;
 
 test "home renders white cards on a light screen" {
-    var screen = try Framebuffer.init(testing.allocator, theme.screen_pro_w, theme.screen_pro_h, s(theme.screen_top));
+    var screen = try Framebuffer.init(testing.allocator, theme.screen_w, theme.screen_h, s(theme.screen_top));
     defer screen.deinit();
     render(&screen, demo, 0.0);
     // The command-bar area holds white card pixels over the light wash.
@@ -183,7 +183,7 @@ test "home renders white cards on a light screen" {
     var yy: u32 = 110;
     while (yy < 156) : (yy += 1) {
         var xx: u32 = 24;
-        while (xx < theme.screen_pro_w - 24) : (xx += 1) {
+        while (xx < theme.screen_w - 24) : (xx += 1) {
             const p = screen.get(xx, yy);
             if (p.r > 250 and p.g > 250 and p.b > 250) whites += 1;
         }
@@ -192,7 +192,7 @@ test "home renders white cards on a light screen" {
 }
 
 test "home text is dark on the light screen" {
-    var screen = try Framebuffer.init(testing.allocator, theme.screen_pro_w, theme.screen_pro_h, s(theme.screen_top));
+    var screen = try Framebuffer.init(testing.allocator, theme.screen_w, theme.screen_h, s(theme.screen_top));
     defer screen.deinit();
     render(&screen, demo, 0.0);
     // Somewhere in the greeting band there are near-black text pixels.

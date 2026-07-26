@@ -23,8 +23,8 @@ fn s(colour: theme.Colour) fb.Rgba {
 }
 
 // The screen's logical size (the large 6.9" proportion) and the window that holds the framed device.
-pub const screen_w: u32 = theme.screen_max_w;
-pub const screen_h: u32 = theme.screen_max_h;
+pub const screen_w: u32 = theme.screen_w;
+pub const screen_h: u32 = theme.screen_h;
 
 pub const bezel: u32 = theme.bezel_thickness;
 pub const margin: u32 = theme.desktop_margin;

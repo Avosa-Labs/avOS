@@ -84,6 +84,12 @@ pub const screen_pro_w = geometry.screen_pro_w;
 pub const screen_pro_h = geometry.screen_pro_h;
 pub const screen_max_w = geometry.screen_max_w;
 pub const screen_max_h = geometry.screen_max_h;
+
+/// The active device screen every surface lays out against. The device is the large
+/// 6.9-inch proportion, so layout and the phone frame share one size — change it here
+/// and the whole interface follows.
+pub const screen_w = geometry.screen_max_w;
+pub const screen_h = geometry.screen_max_h;
 pub const bezel_thickness = geometry.bezel_thickness;
 pub const device_radius = geometry.device_radius;
 pub const screen_radius = geometry.screen_radius;

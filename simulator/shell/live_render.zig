@@ -176,7 +176,7 @@ fn card(screen: *Framebuffer, y: i32, h: u32) graphics.paint.Rect {
 }
 
 fn width_screen() u32 {
-    return theme.screen_pro_w;
+    return theme.screen_w;
 }
 
 /// The right edge of a card, in float, avoiding i32/u32 mixing.
