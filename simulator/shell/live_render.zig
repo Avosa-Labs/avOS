@@ -268,9 +268,14 @@ pub fn renderActivity(gpa: std.mem.Allocator, screen: *Framebuffer, host: *Host)
     }
     std.mem.reverse(@TypeOf(rows.items[0]), rows.items);
 
-    var y: i32 = 120;
-    for (rows.items) |row| {
-        const rect = card(screen, y, 58);
+    // The ledger is a flex column of equal-height cards; the engine places them.
+    var heights: [graphics.stack.max_blocks]f32 = undefined;
+    for (rows.items, 0..) |_, i| heights[i] = 58;
+    var tops: [graphics.stack.max_blocks]f32 = undefined;
+    graphics.stack.columnTops(120, heights[0..rows.items.len], 8, tops[0..rows.items.len]);
+
+    for (rows.items, 0..) |row, i| {
+        const rect = card(screen, @intFromFloat(tops[i]), 58);
         vector.fillDisc(screen, @floatFromInt(rect.x + 22), @floatFromInt(rect.y + 29), 5, s(row.colour));
         _ = text.draw(screen, @floatFromInt(rect.x + 38), @floatFromInt(rect.y + 25), row.actor, 12.5, s(theme.screen_text));
         _ = text.draw(screen, @floatFromInt(rect.x + 38), @floatFromInt(rect.y + 42), row.action, 10.5, s(theme.screen_text_muted));
@@ -278,7 +283,6 @@ pub fn renderActivity(gpa: std.mem.Allocator, screen: *Framebuffer, host: *Host)
         const bw = text.measure(badge, 10.5);
         const hue = if (row.outcome.denied) theme.denied else theme.teal;
         _ = text.draw(screen, rightF(rect) - 18 - bw, @floatFromInt(rect.y + 34), badge, 10.5, s(hue));
-        y += @as(i32, @intCast(rect.h)) + 8;
     }
 }
 
@@ -333,13 +337,24 @@ pub fn renderApproval(screen: *Framebuffer, host: *Host) void {
         _ = text.draw(screen, rightF(rect) - 22 - text.measure(f.v, 11.5), @floatFromInt(fy), f.v, 11.5, s(theme.screen_text));
     }
 
-    // Approve / hold buttons.
+    // Approve / hold buttons — a flex row of two equal cells split by the layout engine.
     const by: i32 = rect.y + @as(i32, @intCast(rect.h)) - 52;
-    const half: u32 = (@as(u32, @intCast(rect.w)) - 12) / 2;
-    paint.paint(screen, &.{.{ .rounded = .{ .rect = .{ .x = rect.x, .y = by, .w = half, .h = 40 }, .radius = theme.radius_lg, .colour = s(theme.agent) } }});
-    text.drawCentred(screen, @as(f32, @floatFromInt(rect.x)) + @as(f32, @floatFromInt(half)) / 2, @floatFromInt(by + 25), "Approve", 12.5, s(theme.screen_card));
-    paint.paint(screen, &.{.{ .rounded = .{ .rect = .{ .x = rect.x + @as(i32, @intCast(half)) + 12, .y = by, .w = half, .h = 40 }, .radius = theme.radius_lg, .colour = s(theme.screen_hairline) } }});
-    text.drawCentred(screen, @as(f32, @floatFromInt(rect.x + @as(i32, @intCast(half)) + 12)) + @as(f32, @floatFromInt(half)) / 2, @floatFromInt(by + 25), "Hold", 12.5, s(theme.screen_text));
+    var buttons: [2]graphics.flex.Rect = undefined;
+    graphics.flex.solve(
+        .{ .axis = .row, .gap = 12 },
+        &.{ .{ .main = .{ .flex = 1 } }, .{ .main = .{ .flex = 1 } } },
+        .{ .w = @floatFromInt(rect.w), .h = 40 },
+        &buttons,
+    );
+    const cells = [_]struct { rect: graphics.flex.Rect, fill: theme.Colour, label: []const u8, ink: theme.Colour }{
+        .{ .rect = buttons[0], .fill = theme.agent, .label = "Approve", .ink = theme.screen_card },
+        .{ .rect = buttons[1], .fill = theme.screen_hairline, .label = "Hold", .ink = theme.screen_text },
+    };
+    for (cells) |cell| {
+        const x: i32 = rect.x + @as(i32, @intFromFloat(cell.rect.x));
+        paint.paint(screen, &.{.{ .rounded = .{ .rect = .{ .x = x, .y = by, .w = @intFromFloat(cell.rect.w), .h = 40 }, .radius = theme.radius_lg, .colour = s(cell.fill) } }});
+        text.drawCentred(screen, @as(f32, @floatFromInt(x)) + cell.rect.w / 2, @floatFromInt(by + 25), cell.label, 12.5, s(cell.ink));
+    }
 }
 
 pub fn renderStore(screen: *Framebuffer) void {
@@ -354,14 +369,18 @@ pub fn renderStore(screen: *Framebuffer) void {
         .{ .name = "Unknown Build", .publisher = "Unreviewed source", .source = .sideload, .acknowledged = false, .colour = theme.denied },
     };
 
-    var y: i32 = 120;
-    for (catalog) |item| {
+    var heights: [graphics.stack.max_blocks]f32 = undefined;
+    for (catalog, 0..) |_, i| heights[i] = 66;
+    var tops: [graphics.stack.max_blocks]f32 = undefined;
+    graphics.stack.columnTops(120, heights[0..catalog.len], 8, tops[0..catalog.len]);
+
+    for (catalog, 0..) |item, i| {
         // A Store install proceeds; a sideload needs the person's acknowledgement, and
         // an unacknowledged sideload is blocked.
         const needs_ack = install_source.installNeedsAcknowledgement(item.source);
         const blocked = needs_ack and !item.acknowledged;
         const action: []const u8 = if (blocked) "Blocked" else if (needs_ack) "Acknowledge" else "Get";
-        const rect = card(screen, y, 66);
+        const rect = card(screen, @intFromFloat(tops[i]), 66);
         paint.paint(screen, &.{.{ .rounded_vgradient = .{
             .rect = .{ .x = rect.x + 16, .y = rect.y + 15, .w = 36, .h = 36 },
             .radius = 10,
@@ -374,7 +393,6 @@ pub fn renderStore(screen: *Framebuffer) void {
         const bw = text.measure(action, 11);
         paint.paint(screen, &.{.{ .rounded = .{ .rect = .{ .x = rightI(rect) - 20 - @as(i32, @intFromFloat(bw)) - 20, .y = rect.y + 20, .w = @as(u32, @intFromFloat(bw)) + 24, .h = 26 }, .radius = 13, .colour = s(hue) } }});
         text.drawCentred(screen, rightF(rect) - 20 - bw / 2 - 12, @floatFromInt(rect.y + 37), action, 11, s(theme.screen_card));
-        y += @as(i32, @intCast(rect.h)) + 8;
     }
 }
 
@@ -398,24 +416,51 @@ fn sa(colour: theme.Colour, alpha: u8) graphics.framebuffer.Rgba {
 /// the right in the row's own accent.
 fn renderScreen(screen: *Framebuffer, model: Screen) void {
     header(screen, model.title, model.sub);
-    var y: i32 = 122;
-    for (model.sections) |section| {
-        _ = text.draw(screen, @floatFromInt(pad + 4), @floatFromInt(y + 12), section.label, 10.5, s(theme.screen_label));
-        y += 24;
-        for (section.rows) |row| {
-            const rect = card(screen, y, 60);
-            // A soft halo behind the dot, in the row's colour, then the dot.
-            vector.fillDisc(screen, @floatFromInt(rect.x + 30), @floatFromInt(rect.y + 30), 15, sa(row.colour, 32));
-            vector.fillDisc(screen, @floatFromInt(rect.x + 30), @floatFromInt(rect.y + 30), 6, s(row.colour));
-            _ = text.draw(screen, @floatFromInt(rect.x + 52), @floatFromInt(rect.y + 26), row.title, 12.5, s(theme.screen_text));
-            _ = text.draw(screen, @floatFromInt(rect.x + 52), @floatFromInt(rect.y + 44), row.sub, 10, s(theme.screen_text_muted));
-            if (row.value.len > 0) {
-                const vw = text.measure(row.value, 10.5);
-                _ = text.draw(screen, rightF(rect) - 18 - vw, @floatFromInt(rect.y + 35), row.value, 10.5, s(row.colour));
-            }
-            y += @as(i32, @intCast(rect.h)) + 8;
+
+    // The screen is a flex column of blocks: each section is a label followed by its row
+    // cards, with a trailing spacer between sections. The layout engine places the blocks;
+    // this only paints them at the tops it returns.
+    const Kind = enum { label, card, spacer };
+    const Block = struct { kind: Kind, section: usize, row: usize };
+    var blocks: [graphics.stack.max_blocks]Block = undefined;
+    var heights: [graphics.stack.max_blocks]f32 = undefined;
+    var n: usize = 0;
+    for (model.sections, 0..) |section, si| {
+        blocks[n] = .{ .kind = .label, .section = si, .row = 0 };
+        heights[n] = 24;
+        n += 1;
+        for (section.rows, 0..) |_, ri| {
+            blocks[n] = .{ .kind = .card, .section = si, .row = ri };
+            heights[n] = 68; // a 60-tall card plus the 8 gap below it
+            n += 1;
         }
-        y += 8;
+        blocks[n] = .{ .kind = .spacer, .section = si, .row = 0 };
+        heights[n] = 8;
+        n += 1;
+    }
+
+    var tops: [graphics.stack.max_blocks]f32 = undefined;
+    graphics.stack.columnTops(122, heights[0..n], 0, tops[0..n]);
+
+    for (blocks[0..n], 0..) |b, i| {
+        const y: i32 = @intFromFloat(tops[i]);
+        switch (b.kind) {
+            .spacer => {},
+            .label => _ = text.draw(screen, @floatFromInt(pad + 4), @floatFromInt(y + 12), model.sections[b.section].label, 10.5, s(theme.screen_label)),
+            .card => {
+                const row = model.sections[b.section].rows[b.row];
+                const rect = card(screen, y, 60);
+                // A soft halo behind the dot, in the row's colour, then the dot.
+                vector.fillDisc(screen, @floatFromInt(rect.x + 30), @floatFromInt(rect.y + 30), 15, sa(row.colour, 32));
+                vector.fillDisc(screen, @floatFromInt(rect.x + 30), @floatFromInt(rect.y + 30), 6, s(row.colour));
+                _ = text.draw(screen, @floatFromInt(rect.x + 52), @floatFromInt(rect.y + 26), row.title, 12.5, s(theme.screen_text));
+                _ = text.draw(screen, @floatFromInt(rect.x + 52), @floatFromInt(rect.y + 44), row.sub, 10, s(theme.screen_text_muted));
+                if (row.value.len > 0) {
+                    const vw = text.measure(row.value, 10.5);
+                    _ = text.draw(screen, rightF(rect) - 18 - vw, @floatFromInt(rect.y + 35), row.value, 10.5, s(row.colour));
+                }
+            },
+        }
     }
 }
 
