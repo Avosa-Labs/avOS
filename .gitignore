@@ -63,3 +63,5 @@ zig-out/
 out.png
 tour.png
 *.render.png
+avOS
+avOSTour.html

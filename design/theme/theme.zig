@@ -50,6 +50,8 @@ pub const teal_bright = palette.teal_bright;
 pub const coral = palette.coral;
 pub const amber = palette.amber;
 pub const denied = palette.denied;
+pub const app_principal = palette.app_principal;
+pub const session_principal = palette.session_principal;
 
 // --- The light phone screen ---
 
