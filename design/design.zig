@@ -21,6 +21,7 @@ pub const icons = @import("icons/icons.zig");
 pub const materials = @import("materials/materials.zig");
 pub const theme = @import("theme/theme.zig");
 pub const fonts = @import("fonts/fonts.zig");
+pub const brand_mark = @import("brand/mark.zig");
 
 test {
     _ = tokens;
