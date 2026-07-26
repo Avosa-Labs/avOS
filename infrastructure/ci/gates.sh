@@ -84,6 +84,7 @@ run_gate 'design-conformance' zig build design-conformance
 run_gate 'no-abs-path' "$repository_root/infrastructure/ci/no-abs-path.sh"
 run_gate 'prohibitions' "$repository_root/infrastructure/ci/prohibitions.sh"
 run_gate 'engine-lock' zig build engine-lock
+run_gate 'engine-cache' "$repository_root/infrastructure/ci/engine-cache.sh"
 run_gate 'brand-check' zig build brand-check
 run_gate 'brand-check (synthetic brand)' zig build brand-check "-Dbrand=$reference_brand"
 run_gate 'simulator (canonical demo)' zig build simulator -- --no-ledger

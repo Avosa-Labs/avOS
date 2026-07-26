@@ -87,9 +87,12 @@ jobs:
           path: |
             ~/.cache/zig
             .zig-cache
-          key: zig-cache-${{ matrix.host }}-${{ hashFiles('build.zig', 'build.zig.zon') }}-${{ github.sha }}
+          # The pin manifests are in the key so a vendored engine is rebuilt exactly once
+          # when its pin changes and reused on every run in between; the content-addressed
+          # cache elides the recompile (asserted by the engine-cache gate).
+          key: zig-cache-${{ matrix.host }}-${{ hashFiles('build.zig', 'build.zig.zon', 'engines.lock.json', 'toolchain.lock.json') }}-${{ github.sha }}
           restore-keys: |
-            zig-cache-${{ matrix.host }}-${{ hashFiles('build.zig', 'build.zig.zon') }}-
+            zig-cache-${{ matrix.host }}-${{ hashFiles('build.zig', 'build.zig.zon', 'engines.lock.json', 'toolchain.lock.json') }}-
             zig-cache-${{ matrix.host }}-
 
       # Installs the pinned compiler and every pinned component, each verified
