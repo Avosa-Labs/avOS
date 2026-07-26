@@ -450,6 +450,22 @@ pub fn build(b: *std.Build) void {
         wasm_module.addImport("core", core_module);
         addModuleTests(b, test_step, "runtime-wasm", wasm_module);
     }
+
+    // The Vulkan device adapter (ADR 0004) is built only where the pinned Vulkan headers have
+    // been vendored (`zig build vendor-engines`). Absent, the checkout still builds everything
+    // else and falls back to the software path; present, the adapter compiles against the
+    // pinned headers and its loader and instance tests run.
+    if (vulkanHeadersRoot(b)) |include| {
+        const vulkan_module = b.createModule(.{
+            .root_source_file = b.path("graphics/device/vulkan/vulkan.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        vulkan_module.addIncludePath(.{ .cwd_relative = include });
+        vulkan_module.link_libc = true;
+        addModuleTests(b, test_step, "device-vulkan", vulkan_module);
+    }
+
     addModuleTests(b, test_step, "simulator", simulator_module);
     addModuleTests(b, test_step, "emulator", emulator_module);
 
@@ -935,6 +951,17 @@ fn wasmRuntimeRoot(b: *std.Build) ?[]const u8 {
         return root;
     }
     return null;
+}
+
+/// The include path of the vendored Vulkan headers, or null if they are not present. The
+/// device adapter (ADR 0004) builds only when this returns a path; `zig build vendor-engines`
+/// fetches and verifies the pinned headers into the cache this looks for.
+fn vulkanHeadersRoot(b: *std.Build) ?[]const u8 {
+    const io = b.graph.io;
+    const include = ".engines/vulkan-headers/include";
+    const marker = include ++ "/vulkan/vulkan_core.h";
+    b.build_root.handle.access(io, marker, .{}) catch return null;
+    return include;
 }
 
 /// The developer-local reference-design path, from the environment or a git-ignored local
