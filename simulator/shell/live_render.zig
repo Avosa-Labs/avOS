@@ -24,7 +24,7 @@ const logo = graphics.logo;
 const home = graphics.home;
 const paint = graphics.paint;
 const vector = graphics.vector;
-const text = graphics.text;
+const text = graphics.font;
 const theme = design.theme;
 
 /// The render target is the whole window: the framed device on its desktop.
