@@ -65,3 +65,5 @@ tour.png
 *.render.png
 avOS
 avOSTour.html
+# Developer-local config (design reference path, etc.) — never commit
+.local/

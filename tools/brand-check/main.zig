@@ -30,6 +30,7 @@ const brand_owned_prefixes = [_][]const u8{
 /// not authored source and are not part of the brand boundary.
 const skipped_prefixes = [_][]const u8{
     ".git/",
+    ".local/",
     ".tools/",
     ".zig-cache/",
     "out/",
