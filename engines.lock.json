@@ -14,6 +14,19 @@
       "license": "Apache-2.0",
       "adapter": "graphics/device/vulkan",
       "adr": "docs/decisions/0004-vulkan-primary-gpu-api.md"
+    },
+    {
+      "name": "freetype",
+      "role": "glyph-rasterizer",
+      "purpose": "The glyph rasterizer: FreeType loads a font's outlines and hints and rasterizes them to coverage. It is a CPU library, vendored from source and compiled, behind a Zig adapter that confines its C types. It gives the text path production-grade format coverage and hinting the pure-Zig rasterizer does not.",
+      "upstream": "https://github.com/freetype/freetype",
+      "version": "VER-2-14-3",
+      "commit": "c740f0fda4274d6ffd2e5b64a25b06ef69803a07",
+      "source": "https://github.com/freetype/freetype/archive/refs/tags/VER-2-14-3.tar.gz",
+      "sha256": "dc49de6b01a266eef4876a4dd34d9842c475d3e28ff2eff63bd2fb760ab56261",
+      "license": "FTL",
+      "adapter": "graphics/text/freetype",
+      "adr": "docs/decisions/0005-freetype-glyph-rasterizer.md"
     }
   ]
 }
