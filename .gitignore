@@ -67,3 +67,6 @@ avOS
 avOSTour.html
 # Developer-local config (design reference path, etc.) — never commit
 .local/
+
+# Vendored engine cache: rebuilt from engines.lock.json by `zig build vendor-engines`.
+.engines/

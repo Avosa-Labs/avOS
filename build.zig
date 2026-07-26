@@ -178,6 +178,11 @@ pub fn build(b: *std.Build) void {
             .description = "Verify every pinned C engine has a source, digest, licence, adapter, and ADR",
         },
         .{
+            .name = "vendor-engines",
+            .root = "tools/vendor-engines/main.zig",
+            .description = "Fetch each pinned engine, verify its digest, and unpack it into the local cache",
+        },
+        .{
             .name = "example-check",
             .root = "tools/example-check/main.zig",
             .description = "Verify the SDK example registry and the examples on disk are the same set",
