@@ -13,6 +13,7 @@ pub const compositor = @import("compositor/compositor.zig");
 pub const surfaces = @import("surfaces/surfaces.zig");
 pub const renderer = @import("renderer/renderer.zig");
 pub const scene = @import("scene/scene.zig");
+pub const flex = @import("layout/flex.zig");
 pub const scene_tree = @import("scene/tree.zig");
 pub const scene_damage = @import("scene/damage.zig");
 pub const scene_hittest = @import("scene/hittest.zig");
