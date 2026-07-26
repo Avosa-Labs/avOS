@@ -658,6 +658,9 @@ pub fn build(b: *std.Build) void {
             .{ .name = "applications", .module = applications_module },
         },
     });
+    // The live surfaces carry a per-screen pixel gate (P6.3): its tests render each designed
+    // surface and sample the framebuffer at the layout engine's rectangles, so they run here.
+    addModuleTests(b, test_step, "live_render", live_render_module);
 
     // The headless shell: renders the live surfaces to PNG files, for hosts without a display.
     const live_module = b.createModule(.{
