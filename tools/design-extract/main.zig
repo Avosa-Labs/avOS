@@ -122,8 +122,13 @@ fn buildColour(gpa: std.mem.Allocator, arena: std.mem.Allocator, design: []const
         try w.print("    .{{ .hex = \"{s}\", .count = {d}, .linear = .{{ {d:.6}, {d:.6}, {d:.6}, {d:.6} }}, .oklch = .{{ {d:.4}, {d:.4}, {d:.3} }}, .roles = .{{", .{
             entry.hex,
             entry.count,
-            color.round(lin.r, 6), color.round(lin.g, 6), color.round(lin.b, 6), color.round(lin.a, 6),
-            color.round(ok.l, 4),  color.round(ok.c, 4),  color.round(ok.h, 3),
+            color.round(lin.r, 6),
+            color.round(lin.g, 6),
+            color.round(lin.b, 6),
+            color.round(lin.a, 6),
+            color.round(ok.l, 4),
+            color.round(ok.c, 4),
+            color.round(ok.h, 3),
         });
         for (entry.roles.items, 0..) |role, idx| {
             if (idx != 0) try w.writeAll(",");

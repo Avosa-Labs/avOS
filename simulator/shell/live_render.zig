@@ -473,4 +473,3 @@ pub fn renderCamera(screen: *Framebuffer, host: *Host, t: f32) void {
     _ = t;
     renderScreen(screen, camera_screen);
 }
-
