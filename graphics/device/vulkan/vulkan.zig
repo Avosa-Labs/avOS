@@ -21,6 +21,7 @@ pub const Instance = @import("instance.zig").Instance;
 pub const targetApiVersion = @import("instance.zig").targetApiVersion;
 pub const Device = @import("device.zig").Device;
 pub const select = @import("select.zig");
+pub const memory = @import("memory.zig");
 pub const capabilities = @import("capabilities.zig");
 pub const swapchain = @import("swapchain.zig");
 
@@ -49,6 +50,7 @@ test {
     _ = @import("capabilities.zig");
     _ = @import("swapchain.zig");
     _ = @import("env.zig");
+    _ = @import("memory.zig");
 }
 
 test "the packed version helpers read the components the target encodes" {
