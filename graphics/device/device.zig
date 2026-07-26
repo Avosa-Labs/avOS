@@ -27,6 +27,10 @@ const layers = @import("../compositor/layers.zig");
 pub const Layer = layers.Layer;
 pub const Target = layers.Target;
 
+/// The render-path policy: which device draws a frame (GPU primary, software fallback) and
+/// why. The compositor consults this to choose a device rather than defaulting to software.
+pub const path = @import("path.zig");
+
 /// What a device can do, so a caller can choose a colour path and know what a display
 /// will honour. The software device reports the conservative baseline; a GPU device
 /// reports what the attached panel attests to.
