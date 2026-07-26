@@ -29,6 +29,7 @@ pub const Pipeline = struct {
         fragment_spirv: []const u8,
         push_constant_size: u32,
         topology: c.VkPrimitiveTopology,
+        blend: bool,
     ) Error!Pipeline {
         const dev = device.handle;
         const create_shader = try offscreen.req(device, c.PFN_vkCreateShaderModule, "vkCreateShaderModule");
@@ -51,7 +52,18 @@ pub const Pipeline = struct {
         var viewport_state = c.VkPipelineViewportStateCreateInfo{ .sType = c.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, .viewportCount = 1, .pViewports = &viewport, .scissorCount = 1, .pScissors = &scissor };
         var rasterization = c.VkPipelineRasterizationStateCreateInfo{ .sType = c.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO, .polygonMode = c.VK_POLYGON_MODE_FILL, .cullMode = c.VK_CULL_MODE_NONE, .frontFace = c.VK_FRONT_FACE_CLOCKWISE, .lineWidth = 1 };
         var multisample = c.VkPipelineMultisampleStateCreateInfo{ .sType = c.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, .rasterizationSamples = c.VK_SAMPLE_COUNT_1_BIT };
-        var blend_attachment = c.VkPipelineColorBlendAttachmentState{ .blendEnable = c.VK_FALSE, .colorWriteMask = c.VK_COLOR_COMPONENT_R_BIT | c.VK_COLOR_COMPONENT_G_BIT | c.VK_COLOR_COMPONENT_B_BIT | c.VK_COLOR_COMPONENT_A_BIT };
+        // Straight-alpha source-over when blending is on, so a fragment's coverage alpha mixes it
+        // with the background; a plain overwrite otherwise.
+        var blend_attachment = c.VkPipelineColorBlendAttachmentState{
+            .blendEnable = if (blend) c.VK_TRUE else c.VK_FALSE,
+            .srcColorBlendFactor = c.VK_BLEND_FACTOR_SRC_ALPHA,
+            .dstColorBlendFactor = c.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+            .colorBlendOp = c.VK_BLEND_OP_ADD,
+            .srcAlphaBlendFactor = c.VK_BLEND_FACTOR_ONE,
+            .dstAlphaBlendFactor = c.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+            .alphaBlendOp = c.VK_BLEND_OP_ADD,
+            .colorWriteMask = c.VK_COLOR_COMPONENT_R_BIT | c.VK_COLOR_COMPONENT_G_BIT | c.VK_COLOR_COMPONENT_B_BIT | c.VK_COLOR_COMPONENT_A_BIT,
+        };
         var color_blend = c.VkPipelineColorBlendStateCreateInfo{ .sType = c.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, .attachmentCount = 1, .pAttachments = &blend_attachment };
 
         var push_range = c.VkPushConstantRange{ .stageFlags = c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, .offset = 0, .size = push_constant_size };
