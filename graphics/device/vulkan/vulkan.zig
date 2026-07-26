@@ -22,6 +22,7 @@ pub const targetApiVersion = @import("instance.zig").targetApiVersion;
 pub const Device = @import("device.zig").Device;
 pub const select = @import("select.zig");
 pub const memory = @import("memory.zig");
+pub const offscreen = @import("offscreen.zig");
 pub const capabilities = @import("capabilities.zig");
 pub const swapchain = @import("swapchain.zig");
 
@@ -51,6 +52,7 @@ test {
     _ = @import("swapchain.zig");
     _ = @import("env.zig");
     _ = @import("memory.zig");
+    _ = @import("offscreen.zig");
 }
 
 test "the packed version helpers read the components the target encodes" {

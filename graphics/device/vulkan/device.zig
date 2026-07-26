@@ -37,7 +37,16 @@ pub const Device = struct {
     queue_family: u32,
     /// The chosen device's memory types and heaps, for choosing an allocation's memory type.
     memory_properties: c.VkPhysicalDeviceMemoryProperties,
+    /// Kept so device-level commands can be resolved against this device.
+    get_device_proc_addr: c.PFN_vkGetDeviceProcAddr,
     destroy: c.PFN_vkDestroyDevice,
+
+    /// Resolves a device-level command against this logical device. `Fn` is a Vulkan PFN
+    /// typedef (an optional function pointer); the result is null when the command is absent.
+    pub fn proc(device: Device, comptime Fn: type, name: [*:0]const u8) Fn {
+        const entry = device.get_device_proc_addr.?(device.handle, name) orelse return null;
+        return @as(@typeInfo(Fn).optional.child, @ptrCast(entry));
+    }
 
     /// Enumerates, selects, and creates a logical device on the best GPU the instance sees.
     pub fn create(instance: *instance_mod.Instance, gpa: std.mem.Allocator) Error!Device {
@@ -50,6 +59,7 @@ pub const Device = struct {
         const get_memory_properties = loader.instanceProc(handle, c.PFN_vkGetPhysicalDeviceMemoryProperties, "vkGetPhysicalDeviceMemoryProperties") orelse return error.MissingEntryPoint;
         const create_device = loader.instanceProc(handle, c.PFN_vkCreateDevice, "vkCreateDevice") orelse return error.MissingEntryPoint;
         const get_device_queue = loader.instanceProc(handle, c.PFN_vkGetDeviceQueue, "vkGetDeviceQueue") orelse return error.MissingEntryPoint;
+        const get_device_proc_addr = loader.instanceProc(handle, c.PFN_vkGetDeviceProcAddr, "vkGetDeviceProcAddr") orelse return error.MissingEntryPoint;
         const destroy_device = loader.instanceProc(handle, c.PFN_vkDestroyDevice, "vkDestroyDevice") orelse return error.MissingEntryPoint;
 
         // Enumerate the physical devices (count, then fill).
@@ -107,6 +117,7 @@ pub const Device = struct {
             .graphics_queue = queue,
             .queue_family = family,
             .memory_properties = memory_properties,
+            .get_device_proc_addr = get_device_proc_addr,
             .destroy = destroy_device,
         };
     }
