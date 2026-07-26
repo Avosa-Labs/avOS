@@ -39,14 +39,17 @@ pub const Frame = struct {
     }
 };
 
-const format = c.VK_FORMAT_R8G8B8A8_UNORM;
+/// The colour format the offscreen frames render into: 8-bit UNORM, so a clear or a solid
+/// fragment colour reads back as an exact byte value.
+pub const format = c.VK_FORMAT_R8G8B8A8_UNORM;
 
-/// Resolves a required device command, or fails.
-fn req(device: *device_mod.Device, comptime Fn: type, name: [*:0]const u8) Error!@typeInfo(Fn).optional.child {
+/// Resolves a required device command, or fails. Shared with the pipeline renderer.
+pub fn req(device: *device_mod.Device, comptime Fn: type, name: [*:0]const u8) Error!@typeInfo(Fn).optional.child {
     return device.proc(Fn, name) orelse error.VulkanCallFailed;
 }
 
-fn check(result: c.VkResult) Error!void {
+/// Turns a non-success VkResult into an error. Shared with the pipeline renderer.
+pub fn check(result: c.VkResult) Error!void {
     if (result != c.VK_SUCCESS) return error.VulkanCallFailed;
 }
 
