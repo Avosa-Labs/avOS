@@ -30,24 +30,55 @@ const H: c_int = @intCast(live.height);
 /// approval, the app grid opens the activity ledger, the dock opens the store; on any sub-surface a tap
 /// in the header returns home and a tap in the body advances through the agent-native surfaces.
 fn navigate(current: live.Surface, mx: i32, my: i32) live.Surface {
-    _ = mx; // Navigation is decided by vertical band alone; the horizontal tap does not select a surface.
-    // Translate the window tap into the light screen's own coordinates.
+    // Into the light screen's own coordinates.
+    const sx = mx - graphics.phone.screen_x;
     const sy = my - graphics.phone.screen_y;
+    const screen_w: i32 = @intCast(graphics.phone.screen_w);
     const screen_h: i32 = @intCast(graphics.phone.screen_h);
+
+    // A tap in the header returns home from any sub-surface.
+    if (current != .home and sy < 110) return .home;
+
     if (current == .home) {
-        if (sy >= 104 and sy <= 170) return .approval; // the command bar / active task
-        if (sy >= screen_h - 110) return .store; // the dock
-        if (sy >= 190 and sy <= 400) return .activity; // the in-motion list
+        // The dock: hit-test each app tile so a tap opens that app, not a band.
+        if (dockApp(sx, sy, screen_w, screen_h)) |app| return app;
+        if (sy >= 104 and sy <= 184) return .approval; // the command bar / active task
+        if (sy >= 200 and sy <= 440) return .activity; // the in-motion list
         return .home;
     }
-    if (sy < 110) return .home; // tap the header to go back home
-    return switch (current) {
-        .activity => .approval,
-        .approval => .principals,
-        .principals => .store,
-        .store => .home,
-        else => .home,
-    };
+
+    // On an app or a sub-surface, tapping the body returns home.
+    return .home;
+}
+
+/// The app a tap on the dock opens, or null if the tap is not on the dock. The layout
+/// mirrors `graphics.home.dock` exactly, so the tiles the person sees are the tiles hit.
+fn dockApp(sx: i32, sy: i32, screen_w: i32, screen_h: i32) ?live.Surface {
+    const dock_h: i32 = 76;
+    const dock_y = screen_h - dock_h - 26;
+    if (sy < dock_y or sy > dock_y + dock_h) return null;
+
+    const apps = graphics.home.dock_apps; // phone, messages, camera, agents
+    const tile: i32 = 52;
+    const rect_x: i32 = 16;
+    const rect_w = screen_w - 32;
+    const inner = rect_w - 44;
+    const gap = @divTrunc(inner - @as(i32, @intCast(apps.len)) * tile, @as(i32, @intCast(apps.len)) - 1);
+    const iy = dock_y + @divTrunc(dock_h - tile, 2);
+    if (sy < iy - 8 or sy > iy + tile + 8) return null;
+
+    for (apps, 0..) |app, i| {
+        const ix = rect_x + 22 + @as(i32, @intCast(i)) * (tile + gap);
+        if (sx >= ix - 8 and sx <= ix + tile + 8) {
+            return switch (app) {
+                .phone => .phone,
+                .messages => .messages,
+                .camera => .camera,
+                else => .activity, // the agents tile opens the live activity ledger
+            };
+        }
+    }
+    return null;
 }
 
 /// The factor to scale the full-resolution device into a window that fits the display,
