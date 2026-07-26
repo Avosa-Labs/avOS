@@ -50,6 +50,19 @@ fn navigate(current: live.Surface, mx: i32, my: i32) live.Surface {
     };
 }
 
+/// The factor to scale the full-resolution device into a window that fits the display,
+/// with a little breathing room. Never scales up: a device smaller than the screen opens
+/// at its own size. Falls back to 1:1 if the display bounds cannot be read.
+fn windowScale(w: c_int, h: c_int) f32 {
+    var bounds: c.Rect = undefined;
+    if (c.SDL_GetDisplayUsableBounds(0, &bounds) != 0) return 1.0;
+    if (bounds.w <= 0 or bounds.h <= 0) return 1.0;
+    const breathing_room: f32 = 0.92;
+    const by_height = @as(f32, @floatFromInt(bounds.h)) * breathing_room / @as(f32, @floatFromInt(h));
+    const by_width = @as(f32, @floatFromInt(bounds.w)) * breathing_room / @as(f32, @floatFromInt(w));
+    return @min(@min(by_height, by_width), 1.0);
+}
+
 pub fn main(init: std.process.Init) !u8 {
     const gpa = init.gpa;
 
@@ -64,12 +77,20 @@ pub fn main(init: std.process.Init) !u8 {
     }
     defer c.SDL_Quit();
 
+    // The framebuffer is the device at its full logical resolution; the window is that
+    // device scaled to fit the display. Rendering at full resolution keeps the phone
+    // crisp, while fitting the window keeps the whole device on screen — a tall device
+    // must never open a window taller than the screen it opens on.
+    const fit = windowScale(W, H);
+    const win_w: c_int = @intFromFloat(@as(f32, @floatFromInt(W)) * fit);
+    const win_h: c_int = @intFromFloat(@as(f32, @floatFromInt(H)) * fit);
+
     const window = c.SDL_CreateWindow(
         "Personal OS",
         c.SDL_WINDOWPOS_CENTERED,
         c.SDL_WINDOWPOS_CENTERED,
-        W,
-        H,
+        win_w,
+        win_h,
         c.SDL_WINDOW_SHOWN | c.SDL_WINDOW_ALLOW_HIGHDPI,
     ) orelse {
         std.debug.print("desktop: SDL_CreateWindow failed: {s}\n", .{c.SDL_GetError()});
@@ -108,7 +129,11 @@ pub fn main(init: std.process.Init) !u8 {
                     if (event.key.keysym.sym == c.SDLK_ESCAPE) running = false;
                 },
                 c.SDL_MOUSEBUTTONDOWN => {
-                    const next = navigate(surface, event.button.x, event.button.y);
+                    // The click arrives in window coordinates; map it back to the
+                    // device's full-resolution coordinates the surfaces are laid out in.
+                    const mx: i32 = @intFromFloat(@as(f32, @floatFromInt(event.button.x)) / fit);
+                    const my: i32 = @intFromFloat(@as(f32, @floatFromInt(event.button.y)) / fit);
+                    const next = navigate(surface, mx, my);
                     if (next != surface) {
                         surface = next;
                         progress = 0.0; // fade the new surface in
