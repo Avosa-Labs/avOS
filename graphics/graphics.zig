@@ -21,6 +21,7 @@ pub const scheduler = @import("compositor/scheduler.zig");
 pub const accessibility_frame = @import("accessibility/frame.zig");
 pub const animation = @import("animation/animation.zig");
 pub const interpolate = @import("animation/interpolate.zig");
+pub const animation_conformance = @import("animation/conformance.zig");
 pub const effects = @import("effects/effects.zig");
 pub const materials = @import("materials/materials.zig");
 pub const linebreak = @import("text/linebreak.zig");
