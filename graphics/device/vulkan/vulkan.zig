@@ -22,6 +22,7 @@ pub const targetApiVersion = @import("instance.zig").targetApiVersion;
 pub const Device = @import("device.zig").Device;
 pub const select = @import("select.zig");
 pub const capabilities = @import("capabilities.zig");
+pub const swapchain = @import("swapchain.zig");
 
 /// The major component of a packed Vulkan version (the header's VK_API_VERSION_MAJOR).
 pub fn versionMajor(version: u32) u32 {
@@ -46,6 +47,7 @@ test {
     _ = @import("device.zig");
     _ = @import("select.zig");
     _ = @import("capabilities.zig");
+    _ = @import("swapchain.zig");
 }
 
 test "the packed version helpers read the components the target encodes" {
