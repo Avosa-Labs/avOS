@@ -29,6 +29,7 @@ pub const rects = @import("rects.zig");
 pub const rounded = @import("rounded.zig");
 pub const texture = @import("texture.zig");
 pub const glyph = @import("glyph.zig");
+pub const surface = @import("surface.zig");
 pub const capabilities = @import("capabilities.zig");
 pub const swapchain = @import("swapchain.zig");
 
@@ -65,6 +66,7 @@ test {
     _ = @import("rounded.zig");
     _ = @import("texture.zig");
     _ = @import("glyph.zig");
+    _ = @import("surface.zig");
 }
 
 test "the packed version helpers read the components the target encodes" {
