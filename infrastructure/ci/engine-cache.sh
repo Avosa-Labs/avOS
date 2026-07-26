@@ -30,16 +30,17 @@ command -v zig >/dev/null 2>&1 || {
     exit 1
 }
 
-# Warm the cache: build everything once so every engine object is present.
-zig build test >/dev/null 2>&1
+# Warm the cache: compile the engine modules once (their test binaries are built, not run),
+# so every engine object is present without paying for the whole test suite.
+zig build engine-compile >/dev/null 2>&1
 
-# Rebuild with the C/C++ compiler traced. A warm, content-addressed cache must not run the
+# Recompile with the C/C++ compiler traced. A warm, content-addressed cache must not run the
 # compiler on any vendored engine source; count the ones it did.
-recompiled=$(zig build test --verbose-cc 2>&1 | grep -Ec '/\.engines/[^ ]*\.(c|cc)([[:space:]]|$)' || true)
+recompiled=$(zig build engine-compile --verbose-cc 2>&1 | grep -Ec '/\.engines/[^ ]*\.(c|cc)([[:space:]]|$)' || true)
 
 if [ "$recompiled" -ne 0 ]; then
     echo "engine-cache: a warm build recompiled ${recompiled} vendored engine source(s); the cache is not eliding the work:" >&2
-    zig build test --verbose-cc 2>&1 | grep -E '/\.engines/[^ ]*\.(c|cc)([[:space:]]|$)' >&2 || true
+    zig build engine-compile --verbose-cc 2>&1 | grep -E '/\.engines/[^ ]*\.(c|cc)([[:space:]]|$)' >&2 || true
     exit 1
 fi
 

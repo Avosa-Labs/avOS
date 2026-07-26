@@ -291,6 +291,10 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run unit tests");
 
+    // Compiles the vendored-engine modules without running their tests, so the engine-cache
+    // gate can confirm a warm build recompiles nothing without paying for the whole test suite.
+    const engine_compile_step = b.step("engine-compile", "Compile the vendored-engine modules, do not run their tests");
+
     addModuleTests(b, test_step, "brand", brand_module);
     addModuleTests(b, test_step, "compat", compat_module);
     addModuleTests(b, test_step, "core", core_module);
@@ -469,6 +473,7 @@ pub fn build(b: *std.Build) void {
         vulkan_module.addIncludePath(.{ .cwd_relative = include });
         vulkan_module.link_libc = true;
         addModuleTests(b, test_step, "device-vulkan", vulkan_module);
+        addCompileCheck(b, engine_compile_step, "device-vulkan", vulkan_module);
     }
 
     // The FreeType glyph rasterizer (ADR 0005) is compiled from the vendored source where it is
@@ -499,6 +504,7 @@ pub fn build(b: *std.Build) void {
             .flags = &ft_flags,
         });
         addModuleTests(b, test_step, "text-freetype", freetype_module);
+        addCompileCheck(b, engine_compile_step, "text-freetype", freetype_module);
     }
 
     addModuleTests(b, test_step, "simulator", simulator_module);
@@ -1038,6 +1044,16 @@ fn addModuleTests(b: *std.Build, test_step: *std.Build.Step, name: []const u8, m
         .root_module = module,
     });
     test_step.dependOn(&b.addRunArtifact(unit_tests).step);
+}
+
+/// Registers a module to be compiled (its test binary built) but not run, so a gate can check
+/// that compiling it is a cache hit without executing the whole test suite.
+fn addCompileCheck(b: *std.Build, compile_step: *std.Build.Step, name: []const u8, module: *std.Build.Module) void {
+    const unit_tests = b.addTest(.{
+        .name = b.fmt("{s}-compile", .{name}),
+        .root_module = module,
+    });
+    compile_step.dependOn(&unit_tests.step); // the compile step, not a run artifact
 }
 
 /// The build refuses to configure on a compiler line whose lane is not green,
