@@ -472,6 +472,34 @@ pub fn build(b: *std.Build) void {
         addModuleTests(b, test_step, tool.name, module);
     }
 
+    // The design extractor is a generator, not a no-arg gate: it reads the developer-
+    // local reference design, whose path is supplied out of source (env
+    // DESIGN_REFERENCE_PATH or .local/design.zon) and never hardcoded. Configured → it
+    // runs and writes the committable conformance vectors; absent → a visible skip that
+    // still succeeds, so a machine without the design is never silently green.
+    {
+        const de_module = b.createModule(.{
+            .root_source_file = b.path("tools/design-extract/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "compat", .module = compat_module }},
+        });
+        const de_exe = b.addExecutable(.{ .name = "design-extract", .root_module = de_module });
+        b.installArtifact(de_exe);
+        addModuleTests(b, test_step, "design-extract", de_module);
+
+        const de_step = b.step("design-extract", "Extract the reference design into conformance vectors (needs a configured design reference)");
+        if (designReferencePath(b)) |ref_path| {
+            const run = b.addRunArtifact(de_exe);
+            run.step.dependOn(b.getInstallStep());
+            run.addArgs(&.{ ref_path, "test-vectors/design" });
+            de_step.dependOn(&run.step);
+        } else {
+            const notice = b.addSystemCommand(&.{ "sh", "-c", "echo 'design-extract: no design reference configured (set DESIGN_REFERENCE_PATH or write .local/design.zon); skipping extraction — vectors unchanged' >&2" });
+            de_step.dependOn(&notice.step);
+        }
+    }
+
     const inspector_module = b.createModule(.{
         .root_source_file = b.path("simulator/inspector/main.zig"),
         .target = target,
@@ -878,6 +906,23 @@ fn wasmRuntimeRoot(b: *std.Build) ?[]const u8 {
         return root;
     }
     return null;
+}
+
+/// The developer-local reference-design path, from the environment or a git-ignored local
+/// config (`.local/design.zon`: `.{ .reference = "<path>" }`), or null if neither is set.
+/// Never a hardcoded absolute path — the reference stays out of source, so extraction is
+/// configured per machine and skips visibly where it is not.
+fn designReferencePath(b: *std.Build) ?[]const u8 {
+    const gpa = b.allocator;
+    if (b.graph.environ_map.get("DESIGN_REFERENCE_PATH")) |value| {
+        if (value.len > 0) return value;
+    }
+    const io = b.graph.io;
+    const bytes = b.build_root.handle.readFileAlloc(io, ".local/design.zon", gpa, .limited(64 * 1024)) catch return null;
+    const q1 = std.mem.indexOfScalar(u8, bytes, '"') orelse return null;
+    const q2 = std.mem.indexOfScalarPos(u8, bytes, q1 + 1, '"') orelse return null;
+    if (q2 <= q1 + 1) return null;
+    return bytes[q1 + 1 .. q2];
 }
 
 const Tool = struct {
