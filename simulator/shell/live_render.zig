@@ -34,7 +34,7 @@ pub const height: u32 = phone.window_h;
 const max_rows: usize = 6;
 
 /// The surfaces the shell can show.
-pub const Surface = enum { boot, home, activity, approval, principals, store, rest };
+pub const Surface = enum { boot, home, activity, approval, principals, store, rest, phone, messages, camera };
 
 /// Runs the canonical scenario into a fresh host. The caller owns it and must `deinit`.
 pub fn runScenario(host: *Host, gpa: std.mem.Allocator) !void {
@@ -65,6 +65,9 @@ pub fn renderSurface(gpa: std.mem.Allocator, target: *Framebuffer, host: *Host, 
                 .approval => renderApproval(&screen, host),
                 .principals => try renderPrincipals(gpa, &screen, host),
                 .store => renderStore(&screen),
+                .phone => renderPhone(&screen, host, t),
+                .messages => renderMessages(&screen, host),
+                .camera => renderCamera(&screen, host, t),
                 else => unreachable,
             }
             phone.homeIndicator(&screen);
@@ -379,3 +382,103 @@ pub fn renderStore(screen: *Framebuffer) void {
         y += @as(i32, @intCast(rect.h)) + 8;
     }
 }
+
+/// The name of the first agent in the run, for app screens to attribute work to.
+fn firstAgentName(host: *Host) []const u8 {
+    if (host.agents.items.len == 0) return "your agent";
+    const principal = host.registry.lookup(host.agents.items[0].id) orelse return "your agent";
+    return principal.display_name;
+}
+
+/// A pill label — a small rounded tag with centred text, for a status like a live badge.
+fn pill(screen: *Framebuffer, x: i32, y: i32, wpx: u32, label: []const u8, colour: theme.Colour) void {
+    paint.paint(screen, &.{.{ .rounded = .{ .rect = .{ .x = x, .y = y, .w = wpx, .h = 22 }, .radius = 11, .colour = sa(colour, 34) } }});
+    text.drawCentred(screen, @as(f32, @floatFromInt(x)) + @as(f32, @floatFromInt(wpx)) / 2.0, @floatFromInt(y + 15), label, 10, s(colour));
+}
+
+fn sa(colour: theme.Colour, alpha: u8) graphics.framebuffer.Rgba {
+    return .{ .r = colour.red, .g = colour.green, .b = colour.blue, .a = alpha };
+}
+
+/// Phone: a call the agent screened, transcribing live. The agent is a real principal
+/// from the run; the "listening" dot breathes so the screen reads as alive.
+pub fn renderPhone(screen: *Framebuffer, host: *Host, t: f32) void {
+    header(screen, "Phone", "Calls your agent screens");
+    const cx: f32 = @floatFromInt(width_screen() / 2);
+
+    text.drawCentred(screen, cx, 210, "Clinic", 30, s(theme.screen_text));
+    var by: [96]u8 = undefined;
+    const by_line = std.fmt.bufPrint(&by, "Screened by {s}", .{firstAgentName(host)}) catch "Screened by your agent";
+    text.drawCentred(screen, cx, 238, by_line, 13, s(theme.agent));
+
+    // The listening pulse — a dot that breathes.
+    const pulse = 0.5 + 0.5 * @sin(t * 3.0);
+    vector.fillDisc(screen, cx - 44, 268, 5.0 + pulse * 2.0, s(theme.teal));
+    text.drawCentred(screen, cx + 6, 273, "listening", 11, s(theme.screen_text_muted));
+
+    const c = card(screen, 300, 150);
+    _ = text.draw(screen, @floatFromInt(c.x + 20), @floatFromInt(c.y + 28), "Live transcript", 11, s(theme.screen_text_muted));
+    _ = text.draw(screen, @floatFromInt(c.x + 20), @floatFromInt(c.y + 58), "\u{201C}Confirming your appointment", 13, s(theme.screen_text));
+    _ = text.draw(screen, @floatFromInt(c.x + 20), @floatFromInt(c.y + 80), "for Thursday at ten.\u{201D}", 13, s(theme.screen_text));
+    _ = text.draw(screen, @floatFromInt(c.x + 20), @floatFromInt(c.y + 122), "Proposed a calendar hold", 12, s(theme.agent));
+
+    // The end-call control.
+    const end_w: u32 = 88;
+    const end_x: i32 = @intFromFloat(cx - @as(f32, @floatFromInt(end_w)) / 2.0);
+    paint.paint(screen, &.{.{ .rounded = .{ .rect = .{ .x = end_x, .y = 500, .w = end_w, .h = 46 }, .radius = 22, .colour = s(theme.denied) } }});
+    text.drawCentred(screen, cx, 528, "End", 13, s(theme.text_primary));
+}
+
+/// Messages: threads the agent triaged, one drafted reply held for approval.
+pub fn renderMessages(screen: *Framebuffer, host: *Host) void {
+    header(screen, "Messages", "Triaged by your agent");
+    const agent = firstAgentName(host);
+
+    const Thread = struct { who: []const u8, note: []const u8, held: bool, colour: theme.Colour };
+    const threads = [_]Thread{
+        .{ .who = "Venue \u{00B7} Lisbon", .note = "Reply drafted, awaiting you", .held = true, .colour = theme.agent },
+        .{ .who = "Sam", .note = "Read \u{00B7} nothing needed", .held = false, .colour = theme.teal },
+        .{ .who = "Airline", .note = "Summarised the change", .held = false, .colour = theme.teal },
+    };
+
+    var y: i32 = 120;
+    for (threads) |th| {
+        const rect = card(screen, y, 66);
+        vector.fillDisc(screen, @floatFromInt(rect.x + 28), @floatFromInt(rect.y + 33), 13, s(th.colour));
+        _ = text.draw(screen, @floatFromInt(rect.x + 52), @floatFromInt(rect.y + 27), th.who, 13, s(theme.screen_text));
+        _ = text.draw(screen, @floatFromInt(rect.x + 52), @floatFromInt(rect.y + 46), th.note, 10.5, s(theme.screen_text_muted));
+        if (th.held) pill(screen, rightI(rect) - 66, rect.y + 22, 48, "Hold", theme.agent);
+        y += @as(i32, @intCast(rect.h)) + 8;
+    }
+
+    var note: [96]u8 = undefined;
+    const line = std.fmt.bufPrint(&note, "{s} sends nothing without you", .{agent}) catch "Sends nothing without you";
+    text.drawCentred(screen, @floatFromInt(width_screen() / 2), @floatFromInt(y + 34), line, 11, s(theme.screen_text_muted));
+}
+
+/// Camera: capture, never without the in-use light. The indicator glows so the promise
+/// is visible.
+pub fn renderCamera(screen: *Framebuffer, host: *Host, t: f32) void {
+    header(screen, "Camera", "Nothing captured without the light");
+    const cx: f32 = @floatFromInt(width_screen() / 2);
+
+    // The viewfinder.
+    const vf: graphics.paint.Rect = .{ .x = pad, .y = 130, .w = @intCast(width_screen() - @as(u32, @intCast(pad)) * 2), .h = 300 };
+    paint.paint(screen, &.{.{ .rounded_vgradient = .{ .rect = vf, .radius = theme.radius_xl, .top = s(theme.panel), .bottom = s(theme.base) } }});
+
+    // The in-use indicator: a glowing dot, unbypassable.
+    const glow = 0.5 + 0.5 * @sin(t * 2.4);
+    vector.fillDisc(screen, @floatFromInt(vf.x + 22), @floatFromInt(vf.y + 24), 9.0 + glow * 2.0, sa(theme.denied, 90));
+    vector.fillDisc(screen, @floatFromInt(vf.x + 22), @floatFromInt(vf.y + 24), 5, s(theme.denied));
+    _ = text.draw(screen, @floatFromInt(vf.x + 40), @floatFromInt(vf.y + 29), "In use", 11, s(theme.text_primary));
+
+    var by: [96]u8 = undefined;
+    const by_line = std.fmt.bufPrint(&by, "{s} framed this shot", .{firstAgentName(host)}) catch "Framed by your agent";
+    text.drawCentred(screen, cx, @floatFromInt(vf.y + @as(i32, @intCast(vf.h)) - 24), by_line, 12, s(theme.text_secondary));
+
+    // The shutter.
+    vector.strokeCircle(screen, cx, 490, 30, 4, s(theme.screen_text));
+    vector.fillDisc(screen, cx, 490, 22, s(theme.screen_text));
+    text.drawCentred(screen, cx, 548, "Tap to capture \u{00B7} held for you", 11, s(theme.screen_text_muted));
+}
+
