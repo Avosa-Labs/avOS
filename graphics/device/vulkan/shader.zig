@@ -30,6 +30,7 @@ pub const Pipeline = struct {
         push_constant_size: u32,
         topology: c.VkPrimitiveTopology,
         blend: bool,
+        descriptor_set_layout: c.VkDescriptorSetLayout,
     ) Error!Pipeline {
         const dev = device.handle;
         const create_shader = try offscreen.req(device, c.PFN_vkCreateShaderModule, "vkCreateShaderModule");
@@ -67,10 +68,15 @@ pub const Pipeline = struct {
         var color_blend = c.VkPipelineColorBlendStateCreateInfo{ .sType = c.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, .attachmentCount = 1, .pAttachments = &blend_attachment };
 
         var push_range = c.VkPushConstantRange{ .stageFlags = c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, .offset = 0, .size = push_constant_size };
+        var set_layout = descriptor_set_layout;
         var layout_info = c.VkPipelineLayoutCreateInfo{ .sType = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
         if (push_constant_size != 0) {
             layout_info.pushConstantRangeCount = 1;
             layout_info.pPushConstantRanges = &push_range;
+        }
+        if (set_layout != null) {
+            layout_info.setLayoutCount = 1;
+            layout_info.pSetLayouts = &set_layout;
         }
         var layout: c.VkPipelineLayout = null;
         try offscreen.check(create_layout(dev, &layout_info, null, &layout));
