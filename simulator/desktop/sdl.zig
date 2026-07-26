@@ -78,6 +78,7 @@ pub extern fn SDL_Init(flags: u32) c_int;
 pub extern fn SDL_Quit() void;
 pub extern fn SDL_GetError() [*c]const u8;
 pub extern fn SDL_CreateWindow(title: [*c]const u8, x: c_int, y: c_int, w: c_int, h: c_int, flags: u32) ?*Window;
+pub extern fn SDL_GetDisplayUsableBounds(displayIndex: c_int, rect: ?*Rect) c_int;
 pub extern fn SDL_DestroyWindow(window: ?*Window) void;
 pub extern fn SDL_CreateRenderer(window: ?*Window, index: c_int, flags: u32) ?*Renderer;
 pub extern fn SDL_DestroyRenderer(renderer: ?*Renderer) void;
