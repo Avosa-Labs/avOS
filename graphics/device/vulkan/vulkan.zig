@@ -24,6 +24,7 @@ pub const select = @import("select.zig");
 pub const memory = @import("memory.zig");
 pub const offscreen = @import("offscreen.zig");
 pub const pipeline = @import("pipeline.zig");
+pub const rects = @import("rects.zig");
 pub const capabilities = @import("capabilities.zig");
 pub const swapchain = @import("swapchain.zig");
 
@@ -55,6 +56,7 @@ test {
     _ = @import("memory.zig");
     _ = @import("offscreen.zig");
     _ = @import("pipeline.zig");
+    _ = @import("rects.zig");
 }
 
 test "the packed version helpers read the components the target encodes" {
