@@ -30,7 +30,6 @@ field() { sed -n "s/.*\"$1\": \"\\([^\"]*\\)\".*/\\1/p" "$lock" | head -1; }
 
 pinned_version=$(field version)
 pinned_sha=$(field sha256)
-icd=$(field icd)
 library=$(field library)
 
 # Recommends are installed too: lavapipe needs its full runtime (the LLVM library it JITs
@@ -44,6 +43,17 @@ installed_version=$(dpkg-query -W -f='${Version}' mesa-vulkan-drivers)
     exit 1
 }
 installed_sha=$(sha256sum "$library" | cut -d' ' -f1)
+
+# Discover the lavapipe ICD manifest: the JSON the loader reads that points at the pinned
+# library. The library is the determinism anchor and is digest-pinned; the manifest is only the
+# pointer, and its filename varies by Mesa build, so it is found by content rather than guessed.
+icd=$(grep -rl "$(basename "$library")" /usr/share/vulkan/icd.d/ 2>/dev/null | head -1 || true)
+if [ -z "$icd" ]; then
+    echo "provision-lavapipe: no ICD manifest referencing $(basename "$library") in /usr/share/vulkan/icd.d/" >&2
+    ls -la /usr/share/vulkan/icd.d/ >&2 2>/dev/null || true
+    exit 1
+fi
+echo "provision-lavapipe: ICD manifest ${icd}"
 
 echo "provision-lavapipe: mesa-vulkan-drivers ${installed_version}"
 echo "provision-lavapipe: ${library} sha256 ${installed_sha}"
