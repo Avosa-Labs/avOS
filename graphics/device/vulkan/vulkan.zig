@@ -22,6 +22,7 @@ pub const targetApiVersion = @import("instance.zig").targetApiVersion;
 pub const Device = @import("device.zig").Device;
 pub const select = @import("select.zig");
 pub const memory = @import("memory.zig");
+pub const shader = @import("shader.zig");
 pub const offscreen = @import("offscreen.zig");
 pub const pipeline = @import("pipeline.zig");
 pub const rects = @import("rects.zig");
@@ -54,6 +55,7 @@ test {
     _ = @import("swapchain.zig");
     _ = @import("env.zig");
     _ = @import("memory.zig");
+    _ = @import("shader.zig");
     _ = @import("offscreen.zig");
     _ = @import("pipeline.zig");
     _ = @import("rects.zig");
