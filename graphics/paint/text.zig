@@ -221,7 +221,10 @@ pub fn measure(letters: []const u8, size_px: f32) f32 {
 /// cap-height size and colour. Returns the x position just past the string.
 pub fn draw(target: *Framebuffer, x: f32, baseline_y: f32, letters: []const u8, size_px: f32, colour: Rgba) f32 {
     const scale = size_px / baseline;
-    const weight = @max(1.0, size_px * 0.11);
+    // A stem weight of ~0.14 of the cap height reads as a filled geometric sans at UI
+    // sizes, in the weight of the design's typeface, rather than the hairline a lighter
+    // stroke gives — which looks hand-drawn on a screen.
+    const weight = @max(1.2, size_px * 0.14);
     const top = baseline_y - baseline * scale; // y of the em-box top (cap line)
     var pen_x = x;
     for (letters) |char| {
