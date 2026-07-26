@@ -57,6 +57,9 @@ pub const Palette = struct {
     coral: Colour,
     amber: Colour,
     denied: Colour,
+    // The remaining principal-kind accents: an application and a virtual session.
+    app_principal: Colour,
+    session_principal: Colour,
     // The light phone screen.
     screen_top: Colour,
     screen_mid: Colour,
@@ -156,6 +159,8 @@ fn referencePalette() Palette {
         .coral = rgb(0xff, 0x8f, 0x6b),
         .amber = rgb(0xff, 0xb1, 0x5c),
         .denied = rgb(0xe4, 0x6a, 0x6a),
+        .app_principal = rgb(0xa7, 0x74, 0xff),
+        .session_principal = rgb(0xc8, 0x6f, 0xf0),
         .screen_top = rgb(0xf4, 0xf2, 0xfa),
         .screen_mid = rgb(0xee, 0xf0, 0xf7),
         .screen_bottom = rgb(0xf3, 0xee, 0xf7),

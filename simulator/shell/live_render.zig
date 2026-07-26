@@ -282,29 +282,24 @@ pub fn renderActivity(gpa: std.mem.Allocator, screen: *Framebuffer, host: *Host)
     }
 }
 
+// People & agents — "First-class citizens", the seven kinds of principal that inhabit
+// the OS as co-equals, verbatim from the design.
+const principals_screen: Screen = .{ .title = "People & agents", .sub = "Humans \u{00B7} agents \u{00B7} apps \u{00B7} services \u{00B7} orgs \u{00B7} devices \u{00B7} sessions", .sections = &.{
+    .{ .label = "FIRST-CLASS CITIZENS", .rows = &.{
+        .{ .title = "Humans", .sub = "you and your contacts", .colour = theme.coral, .value = "1" },
+        .{ .title = "Agents", .sub = "planner, route", .colour = theme.agent, .value = "2" },
+        .{ .title = "Applications", .sub = "sandboxed", .colour = theme.app_principal, .value = "4" },
+        .{ .title = "Services", .sub = "reached via agents", .colour = theme.human, .value = "3" },
+        .{ .title = "Organizations", .sub = "work", .colour = theme.coral, .value = "1" },
+        .{ .title = "Devices", .sub = "trusted endpoints", .colour = theme.teal, .value = "2" },
+        .{ .title = "Sessions", .sub = "ephemeral", .colour = theme.session_principal, .value = "live" },
+    } },
+} };
+
 pub fn renderPrincipals(gpa: std.mem.Allocator, screen: *Framebuffer, host: *Host) !void {
-    header(screen, "People & agents", "Everyone here is a first-class citizen");
-
-    var list: std.ArrayList(struct { kind: []const u8, name: []const u8, role: []const u8, colour: theme.Colour }) = .empty;
-    defer list.deinit(gpa);
-
-    if (host.registry.lookup(host.human)) |human| {
-        try list.append(gpa, .{ .kind = kindName(human.kind), .name = "You", .role = roleText(human.kind), .colour = kindColour(human.kind) });
-    }
-    for (host.agents.items) |agent| {
-        const principal = host.registry.lookup(agent.id) orelse continue;
-        try list.append(gpa, .{ .kind = kindName(principal.kind), .name = principal.display_name, .role = roleText(principal.kind), .colour = kindColour(principal.kind) });
-    }
-
-    var y: i32 = 120;
-    for (list.items) |p| {
-        const rect = card(screen, y, 64);
-        vector.fillDisc(screen, @floatFromInt(rect.x + 30), @floatFromInt(rect.y + 32), 14, s(p.colour));
-        _ = text.draw(screen, @floatFromInt(rect.x + 56), @floatFromInt(rect.y + 26), p.name, 13, s(theme.screen_text));
-        _ = text.draw(screen, @floatFromInt(rect.x + 56), @floatFromInt(rect.y + 44), p.role, 10.5, s(theme.screen_text_muted));
-        _ = text.draw(screen, rightF(rect) - 18 - text.measure(p.kind, 10), @floatFromInt(rect.y + 37), p.kind, 10, s(p.colour));
-        y += @as(i32, @intCast(rect.h)) + 8;
-    }
+    _ = gpa;
+    _ = host;
+    renderScreen(screen, principals_screen);
 }
 
 pub fn renderApproval(screen: *Framebuffer, host: *Host) void {
@@ -383,102 +378,99 @@ pub fn renderStore(screen: *Framebuffer) void {
     }
 }
 
-/// The name of the first agent in the run, for app screens to attribute work to.
-fn firstAgentName(host: *Host) []const u8 {
-    if (host.agents.items.len == 0) return "your agent";
-    const principal = host.registry.lookup(host.agents.items[0].id) orelse return "your agent";
-    return principal.display_name;
-}
+// --- The design's data-driven screen model ---
+//
+// Every app screen in the design is the same shape: a title and sub, then sections, each
+// a small label over rows, and each row a coloured dot, a title, a subtitle, and an
+// optional value on the right. Rendering from this model — with content taken verbatim
+// from the design — is what makes the apps look and read as the design intends.
 
-/// A pill label — a small rounded tag with centred text, for a status like a live badge.
-fn pill(screen: *Framebuffer, x: i32, y: i32, wpx: u32, label: []const u8, colour: theme.Colour) void {
-    paint.paint(screen, &.{.{ .rounded = .{ .rect = .{ .x = x, .y = y, .w = wpx, .h = 22 }, .radius = 11, .colour = sa(colour, 34) } }});
-    text.drawCentred(screen, @as(f32, @floatFromInt(x)) + @as(f32, @floatFromInt(wpx)) / 2.0, @floatFromInt(y + 15), label, 10, s(colour));
-}
+const Row = struct { title: []const u8, sub: []const u8, colour: theme.Colour, value: []const u8 = "" };
+const Section = struct { label: []const u8, rows: []const Row };
+const Screen = struct { title: []const u8, sub: []const u8, sections: []const Section };
 
 fn sa(colour: theme.Colour, alpha: u8) graphics.framebuffer.Rgba {
     return .{ .r = colour.red, .g = colour.green, .b = colour.blue, .a = alpha };
 }
 
-/// Phone: a call the agent screened, transcribing live. The agent is a real principal
-/// from the run; the "listening" dot breathes so the screen reads as alive.
-pub fn renderPhone(screen: *Framebuffer, host: *Host, t: f32) void {
-    header(screen, "Phone", "Calls your agent screens");
-    const cx: f32 = @floatFromInt(width_screen() / 2);
-
-    text.drawCentred(screen, cx, 210, "Clinic", 30, s(theme.screen_text));
-    var by: [96]u8 = undefined;
-    const by_line = std.fmt.bufPrint(&by, "Screened by {s}", .{firstAgentName(host)}) catch "Screened by your agent";
-    text.drawCentred(screen, cx, 238, by_line, 13, s(theme.agent));
-
-    // The listening pulse — a dot that breathes.
-    const pulse = 0.5 + 0.5 * @sin(t * 3.0);
-    vector.fillDisc(screen, cx - 44, 268, 5.0 + pulse * 2.0, s(theme.teal));
-    text.drawCentred(screen, cx + 6, 273, "listening", 11, s(theme.screen_text_muted));
-
-    const c = card(screen, 300, 150);
-    _ = text.draw(screen, @floatFromInt(c.x + 20), @floatFromInt(c.y + 28), "Live transcript", 11, s(theme.screen_text_muted));
-    _ = text.draw(screen, @floatFromInt(c.x + 20), @floatFromInt(c.y + 58), "\u{201C}Confirming your appointment", 13, s(theme.screen_text));
-    _ = text.draw(screen, @floatFromInt(c.x + 20), @floatFromInt(c.y + 80), "for Thursday at ten.\u{201D}", 13, s(theme.screen_text));
-    _ = text.draw(screen, @floatFromInt(c.x + 20), @floatFromInt(c.y + 122), "Proposed a calendar hold", 12, s(theme.agent));
-
-    // The end-call control.
-    const end_w: u32 = 88;
-    const end_x: i32 = @intFromFloat(cx - @as(f32, @floatFromInt(end_w)) / 2.0);
-    paint.paint(screen, &.{.{ .rounded = .{ .rect = .{ .x = end_x, .y = 500, .w = end_w, .h = 46 }, .radius = 22, .colour = s(theme.denied) } }});
-    text.drawCentred(screen, cx, 528, "End", 13, s(theme.text_primary));
-}
-
-/// Messages: threads the agent triaged, one drafted reply held for approval.
-pub fn renderMessages(screen: *Framebuffer, host: *Host) void {
-    header(screen, "Messages", "Triaged by your agent");
-    const agent = firstAgentName(host);
-
-    const Thread = struct { who: []const u8, note: []const u8, held: bool, colour: theme.Colour };
-    const threads = [_]Thread{
-        .{ .who = "Venue \u{00B7} Lisbon", .note = "Reply drafted, awaiting you", .held = true, .colour = theme.agent },
-        .{ .who = "Sam", .note = "Read \u{00B7} nothing needed", .held = false, .colour = theme.teal },
-        .{ .who = "Airline", .note = "Summarised the change", .held = false, .colour = theme.teal },
-    };
-
-    var y: i32 = 120;
-    for (threads) |th| {
-        const rect = card(screen, y, 66);
-        vector.fillDisc(screen, @floatFromInt(rect.x + 28), @floatFromInt(rect.y + 33), 13, s(th.colour));
-        _ = text.draw(screen, @floatFromInt(rect.x + 52), @floatFromInt(rect.y + 27), th.who, 13, s(theme.screen_text));
-        _ = text.draw(screen, @floatFromInt(rect.x + 52), @floatFromInt(rect.y + 46), th.note, 10.5, s(theme.screen_text_muted));
-        if (th.held) pill(screen, rightI(rect) - 66, rect.y + 22, 48, "Hold", theme.agent);
-        y += @as(i32, @intCast(rect.h)) + 8;
+/// Renders a design screen: the header, then each section's label and its rows as light
+/// cards — a soft colour halo and dot on the left, the title and subtitle, the value on
+/// the right in the row's own accent.
+fn renderScreen(screen: *Framebuffer, model: Screen) void {
+    header(screen, model.title, model.sub);
+    var y: i32 = 122;
+    for (model.sections) |section| {
+        _ = text.draw(screen, @floatFromInt(pad + 4), @floatFromInt(y + 12), section.label, 10.5, s(theme.screen_label));
+        y += 24;
+        for (section.rows) |row| {
+            const rect = card(screen, y, 60);
+            // A soft halo behind the dot, in the row's colour, then the dot.
+            vector.fillDisc(screen, @floatFromInt(rect.x + 30), @floatFromInt(rect.y + 30), 15, sa(row.colour, 32));
+            vector.fillDisc(screen, @floatFromInt(rect.x + 30), @floatFromInt(rect.y + 30), 6, s(row.colour));
+            _ = text.draw(screen, @floatFromInt(rect.x + 52), @floatFromInt(rect.y + 26), row.title, 12.5, s(theme.screen_text));
+            _ = text.draw(screen, @floatFromInt(rect.x + 52), @floatFromInt(rect.y + 44), row.sub, 10, s(theme.screen_text_muted));
+            if (row.value.len > 0) {
+                const vw = text.measure(row.value, 10.5);
+                _ = text.draw(screen, rightF(rect) - 18 - vw, @floatFromInt(rect.y + 35), row.value, 10.5, s(row.colour));
+            }
+            y += @as(i32, @intCast(rect.h)) + 8;
+        }
+        y += 8;
     }
-
-    var note: [96]u8 = undefined;
-    const line = std.fmt.bufPrint(&note, "{s} sends nothing without you", .{agent}) catch "Sends nothing without you";
-    text.drawCentred(screen, @floatFromInt(width_screen() / 2), @floatFromInt(y + 34), line, 11, s(theme.screen_text_muted));
 }
 
-/// Camera: capture, never without the in-use light. The indicator glows so the promise
-/// is visible.
+// Phone — "Recents", verbatim from the design.
+const phone_screen: Screen = .{ .title = "Recents", .sub = "Calls, with context", .sections = &.{
+    .{ .label = "TODAY", .rows = &.{
+        .{ .title = "Sam", .sub = "12 min \u{00B7} outgoing", .colour = theme.coral, .value = "12:04" },
+        .{ .title = "Clinic", .sub = "handled by agent", .colour = theme.teal, .value = "10:40" },
+        .{ .title = "Spam blocked \u{00D7}4", .sub = "you were not disturbed", .colour = theme.denied },
+    } },
+    .{ .label = "SCREENED BY AGENT", .rows = &.{
+        .{ .title = "Unknown \u{203A} clinic", .sub = "confirming Thu 3pm \u{00B7} added", .colour = theme.teal, .value = "Kept" },
+        .{ .title = "Delivery", .sub = "rescheduled to Fri", .colour = theme.human, .value = "Done" },
+    } },
+} };
+
+// Messages — the agent-to-agent negotiation, verbatim from the design.
+const messages_screen: Screen = .{ .title = "Planner & Airline", .sub = "Negotiated on your behalf", .sections = &.{
+    .{ .label = "THREAD", .rows = &.{
+        .{ .title = "Seat + bag for LIS?", .sub = "Planner", .colour = theme.agent },
+        .{ .title = "12A confirmed, bag added", .sub = "Airline agent \u{00B7} \u{20AC}0", .colour = theme.human },
+        .{ .title = "Summarized for you", .sub = "nothing needs action", .colour = theme.teal },
+    } },
+    .{ .label = "SAM", .rows = &.{
+        .{ .title = "see you at lunch!", .sub = "Sam", .colour = theme.coral },
+        .{ .title = "booked the corner table", .sub = "you", .colour = theme.human },
+    } },
+} };
+
+// Camera — "Lens modes", verbatim from the design.
+const camera_screen: Screen = .{ .title = "Lens modes", .sub = "One camera, three intents", .sections = &.{
+    .{ .label = "MODES", .rows = &.{
+        .{ .title = "Lens", .sub = "front \u{00B7} in-screen", .colour = theme.agent, .value = "On" },
+        .{ .title = "Describe", .sub = "ask about what you see", .colour = theme.teal },
+        .{ .title = "Capture", .sub = "photo \u{00B7} video", .colour = theme.human },
+    } },
+    .{ .label = "PRIVACY", .rows = &.{
+        .{ .title = "Front camera", .sub = "invisible until opened", .colour = theme.coral, .value = "Hidden" },
+    } },
+} };
+
+pub fn renderPhone(screen: *Framebuffer, host: *Host, t: f32) void {
+    _ = host;
+    _ = t;
+    renderScreen(screen, phone_screen);
+}
+
+pub fn renderMessages(screen: *Framebuffer, host: *Host) void {
+    _ = host;
+    renderScreen(screen, messages_screen);
+}
+
 pub fn renderCamera(screen: *Framebuffer, host: *Host, t: f32) void {
-    header(screen, "Camera", "Nothing captured without the light");
-    const cx: f32 = @floatFromInt(width_screen() / 2);
-
-    // The viewfinder.
-    const vf: graphics.paint.Rect = .{ .x = pad, .y = 130, .w = @intCast(width_screen() - @as(u32, @intCast(pad)) * 2), .h = 300 };
-    paint.paint(screen, &.{.{ .rounded_vgradient = .{ .rect = vf, .radius = theme.radius_xl, .top = s(theme.panel), .bottom = s(theme.base) } }});
-
-    // The in-use indicator: a glowing dot, unbypassable.
-    const glow = 0.5 + 0.5 * @sin(t * 2.4);
-    vector.fillDisc(screen, @floatFromInt(vf.x + 22), @floatFromInt(vf.y + 24), 9.0 + glow * 2.0, sa(theme.denied, 90));
-    vector.fillDisc(screen, @floatFromInt(vf.x + 22), @floatFromInt(vf.y + 24), 5, s(theme.denied));
-    _ = text.draw(screen, @floatFromInt(vf.x + 40), @floatFromInt(vf.y + 29), "In use", 11, s(theme.text_primary));
-
-    var by: [96]u8 = undefined;
-    const by_line = std.fmt.bufPrint(&by, "{s} framed this shot", .{firstAgentName(host)}) catch "Framed by your agent";
-    text.drawCentred(screen, cx, @floatFromInt(vf.y + @as(i32, @intCast(vf.h)) - 24), by_line, 12, s(theme.text_secondary));
-
-    // The shutter.
-    vector.strokeCircle(screen, cx, 490, 30, 4, s(theme.screen_text));
-    vector.fillDisc(screen, cx, 490, 22, s(theme.screen_text));
-    text.drawCentred(screen, cx, 548, "Tap to capture \u{00B7} held for you", 11, s(theme.screen_text_muted));
+    _ = host;
+    _ = t;
+    renderScreen(screen, camera_screen);
 }
 

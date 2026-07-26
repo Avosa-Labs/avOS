@@ -72,12 +72,16 @@ pub fn draw(target: *Framebuffer, x: f32, baseline_y: f32, letters: []const u8, 
     var it = view.iterator();
     while (it.nextCodepoint()) |cp| {
         const glyph = face.glyphIndex(cp);
-        var fba = std.heap.FixedBufferAllocator.init(&scratch);
-        if (truetype.rasterize(face, glyph, px, fba.allocator())) |bitmap| {
-            var bmp = bitmap;
-            blit(target, bmp, pen, baseline_y, colour);
-            bmp.deinit(fba.allocator());
-        } else |_| {}
+        // Glyph 0 is the missing-glyph box; drawing it litters the screen with tofu.
+        // A codepoint the subset does not carry is skipped, leaving its advance as a gap.
+        if (glyph != 0) {
+            var fba = std.heap.FixedBufferAllocator.init(&scratch);
+            if (truetype.rasterize(face, glyph, px, fba.allocator())) |bitmap| {
+                var bmp = bitmap;
+                blit(target, bmp, pen, baseline_y, colour);
+                bmp.deinit(fba.allocator());
+            } else |_| {}
+        }
         pen += @as(f32, @floatFromInt(face.advance(glyph))) * scale;
     }
     return pen;
