@@ -102,10 +102,44 @@ pub fn spring(progress: f32) f32 {
     );
 }
 
+/// The motion policy, resolved from accessibility settings. Under `reduced`, curves are
+/// substituted so no animation overshoots or oscillates — the vestibular-safe path.
+pub const Reduce = enum { full, reduced };
+
+/// The signature spring, resolved against the motion policy. Under `full` it is the
+/// overshooting spring; under `reduced` it is substituted at resolve time with a gentle
+/// non-overshooting ease-out, so a person who asked for reduced motion never sees the
+/// bounce. The substitution happens here, once, so every animator that goes through the
+/// spring inherits it.
+pub fn springWith(progress: f32, reduce: Reduce) f32 {
+    return switch (reduce) {
+        .full => spring(progress),
+        // A standard ease-out (no control point above 1), clamped: monotone, no overshoot.
+        .reduced => std.math.clamp(cubicBezier(0.25, 0.1, 0.25, 1.0, progress), 0.0, 1.0),
+    };
+}
+
 /// Linear interpolation between two scalars by a fraction. The fraction may exceed the
 /// unit interval — a spring hands one past 1 at its overshoot — so this does not clamp.
 pub fn lerp(from: f32, to: f32, fraction: f32) f32 {
     return from + (to - from) * fraction;
+}
+
+test "reduced motion substitutes the spring for a non-overshooting curve" {
+    // Full spring overshoots past its target somewhere in the middle; reduced never does.
+    var overshot_full = false;
+    var overshot_reduced = false;
+    var i: usize = 0;
+    while (i <= 100) : (i += 1) {
+        const t = @as(f32, @floatFromInt(i)) / 100.0;
+        if (springWith(t, .full) > 1.0001) overshot_full = true;
+        if (springWith(t, .reduced) > 1.0001) overshot_reduced = true;
+    }
+    try std.testing.expect(overshot_full); // the signature spring bounces
+    try std.testing.expect(!overshot_reduced); // reduced motion does not
+    // Both still travel end to end.
+    try std.testing.expect(@abs(springWith(0, .reduced)) < 1e-4);
+    try std.testing.expect(@abs(springWith(1, .reduced) - 1.0) < 1e-4);
 }
 
 /// Interpolates an integer coordinate, rounding to the nearest pixel so an animated
