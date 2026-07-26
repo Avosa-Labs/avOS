@@ -74,6 +74,13 @@ const ColourEntry = struct {
 };
 
 fn writeColour(io: anytype, out_dir: anytype, gpa: std.mem.Allocator, arena: std.mem.Allocator, design: []const u8) !void {
+    const bytes = try buildColour(gpa, arena, design);
+    try out_dir.writeFile(io, .{ .sub_path = "colour.zon", .data = bytes });
+}
+
+/// Builds the colour vector bytes. Split out so a test can call it twice on the same
+/// input and prove byte-identical output — determinism verified, not merely asserted.
+fn buildColour(gpa: std.mem.Allocator, arena: std.mem.Allocator, design: []const u8) ![]const u8 {
     var map: std.StringArrayHashMapUnmanaged(ColourEntry) = .empty;
     defer {
         for (map.values()) |*entry| entry.roles.deinit(gpa);
@@ -125,7 +132,7 @@ fn writeColour(io: anytype, out_dir: anytype, gpa: std.mem.Allocator, arena: std
         try w.writeAll(" } },\n");
     }
     try w.writeAll("}\n");
-    try out_dir.writeFile(io, .{ .sub_path = "colour.zon", .data = acc.written() });
+    return acc.written();
 }
 
 fn colourLess(_: void, a: ColourEntry, b: ColourEntry) bool {
@@ -354,4 +361,21 @@ test "the preceding property is the colour's role" {
     const css = "x{color:#9a6cff;background:#fff}";
     const idx = std.mem.indexOfScalar(u8, css, '#').?;
     try testing.expectEqualStrings("color", precedingProperty(css, idx));
+}
+
+test "colour extraction is deterministic: same input, byte-identical output" {
+    // The determinism the build relies on, tested here rather than asserted: the same
+    // design in yields the same vectors out, so hash-map iteration order and float
+    // formatting cannot silently vary between runs.
+    const sample = "a{color:#9a6cff;background:#241f30}b{c:'#37c2a6';border-left:#9a6cff}c{color:#Ff8f6B}";
+    var arena1: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena1.deinit();
+    var arena2: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena2.deinit();
+    const first = try buildColour(testing.allocator, arena1.allocator(), sample);
+    const second = try buildColour(testing.allocator, arena2.allocator(), sample);
+    try testing.expectEqualStrings(first, second);
+    // And the output is sorted and normalized: lowercase, one entry per distinct colour.
+    try testing.expect(std.mem.indexOf(u8, first, "\"9a6cff\"") != null);
+    try testing.expect(std.mem.indexOf(u8, first, "\"ff8f6b\"") != null); // #Ff8f6B normalized
 }

@@ -9,6 +9,7 @@
 pub const tokens = @import("tokens/tokens.zig");
 pub const geometry = @import("tokens/geometry.zig");
 pub const resolve = @import("tokens/resolve.zig");
+pub const reference_map = @import("tokens/reference_map.zig");
 pub const accessibility = @import("accessibility/accessibility.zig");
 pub const contrast = @import("color/contrast.zig");
 pub const typography = @import("typography/typography.zig");
@@ -27,6 +28,7 @@ test {
     _ = tokens;
     _ = geometry;
     _ = resolve;
+    _ = reference_map;
     _ = theme;
     _ = accessibility;
     _ = contrast;

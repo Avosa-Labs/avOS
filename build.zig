@@ -500,6 +500,27 @@ pub fn build(b: *std.Build) void {
         }
     }
 
+    // The map-or-justify gate reads the committed vectors (not the design), so it is a
+    // real no-arg gate that runs everywhere. It needs the design tokens to know what is
+    // mapped, so it carries the design module.
+    {
+        const dc_module = b.createModule(.{
+            .root_source_file = b.path("tools/design-conformance/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "compat", .module = compat_module },
+                .{ .name = "design", .module = design_module },
+            },
+        });
+        const dc_exe = b.addExecutable(.{ .name = "design-conformance", .root_module = dc_module });
+        b.installArtifact(dc_exe);
+        const dc_run = b.addRunArtifact(dc_exe);
+        dc_run.step.dependOn(b.getInstallStep());
+        b.step("design-conformance", "Verify every significant design colour is mapped to a token or justified").dependOn(&dc_run.step);
+        addModuleTests(b, test_step, "design-conformance", dc_module);
+    }
+
     const inspector_module = b.createModule(.{
         .root_source_file = b.path("simulator/inspector/main.zig"),
         .target = target,
