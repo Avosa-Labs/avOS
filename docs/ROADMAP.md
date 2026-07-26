@@ -552,3 +552,19 @@ Gates split accordingly:
   rule as the design-extract skip). The performance lane blocks only Checkpoint
   G3's timing assertions; every checkpoint before it is fully verified on
   lavapipe.
+
+When the real-GPU runner arrives it does not replace lavapipe — both lanes run
+permanently. Lavapipe stays the deterministic correctness and conformance lane;
+the hardware lane adds performance plus a **software-vs-hardware parity check**:
+the same conformance vectors rendered on the real device must agree with the
+lavapipe result within tolerance, the cross-backend parity discipline extended to
+software-vs-hardware Vulkan. A divergence is a real defect — a driver-dependent
+render — not an accepted difference.
+
+The lavapipe implementation is pinned like every other dependency
+(`infrastructure/ci/vulkan-runtime.lock.json`): an exact Mesa build on a pinned
+runner image, verified by the SHA-256 of the installed lavapipe library, so a
+Mesa update cannot silently move a conformant pixel. The device adapter selects
+by device-type policy (`select.scoreDevice`), so lavapipe is chosen in CI because
+it is the only device present, not by any special case — product hosts pick the
+discrete or integrated GPU through the same code.
