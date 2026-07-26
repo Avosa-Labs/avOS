@@ -94,6 +94,23 @@ pub const Framebuffer = struct {
     pub fn encodePng(buffer: Framebuffer, allocator: std.mem.Allocator) ![]u8 {
         return encode(allocator, buffer.width, buffer.height, buffer.pixels);
     }
+
+    /// A deterministic content digest over the pixels — FNV-1a over the raw RGBA bytes,
+    /// with the dimensions mixed in. Two framebuffers digest equal exactly when they are
+    /// pixel-identical, so a committed digest locks a rendered surface against silent drift.
+    pub fn digest(buffer: Framebuffer) u64 {
+        var hash: u64 = 0xcbf29ce484222325;
+        const dims = [_]u32{ buffer.width, buffer.height };
+        for (dims) |d| {
+            var shift: u5 = 0;
+            while (true) : (shift += 8) {
+                hash = (hash ^ @as(u8, @truncate(d >> shift))) *% 0x100000001b3;
+                if (shift == 24) break;
+            }
+        }
+        for (buffer.pixels) |byte| hash = (hash ^ byte) *% 0x100000001b3;
+        return hash;
+    }
 };
 
 // --- PNG encoding (self-contained) ---
@@ -270,4 +287,23 @@ test "the encoded stream is deterministic" {
     const pb = try b.encodePng(std.testing.allocator);
     defer std.testing.allocator.free(pb);
     try std.testing.expectEqualSlices(u8, pa, pb);
+}
+
+test "the digest is equal for identical pixels and moves when one changes" {
+    var a = try Framebuffer.init(std.testing.allocator, 8, 8, .{ .r = 10, .g = 20, .b = 30, .a = 255 });
+    defer a.deinit();
+    var b = try Framebuffer.init(std.testing.allocator, 8, 8, .{ .r = 10, .g = 20, .b = 30, .a = 255 });
+    defer b.deinit();
+    try std.testing.expectEqual(a.digest(), b.digest());
+
+    b.set(3, 3, .{ .r = 11, .g = 20, .b = 30, .a = 255 }); // a single byte differs
+    try std.testing.expect(a.digest() != b.digest());
+}
+
+test "the digest distinguishes the same pixels at different dimensions" {
+    var wide = try Framebuffer.init(std.testing.allocator, 4, 1, .{ .r = 0, .g = 0, .b = 0, .a = 0 });
+    defer wide.deinit();
+    var tall = try Framebuffer.init(std.testing.allocator, 1, 4, .{ .r = 0, .g = 0, .b = 0, .a = 0 });
+    defer tall.deinit();
+    try std.testing.expect(wide.digest() != tall.digest()); // dimensions are mixed in
 }

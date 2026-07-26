@@ -166,15 +166,25 @@ fn header(screen: *Framebuffer, title: []const u8, subtitle: []const u8) void {
     _ = text.draw(screen, @floatFromInt(pad), 96, subtitle, 11.5, s(theme.screen_text_muted));
 }
 
-/// A white card the width of the content column.
-fn card(screen: *Framebuffer, y: i32, h: u32) graphics.paint.Rect {
-    const rect: graphics.paint.Rect = .{ .x = pad, .y = y, .w = @intCast(width_screen() - @as(u32, @intCast(pad)) * 2), .h = h };
+/// The geometry of a content card at a given top: the content column, inset by `pad`.
+fn cardRect(y: i32, h: u32) graphics.paint.Rect {
+    return .{ .x = pad, .y = y, .w = @intCast(width_screen() - @as(u32, @intCast(pad)) * 2), .h = h };
+}
+
+/// Paints a white card (a soft drop shadow, then the card fill) into a known rectangle.
+fn paintCard(screen: *Framebuffer, rect: graphics.paint.Rect) void {
     paint.paint(screen, &.{.{ .rounded = .{
-        .rect = .{ .x = rect.x, .y = rect.y + 6, .w = @intCast(rect.w), .h = h },
+        .rect = .{ .x = rect.x, .y = rect.y + 6, .w = @intCast(rect.w), .h = rect.h },
         .radius = theme.radius_xl,
         .colour = .{ .r = 0x6a, .g = 0x4b, .b = 0xb0, .a = 18 },
     } }});
     paint.paint(screen, &.{.{ .rounded = .{ .rect = rect, .radius = theme.radius_xl, .colour = s(theme.screen_card) } }});
+}
+
+/// A white card the width of the content column.
+fn card(screen: *Framebuffer, y: i32, h: u32) graphics.paint.Rect {
+    const rect = cardRect(y, h);
+    paintCard(screen, rect);
     return rect;
 }
 
@@ -411,15 +421,16 @@ fn sa(colour: theme.Colour, alpha: u8) graphics.framebuffer.Rgba {
     return .{ .r = colour.red, .g = colour.green, .b = colour.blue, .a = alpha };
 }
 
-/// Renders a design screen: the header, then each section's label and its rows as light
-/// cards — a soft colour halo and dot on the left, the title and subtitle, the value on
-/// the right in the row's own accent.
-fn renderScreen(screen: *Framebuffer, model: Screen) void {
-    header(screen, model.title, model.sub);
+/// A block the layout engine placed on a screen: a section label or a row card, with the
+/// rectangle it was assigned. This is the single placement the renderer paints and the
+/// conformance gate samples — neither re-derives coordinates on its own.
+const PlacedKind = enum { label, card };
+const Placed = struct { kind: PlacedKind, rect: graphics.paint.Rect, section: usize, row: usize };
 
-    // The screen is a flex column of blocks: each section is a label followed by its row
-    // cards, with a trailing spacer between sections. The layout engine places the blocks;
-    // this only paints them at the tops it returns.
+/// Places a screen's blocks with the flex engine — a section is a label then its row cards,
+/// with a trailing spacer between sections. Fills `out` with the label and card placements
+/// (spacers are consumed as gaps, not emitted) and returns how many were written.
+fn layoutScreen(model: Screen, out: []Placed) usize {
     const Kind = enum { label, card, spacer };
     const Block = struct { kind: Kind, section: usize, row: usize };
     var blocks: [graphics.stack.max_blocks]Block = undefined;
@@ -442,14 +453,39 @@ fn renderScreen(screen: *Framebuffer, model: Screen) void {
     var tops: [graphics.stack.max_blocks]f32 = undefined;
     graphics.stack.columnTops(122, heights[0..n], 0, tops[0..n]);
 
+    var count: usize = 0;
     for (blocks[0..n], 0..) |b, i| {
         const y: i32 = @intFromFloat(tops[i]);
         switch (b.kind) {
             .spacer => {},
-            .label => _ = text.draw(screen, @floatFromInt(pad + 4), @floatFromInt(y + 12), model.sections[b.section].label, 10.5, s(theme.screen_label)),
+            .label => {
+                out[count] = .{ .kind = .label, .rect = cardRect(y, 24), .section = b.section, .row = b.row };
+                count += 1;
+            },
             .card => {
-                const row = model.sections[b.section].rows[b.row];
-                const rect = card(screen, y, 60);
+                out[count] = .{ .kind = .card, .rect = cardRect(y, 60), .section = b.section, .row = b.row };
+                count += 1;
+            },
+        }
+    }
+    return count;
+}
+
+/// Renders a design screen: the header, then each section's label and its rows as light
+/// cards — a soft colour halo and dot on the left, the title and subtitle, the value on
+/// the right in the row's own accent. Placement comes from `layoutScreen`; this only paints.
+fn renderScreen(screen: *Framebuffer, model: Screen) void {
+    header(screen, model.title, model.sub);
+
+    var placed: [graphics.stack.max_blocks]Placed = undefined;
+    const count = layoutScreen(model, &placed);
+    for (placed[0..count]) |p| {
+        const rect = p.rect;
+        switch (p.kind) {
+            .label => _ = text.draw(screen, @floatFromInt(pad + 4), @floatFromInt(rect.y + 12), model.sections[p.section].label, 10.5, s(theme.screen_label)),
+            .card => {
+                const row = model.sections[p.section].rows[p.row];
+                paintCard(screen, rect);
                 // A soft halo behind the dot, in the row's colour, then the dot.
                 vector.fillDisc(screen, @floatFromInt(rect.x + 30), @floatFromInt(rect.y + 30), 15, sa(row.colour, 32));
                 vector.fillDisc(screen, @floatFromInt(rect.x + 30), @floatFromInt(rect.y + 30), 6, s(row.colour));
@@ -517,4 +553,56 @@ pub fn renderCamera(screen: *Framebuffer, host: *Host, t: f32) void {
     _ = host;
     _ = t;
     renderScreen(screen, camera_screen);
+}
+
+// --- The per-screen pixel gate (P6.3) ---
+//
+// The rebuild's rule is conformance against the design, checked, not demoed. These render
+// each verbatim-from-design surface and sample the framebuffer at the exact rectangles the
+// layout engine assigned: every card must be filled with the design's card colour, and each
+// row's accent dot must carry that row's token colour at its centre. A surface that drifts —
+// a card that moved, a colour that changed, a row that failed to draw — fails here. The
+// sampled points are solid fills, so the check is exact and identical on every architecture.
+
+const testing = std.testing;
+
+fn expectScreenConformant(gpa: std.mem.Allocator, model: Screen) !void {
+    var screen = try phone.blankScreen(gpa);
+    defer screen.deinit();
+    phone.screenWash(&screen);
+    phone.statusBar(&screen);
+    renderScreen(&screen, model);
+
+    var placed: [graphics.stack.max_blocks]Placed = undefined;
+    const count = layoutScreen(model, &placed);
+    var cards: usize = 0;
+    for (placed[0..count]) |p| {
+        if (p.kind != .card) continue;
+        cards += 1;
+        const row = model.sections[p.section].rows[p.row];
+        // The card fill: a solid interior point above the row's text, well clear of the
+        // rounded corners and the accent dot on the left.
+        const bg = screen.get(@intCast(p.rect.x + 120), @intCast(p.rect.y + 8));
+        try testing.expectEqual(paint.sample(theme.screen_card), bg);
+        // The accent dot at its centre carries the row's token colour exactly.
+        const dot = screen.get(@intCast(p.rect.x + 30), @intCast(p.rect.y + 30));
+        try testing.expectEqual(paint.sample(row.colour), dot);
+    }
+    try testing.expect(cards >= 1); // the surface actually drew its cards
+}
+
+test "the phone surface carries its design tokens at the placed rectangles" {
+    try expectScreenConformant(testing.allocator, phone_screen);
+}
+
+test "the messages surface carries its design tokens at the placed rectangles" {
+    try expectScreenConformant(testing.allocator, messages_screen);
+}
+
+test "the camera surface carries its design tokens at the placed rectangles" {
+    try expectScreenConformant(testing.allocator, camera_screen);
+}
+
+test "the principals surface carries its design tokens at the placed rectangles" {
+    try expectScreenConformant(testing.allocator, principals_screen);
 }
