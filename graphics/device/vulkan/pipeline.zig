@@ -32,7 +32,7 @@ pub fn renderTriangle(device: *device_mod.Device, gpa: std.mem.Allocator, width:
     const cmd_bind_pipeline = try offscreen.req(device, c.PFN_vkCmdBindPipeline, "vkCmdBindPipeline");
     const cmd_draw = try offscreen.req(device, c.PFN_vkCmdDraw, "vkCmdDraw");
 
-    var pipeline = try shader.Pipeline.init(device, target.render_pass, width, height, &vertex_spirv, &fragment_spirv, 0, c.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+    var pipeline = try shader.Pipeline.init(device, target.render_pass, width, height, &vertex_spirv, &fragment_spirv, 0, c.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, false);
     defer pipeline.deinit(device);
 
     const cmd = try target.beginPass(clear);
