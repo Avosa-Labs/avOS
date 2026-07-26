@@ -25,6 +25,7 @@ pub const materials = @import("materials/materials.zig");
 pub const linebreak = @import("text/linebreak.zig");
 pub const shaping = @import("text/shaping.zig");
 pub const truetype = @import("paint/truetype.zig");
+pub const presentation = @import("presentation/presentation.zig");
 pub const font = @import("paint/font.zig");
 pub const text_layout = @import("text/layout.zig");
 pub const device = @import("device/device.zig");
