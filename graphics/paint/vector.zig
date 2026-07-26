@@ -109,6 +109,45 @@ pub fn fillDisc(target: *Framebuffer, cx: f32, cy: f32, r: f32, colour: Rgba) vo
     }
 }
 
+/// Fills a disc with a diagonal gradient, `top_left` at the upper-left of the disc
+/// grading to `bottom_right` at the lower-right — the brand mark's fill.
+pub fn fillDiscGradient(target: *Framebuffer, cx: f32, cy: f32, r: f32, top_left: Rgba, bottom_right: Rgba) void {
+    const pad = r + 1.0;
+    const x0: u32 = @intFromFloat(@max(0.0, @floor(cx - pad)));
+    const y0: u32 = @intFromFloat(@max(0.0, @floor(cy - pad)));
+    const x1: u32 = @intFromFloat(@max(0.0, @ceil(cx + pad)));
+    const y1: u32 = @intFromFloat(@max(0.0, @ceil(cy + pad)));
+    var y = y0;
+    while (y <= y1 and y < target.height) : (y += 1) {
+        var x = x0;
+        while (x <= x1 and x < target.width) : (x += 1) {
+            const dx = @as(f32, @floatFromInt(x)) + 0.5 - cx;
+            const dy = @as(f32, @floatFromInt(y)) + 0.5 - cy;
+            const dist = @sqrt(dx * dx + dy * dy);
+            const coverage = coverageAt(dist, r);
+            if (coverage == 0) continue;
+            // Position along the top-left → bottom-right diagonal, in 0..1.
+            const t = std.math.clamp((dx + dy) / (2.0 * r) + 0.5, 0.0, 1.0);
+            target.blend(x, y, mix(top_left, bottom_right, t), coverage);
+        }
+    }
+}
+
+fn mix(a: Rgba, b: Rgba, t: f32) Rgba {
+    return .{
+        .r = lerpChannel(a.r, b.r, t),
+        .g = lerpChannel(a.g, b.g, t),
+        .b = lerpChannel(a.b, b.b, t),
+        .a = lerpChannel(a.a, b.a, t),
+    };
+}
+
+fn lerpChannel(a: u8, b: u8, t: f32) u8 {
+    const af: f32 = @floatFromInt(a);
+    const bf: f32 = @floatFromInt(b);
+    return @intFromFloat(@round(af + (bf - af) * t));
+}
+
 /// Strokes a circle (ring) of radius r and given stroke width.
 pub fn strokeCircle(target: *Framebuffer, cx: f32, cy: f32, r: f32, width: f32, colour: Rgba) void {
     const half = width * 0.5;
