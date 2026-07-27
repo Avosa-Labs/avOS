@@ -21,6 +21,14 @@ const capability_model = @import("../capability/capability.zig");
 
 const DomainError = outcome_model.DomainError;
 
+/// The settings registry: every setting as a typed policy key with a sensitivity class. Settings
+/// are policy, so their single source lives here beside the approval policy.
+pub const settings = @import("settings.zig");
+
+test {
+    _ = settings;
+}
+
 /// What makes an action consequential. Recorded so an approval prompt can say
 /// why it is being asked rather than only what is being asked.
 pub const Consequence = enum {
