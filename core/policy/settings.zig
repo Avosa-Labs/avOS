@@ -126,6 +126,81 @@ pub fn find(key: []const u8) ?Key {
     return null;
 }
 
+/// The index of a key in the registry, or null.
+fn indexOf(key: []const u8) ?usize {
+    for (registry, 0..) |entry, i| {
+        if (std.mem.eql(u8, entry.key, key)) return i;
+    }
+    return null;
+}
+
+/// Who is attempting a write. The person may change anything; an agent is bound by the class.
+pub const Actor = enum { human, agent };
+
+/// What a proposed write resolves to. The class decides it — never the caller's capabilities.
+pub const Outcome = enum {
+    /// Applied immediately, no notice (an `open` setting).
+    applied,
+    /// Applied, and the person is notified (a `notify` setting changed by an agent).
+    applied_with_notice,
+    /// Not applied yet — held for the person's approval (a `hold` setting changed by an agent).
+    held_for_approval,
+    /// Refused: an agent may never write this setting (a `human_only` setting).
+    rejected_unauthorized,
+    /// Refused: the value does not satisfy the setting's schema.
+    rejected_invalid,
+
+    /// Whether the value takes effect now (as opposed to being held or refused).
+    pub fn applies(outcome: Outcome) bool {
+        return outcome == .applied or outcome == .applied_with_notice;
+    }
+};
+
+/// Resolves a write of `class` by `actor` — purely from the class, not from any capability the
+/// caller holds. The person may change anything; an agent is bound: open applies, notify applies
+/// with notice, hold waits for approval, and human_only is refused outright.
+pub fn decide(class: Class, actor: Actor) Outcome {
+    if (actor == .human) return .applied;
+    return switch (class) {
+        .open => .applied,
+        .notify => .applied_with_notice,
+        .hold => .held_for_approval,
+        .human_only => .rejected_unauthorized,
+    };
+}
+
+/// The current value of every setting. Settings-the-app owns none of this; the values live with
+/// their owning services, and this is the shape a service holds for its keys. A write is resolved
+/// by the setting's class before it can take effect, so the enforcement is here, not in any UI.
+pub const Store = struct {
+    values: [registry.len]Value,
+
+    /// A store with every setting at its registered default.
+    pub fn init() Store {
+        var store: Store = .{ .values = undefined };
+        for (registry, 0..) |entry, i| store.values[i] = entry.default;
+        return store;
+    }
+
+    /// The current value of `key`, or null if the key is not registered.
+    pub fn get(store: Store, key: []const u8) ?Value {
+        const i = indexOf(key) orelse return null;
+        return store.values[i];
+    }
+
+    /// Proposes writing `value` to `key` as `actor`. The value is validated against the schema,
+    /// then the class decides the outcome; the value takes effect only when the outcome applies.
+    /// An unknown key is rejected as invalid.
+    pub fn propose(store: *Store, key: []const u8, value: Value, actor: Actor) Outcome {
+        const i = indexOf(key) orelse return .rejected_invalid;
+        const entry = registry[i];
+        if (!schemaAccepts(entry.schema, value)) return .rejected_invalid;
+        const outcome = decide(entry.class, actor);
+        if (outcome.applies()) store.values[i] = value;
+        return outcome;
+    }
+};
+
 // --- Tests ---
 
 const testing = std.testing;
@@ -175,4 +250,47 @@ test "find resolves a registered key and rejects an unknown one" {
     try testing.expectEqual(Class.human_only, lock.class); // the person's alone
     try testing.expect(!lock.class.agentWritable());
     try testing.expect(find("nonexistent.key") == null);
+}
+
+test "the class decides a write, not the caller — an agent is bound, the person is not" {
+    // Each class, as an agent sees it.
+    try testing.expectEqual(Outcome.applied, decide(.open, .agent));
+    try testing.expectEqual(Outcome.applied_with_notice, decide(.notify, .agent));
+    try testing.expectEqual(Outcome.held_for_approval, decide(.hold, .agent));
+    try testing.expectEqual(Outcome.rejected_unauthorized, decide(.human_only, .agent));
+    // The person may change anything, including a human_only setting.
+    for ([_]Class{ .open, .notify, .hold, .human_only }) |class| {
+        try testing.expectEqual(Outcome.applied, decide(class, .human));
+    }
+}
+
+test "an agent's write to a human_only setting is refused and changes nothing" {
+    var store = Store.init();
+    const before = store.get("security.lock_method").?;
+    // Even a valid value is refused for an agent, whatever capabilities it might hold.
+    const outcome = store.propose("security.lock_method", .{ .choice = "biometric" }, .agent);
+    try testing.expectEqual(Outcome.rejected_unauthorized, outcome);
+    try testing.expectEqualStrings(before.choice, store.get("security.lock_method").?.choice); // unchanged
+    // The person can make the same change.
+    try testing.expectEqual(Outcome.applied, store.propose("security.lock_method", .{ .choice = "biometric" }, .human));
+    try testing.expectEqualStrings("biometric", store.get("security.lock_method").?.choice);
+}
+
+test "an open setting applies for an agent; a hold setting is held, not applied" {
+    var store = Store.init();
+    try testing.expectEqual(Outcome.applied, store.propose("display.text_size", .{ .integer = 120 }, .agent));
+    try testing.expectEqual(@as(i64, 120), store.get("display.text_size").?.integer);
+
+    // A hold setting: the outcome is "held" and the value has not taken effect yet.
+    const dns_before = store.get("connectivity.dns").?.text;
+    try testing.expectEqual(Outcome.held_for_approval, store.propose("connectivity.dns", .{ .text = "1.1.1.1" }, .agent));
+    try testing.expectEqualStrings(dns_before, store.get("connectivity.dns").?.text); // not applied until approved
+}
+
+test "a value that violates the schema is rejected before the class is consulted" {
+    var store = Store.init();
+    try testing.expectEqual(Outcome.rejected_invalid, store.propose("display.text_size", .{ .integer = 9999 }, .agent)); // out of range
+    try testing.expectEqual(Outcome.rejected_invalid, store.propose("display.text_size", .{ .boolean = true }, .agent)); // wrong shape
+    try testing.expectEqual(Outcome.rejected_invalid, store.propose("nonexistent.key", .{ .boolean = true }, .human)); // unknown key
+    try testing.expectEqual(@as(i64, 100), store.get("display.text_size").?.integer); // still the default
 }
