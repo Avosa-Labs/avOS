@@ -74,7 +74,8 @@ fn dockApp(sx: i32, sy: i32, screen_w: i32, screen_h: i32) ?live.Surface {
                 .phone => .phone,
                 .messages => .messages,
                 .camera => .camera,
-                else => .activity, // the agents tile opens the live activity ledger
+                .agents => .agents, // the agents tile opens the Agents flagship
+                else => .activity,
             };
         }
     }
