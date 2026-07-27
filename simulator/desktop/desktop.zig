@@ -245,13 +245,13 @@ pub fn main(init: std.process.Init) !u8 {
         // home screen takes over. Either can be skipped by input, handled in `navigate`.
         if (surface == .boot) {
             boot_seen += 1;
-            if (boot_seen > 170) { // ~2.8s at 60fps: past the 1.6s reveal and the 2.55s sheen
+            if (boot_seen > 95) { // ~1.6s at 60fps: just past the quick reveal and its sheen
                 surface = .lock;
                 progress = 0.0;
             }
         } else if (surface == .lock) {
             lock_seen += 1;
-            if (lock_seen > 210) { // ~3.5s: the greeting settles, then home opens
+            if (lock_seen > 140) { // ~2.3s: the greeting settles, then home opens
                 surface = .home;
                 progress = 0.0;
             }
