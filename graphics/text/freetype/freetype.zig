@@ -78,16 +78,27 @@ pub const Face = struct {
         if (c.FT_Set_Pixel_Sizes(face.handle, 0, pixels) != 0) return error.SetSizeFailed;
     }
 
-    /// Loads and rasterizes the glyph for a Unicode code point at the current pixel size.
+    /// Loads and rasterizes the glyph for a Unicode code point at the current pixel size — the
+    /// simple path when the text is a lone character and shaping is not involved.
     pub fn render(face: Face, codepoint: u21) Error!Glyph {
         if (c.FT_Load_Char(face.handle, codepoint, c.FT_LOAD_RENDER) != 0) return error.LoadGlyphFailed;
+        return face.slotGlyph();
+    }
+
+    /// Loads and rasterizes a glyph by its index in the font, at the current pixel size. This is
+    /// the path shaping takes: HarfBuzz returns glyph indices, not code points.
+    pub fn renderIndex(face: Face, glyph_index: u32) Error!Glyph {
+        if (c.FT_Load_Glyph(face.handle, @intCast(glyph_index), c.FT_LOAD_RENDER) != 0) return error.LoadGlyphFailed;
+        return face.slotGlyph();
+    }
+
+    /// Reads the current glyph slot's bitmap and metrics into a Glyph.
+    fn slotGlyph(face: Face) Glyph {
         const slot = face.handle.*.glyph;
         const bitmap = slot.*.bitmap;
-
         const row_bytes: u32 = if (bitmap.pitch < 0) @intCast(-bitmap.pitch) else @intCast(bitmap.pitch);
         const length: usize = @as(usize, bitmap.rows) * row_bytes;
         const coverage: []const u8 = if (bitmap.buffer != null and length > 0) bitmap.buffer[0..length] else &.{};
-
         return .{
             .width = bitmap.width,
             .rows = bitmap.rows,

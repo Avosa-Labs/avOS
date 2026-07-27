@@ -528,21 +528,39 @@ pub fn build(b: *std.Build) void {
 
     // The HarfBuzz shaper (ADR 0006), compiled from its single-file amalgamation where the source
     // is vendored. Absent, the layout falls back to unshaped advances.
+    var harfbuzz_module: ?*std.Build.Module = null;
     if (harfbuzzRoot(b)) |root| {
-        const harfbuzz_module = b.createModule(.{
+        const module = b.createModule(.{
             .root_source_file = b.path("graphics/text/harfbuzz/harfbuzz.zig"),
             .target = target,
             .optimize = optimize,
         });
-        harfbuzz_module.addImport("design", design_module);
-        harfbuzz_module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/src", .{root}) });
-        harfbuzz_module.link_libcpp = true; // the amalgamation is C++
-        harfbuzz_module.addCSourceFile(.{
+        module.addImport("design", design_module);
+        module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/src", .{root}) });
+        module.link_libcpp = true; // the amalgamation is C++
+        module.addCSourceFile(.{
             .file = .{ .cwd_relative = b.fmt("{s}/src/harfbuzz.cc", .{root}) },
             .flags = &.{"-DHB_NO_MT"},
         });
-        addModuleTests(b, test_step, "text-harfbuzz", harfbuzz_module);
-        addCompileCheck(b, engine_compile_step, "text-harfbuzz", harfbuzz_module);
+        addModuleTests(b, test_step, "text-harfbuzz", module);
+        addCompileCheck(b, engine_compile_step, "text-harfbuzz", module);
+        harfbuzz_module = module;
+    }
+
+    // The text-run path: shape a string with HarfBuzz, rasterize each shaped glyph with FreeType,
+    // assemble the run's coverage, and draw it through the Vulkan device. Built only where all
+    // three engines are vendored, so it stands on the whole text pipeline at once.
+    if (vulkan_module != null and freetype_module != null and harfbuzz_module != null) {
+        const run_module = b.createModule(.{
+            .root_source_file = b.path("graphics/text/gpu_text.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        run_module.addImport("vulkan", vulkan_module.?);
+        run_module.addImport("freetype", freetype_module.?);
+        run_module.addImport("harfbuzz", harfbuzz_module.?);
+        run_module.addImport("design", design_module);
+        addModuleTests(b, test_step, "text-gpu-run", run_module);
     }
 
     addModuleTests(b, test_step, "simulator", simulator_module);
