@@ -25,8 +25,28 @@ const Point = vector.Point;
 
 const white = Rgba{ .r = 255, .g = 255, .b = 255, .a = 255 };
 
-/// The apps whose icons this module can draw.
-pub const App = enum { phone, messages, calendar, camera, health, agents, files, settings, mail, weather, notes, maps };
+/// The apps whose icons this module can draw. The first twelve are the platform's default
+/// applications; the rest are additional tiles kept for tooling and are not surfaced as default apps.
+pub const App = enum {
+    // The twelve default applications.
+    agents,
+    settings,
+    messages,
+    phone,
+    calendar,
+    files,
+    contacts,
+    camera,
+    weather,
+    browser,
+    calculator,
+    store,
+    // Additional tiles (not default apps).
+    health,
+    mail,
+    notes,
+    maps,
+};
 
 /// The gradient a given app's tile uses.
 pub fn gradientFor(app: App) theme.Gradient {
@@ -35,12 +55,16 @@ pub fn gradientFor(app: App) theme.Gradient {
         .messages => theme.icon_messages,
         .calendar => theme.icon_calendar,
         .camera => theme.icon_camera,
-        .health => theme.icon_health,
         .agents => theme.icon_agents,
         .files => theme.icon_files,
         .settings => theme.icon_settings,
-        .mail => theme.icon_mail,
         .weather => theme.icon_weather,
+        .contacts => theme.icon_contacts,
+        .browser => theme.icon_browser,
+        .calculator => theme.icon_calculator,
+        .store => theme.icon_store,
+        .health => theme.icon_health,
+        .mail => theme.icon_mail,
         .notes => theme.icon_notes,
         .maps => theme.icon_maps,
     };
@@ -90,6 +114,10 @@ pub fn draw(target: *Framebuffer, rect: paint.Rect, app: App) void {
         .agents => drawAgents(target, rect, w),
         .files => drawFiles(target, rect, w),
         .settings => drawSettings(target, rect, w),
+        .contacts => drawContacts(target, rect, w),
+        .browser => drawBrowser(target, rect, w),
+        .calculator => drawCalculator(target, rect, w),
+        .store => drawStore(target, rect, w),
         .mail => drawMail(target, rect, w),
         .weather => drawWeather(target, rect, w),
         .notes => drawNotes(target, rect, w),
@@ -108,10 +136,11 @@ fn deliveredGlyph(app: App) ?[]const u8 {
         .agents => glyphs.agent,
         .files => glyphs.folder,
         .settings => glyphs.settings,
+        .browser => glyphs.globe,
         .maps => glyphs.location,
         .health => glyphs.running,
         .notes => glyphs.file,
-        .mail, .weather => null,
+        .contacts, .calculator, .store, .mail, .weather => null,
     };
 }
 
@@ -218,6 +247,34 @@ fn drawSettings(target: *Framebuffer, rect: paint.Rect, w: f32) void {
     // than the track; the different x positions are the slider values.
     vector.fillDisc(target, map(rect, 0.40, 0.42).x, map(rect, 0.40, 0.42).y, w * 1.25, white);
     vector.fillDisc(target, map(rect, 0.62, 0.58).x, map(rect, 0.62, 0.58).y, w * 1.25, white);
+}
+
+fn drawContacts(target: *Framebuffer, rect: paint.Rect, w: f32) void {
+    // A person: a head and a shoulders arc.
+    vector.strokeCircle(target, map(rect, 0.50, 0.40).x, map(rect, 0.50, 0.40).y, @as(f32, @floatFromInt(rect.w)) * 0.11, w, white);
+    stroke(target, rect, &.{ .{ 0.30, 0.72 }, .{ 0.32, 0.62 }, .{ 0.42, 0.56 }, .{ 0.58, 0.56 }, .{ 0.68, 0.62 }, .{ 0.70, 0.72 } }, w, false);
+}
+
+fn drawBrowser(target: *Framebuffer, rect: paint.Rect, w: f32) void {
+    // A globe: a ring, an equator, and a meridian — the fallback when the delivered glyph is absent.
+    const r = @as(f32, @floatFromInt(rect.w)) * 0.20;
+    vector.strokeCircle(target, map(rect, 0.50, 0.50).x, map(rect, 0.50, 0.50).y, r, w, white);
+    stroke(target, rect, &.{ .{ 0.30, 0.50 }, .{ 0.70, 0.50 } }, w * 0.85, false);
+    stroke(target, rect, &.{ .{ 0.50, 0.30 }, .{ 0.42, 0.50 }, .{ 0.50, 0.70 }, .{ 0.58, 0.50 }, .{ 0.50, 0.30 } }, w * 0.85, true);
+}
+
+fn drawCalculator(target: *Framebuffer, rect: paint.Rect, w: f32) void {
+    // A calculator: a rounded body, a display bar, and a grid of keys.
+    stroke(target, rect, &.{ .{ 0.32, 0.28 }, .{ 0.68, 0.28 }, .{ 0.68, 0.72 }, .{ 0.32, 0.72 } }, w, true);
+    stroke(target, rect, &.{ .{ 0.38, 0.37 }, .{ 0.62, 0.37 } }, w * 0.8, false); // display
+    const keys = [_][2]f32{ .{ 0.40, 0.50 }, .{ 0.50, 0.50 }, .{ 0.60, 0.50 }, .{ 0.40, 0.61 }, .{ 0.50, 0.61 }, .{ 0.60, 0.61 } };
+    for (keys) |k| vector.fillDisc(target, map(rect, k[0], k[1]).x, map(rect, k[0], k[1]).y, w * 0.7, white);
+}
+
+fn drawStore(target: *Framebuffer, rect: paint.Rect, w: f32) void {
+    // A shopping bag: a body that tapers in at the top, with a handle arc.
+    stroke(target, rect, &.{ .{ 0.34, 0.40 }, .{ 0.66, 0.40 }, .{ 0.70, 0.72 }, .{ 0.30, 0.72 } }, w, true);
+    stroke(target, rect, &.{ .{ 0.42, 0.44 }, .{ 0.42, 0.36 }, .{ 0.46, 0.30 }, .{ 0.54, 0.30 }, .{ 0.58, 0.36 }, .{ 0.58, 0.44 } }, w, false);
 }
 
 const testing = std.testing;

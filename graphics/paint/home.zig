@@ -115,7 +115,7 @@ pub fn render(screen: *Framebuffer, model: Model, t: f32) void {
 
 /// The apps shown on the home screen — those that fit above the dock. The rest live in the full app
 /// list reached by "All apps" / a swipe left. Phone, Messages, Camera and Agents are already in the dock.
-pub const grid_apps = [_]iconography.App{ .calendar, .mail, .maps, .weather, .files, .notes, .health, .settings };
+pub const grid_apps = [_]iconography.App{ .settings, .calendar, .files, .contacts, .weather, .browser, .calculator, .store };
 
 /// A short label for an app tile.
 fn appName(app: iconography.App) []const u8 {
@@ -128,8 +128,12 @@ fn appName(app: iconography.App) []const u8 {
         .agents => "Agents",
         .files => "Files",
         .settings => "Settings",
-        .mail => "Mail",
+        .contacts => "Contacts",
+        .browser => "Browser",
+        .calculator => "Calculator",
+        .store => "Store",
         .weather => "Weather",
+        .mail => "Mail",
         .notes => "Notes",
         .maps => "Maps",
     };
