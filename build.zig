@@ -526,6 +526,20 @@ pub fn build(b: *std.Build) void {
         addModuleTests(b, test_step, "text-gpu-glyph", bridge);
     }
 
+    // The compositor-on-GPU bridge: encode a retained tree's display lists to quads and draw the
+    // whole frame in one pass on the Vulkan device. Built where the Vulkan engine is vendored, so
+    // it stands the software compositor's primitives up on the real device.
+    if (vulkan_module != null) {
+        const scene_bridge = b.createModule(.{
+            .root_source_file = b.path("graphics/device/gpu_composite.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        scene_bridge.addImport("vulkan", vulkan_module.?);
+        scene_bridge.addImport("graphics", graphics_module);
+        addModuleTests(b, test_step, "device-gpu-composite", scene_bridge);
+    }
+
     // The HarfBuzz shaper (ADR 0006), compiled from its single-file amalgamation where the source
     // is vendored. Absent, the layout falls back to unshaped advances.
     var harfbuzz_module: ?*std.Build.Module = null;
