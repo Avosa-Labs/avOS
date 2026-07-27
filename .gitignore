@@ -48,6 +48,9 @@ zig-out/
 # External design reference — never commit
 *Tour.html
 
+# Local-only engineering instruction — reference, never commit
+/docs/APPLICATION_LAYER.md
+
 # Rendered frames written to the repo root by the render steps are build output
 /home.png
 /frame.png
