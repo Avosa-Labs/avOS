@@ -54,6 +54,8 @@ pub const Interaction = struct {
     /// Which agent's detail is open (an index into the roster), and which agents the person has paused.
     open_agent: ?usize = null,
     agent_paused: [8]bool = [_]bool{false} ** 8,
+    /// The person's decision on the screened incoming call: null while it waits, then answered or not.
+    call_answered: ?bool = null,
     store_ready: bool = false,
     next_key: u128 = 1,
 
@@ -204,7 +206,7 @@ pub fn renderSurface(gpa: std.mem.Allocator, target: *Framebuffer, host: *Host, 
                 .approval => renderApproval(&screen, host),
                 .principals => try renderPrincipals(gpa, &screen, host),
                 .store => renderStore(&screen, inter),
-                .phone => renderPhone(&screen, host, t),
+                .phone => renderPhone(&screen, inter),
                 .messages => renderMessages(&screen, inter),
                 .camera => renderCamera(&screen, host, t),
                 .agents => renderAgents(&screen, host, inter),
@@ -1346,10 +1348,74 @@ const camera_screen: Screen = .{ .title = "Lens modes", .sub = "One camera, thre
     } },
 } };
 
-pub fn renderPhone(screen: *Framebuffer, host: *Host, t: f32) void {
-    _ = host;
-    _ = t;
-    renderScreen(screen, phone_screen);
+/// The two decision buttons on the screened incoming call, laid out for the renderer and the hit-test.
+fn phoneButtonRects() [2]graphics.paint.Rect {
+    const y: i32 = 236;
+    const h: i32 = @intFromFloat(u(42));
+    const gap: i32 = @intFromFloat(u(12));
+    const half = @divTrunc(@as(i32, @intCast(width_screen())) - pad * 2 - gap, 2);
+    return .{
+        .{ .x = pad, .y = y, .w = @intCast(half), .h = @intCast(h) },
+        .{ .x = pad + half + gap, .y = y, .w = @intCast(half), .h = @intCast(h) },
+    };
+}
+
+pub fn renderPhone(screen: *Framebuffer, inter: *const Interaction) void {
+    header(screen, "Phone", "Screened by your agents");
+    agentDoorChip(screen, @floatFromInt(pad), u(96), "call.screen \u{00B7} agents screen unknown callers");
+
+    // An incoming call from an unknown, unverified caller: the real rule screens it rather than ringing.
+    const caller = applications.phone.Caller{ .known = false, .verified = false };
+    const rings = applications.phone.ringsThrough(caller);
+
+    const banner = card(screen, 150, 74);
+    vector.fillDisc(screen, @as(f32, @floatFromInt(banner.x)) + u(30), @as(f32, @floatFromInt(banner.y)) + @as(f32, @floatFromInt(banner.h)) / 2.0, u(16), sa(theme.amber, 40));
+    vector.fillDisc(screen, @as(f32, @floatFromInt(banner.x)) + u(30), @as(f32, @floatFromInt(banner.y)) + @as(f32, @floatFromInt(banner.h)) / 2.0, u(7), s(theme.amber));
+    _ = text.draw(screen, @floatFromInt(banner.x + 60), @floatFromInt(banner.y + 32), "Unknown caller", 13, s(theme.screen_text));
+    const note = if (rings) "ringing through" else "screened by your agent \u{00B7} not verified";
+    _ = text.drawClipped(screen, @floatFromInt(banner.x + 60), @floatFromInt(banner.y + 52), note, 11, s(theme.screen_text_muted), rightF(banner) - u(18));
+
+    if (inter.call_answered) |answered| {
+        // Decided: the outcome in place of the buttons.
+        const done: graphics.paint.Rect = .{ .x = pad, .y = 236, .w = @intCast(width_screen() - @as(u32, @intCast(pad)) * 2), .h = @intFromFloat(u(42)) };
+        const hue = if (answered) theme.teal else theme.denied;
+        paint.paint(screen, &.{.{ .rounded = .{ .rect = done, .radius = theme.radius_lg, .colour = sa(hue, 34) } }});
+        text.drawCentred(screen, @as(f32, @floatFromInt(width_screen())) / 2.0, @as(f32, @floatFromInt(236)) + u(26), if (answered) "Answered" else "Declined \u{00B7} sent to screening", u(12.5), s(hue));
+    } else {
+        const btns = phoneButtonRects();
+        paint.paint(screen, &.{.{ .rounded = .{ .rect = btns[0], .radius = theme.radius_lg, .colour = s(theme.teal) } }});
+        text.drawCentred(screen, @as(f32, @floatFromInt(btns[0].x)) + @as(f32, @floatFromInt(btns[0].w)) / 2.0, @as(f32, @floatFromInt(btns[0].y)) + u(26), "Answer", u(12.5), s(theme.screen_card));
+        paint.paint(screen, &.{.{ .rounded = .{ .rect = btns[1], .radius = theme.radius_lg, .colour = s(theme.screen_hairline) } }});
+        text.drawCentred(screen, @as(f32, @floatFromInt(btns[1].x)) + @as(f32, @floatFromInt(btns[1].w)) / 2.0, @as(f32, @floatFromInt(btns[1].y)) + u(26), "Decline", u(12.5), s(theme.screen_text));
+    }
+
+    // The recent-calls log below, showing what the agents already screened.
+    _ = text.drawWeighted(screen, @as(f32, @floatFromInt(pad)) + u(2), 320, "RECENTS", u(11), s(theme.screen_label), .semibold);
+    const recents = [_]Row{
+        .{ .title = "Sam", .sub = "12 min \u{00B7} outgoing", .colour = theme.coral, .value = "12:04" },
+        .{ .title = "Clinic", .sub = "handled by agent", .colour = theme.teal, .value = "10:40" },
+        .{ .title = "Spam blocked \u{00D7}4", .sub = "you were not disturbed", .colour = theme.denied, .value = "" },
+    };
+    for (recents, 0..) |row, i| {
+        const rect = card(screen, 334 + @as(i32, @intCast(i)) * @as(i32, @intFromFloat(u(58))), @intFromFloat(u(50)));
+        vector.fillDisc(screen, @as(f32, @floatFromInt(rect.x)) + u(22), @as(f32, @floatFromInt(rect.y)) + @as(f32, @floatFromInt(rect.h)) / 2.0, u(4.5), s(row.colour));
+        _ = text.draw(screen, @as(f32, @floatFromInt(rect.x)) + u(40), @as(f32, @floatFromInt(rect.y)) + u(21), row.title, u(12.5), s(theme.screen_text));
+        _ = text.draw(screen, @as(f32, @floatFromInt(rect.x)) + u(40), @as(f32, @floatFromInt(rect.y)) + u(37), row.sub, u(10.5), s(theme.screen_text_muted));
+        if (row.value.len > 0) _ = text.draw(screen, rightF(rect) - u(16) - text.measure(row.value, u(10.5)), @as(f32, @floatFromInt(rect.y)) + u(28), row.value, u(10.5), s(theme.screen_text_muted));
+    }
+}
+
+/// Answers or declines the screened call from a tap on its buttons. Returns true when handled.
+pub fn phoneTap(inter: *Interaction, sx: i32, sy: i32) bool {
+    if (inter.call_answered != null) return false;
+    const btns = phoneButtonRects();
+    for (btns, 0..) |b, i| {
+        if (sx >= b.x and sx <= b.x + @as(i32, @intCast(b.w)) and sy >= b.y and sy <= b.y + @as(i32, @intCast(b.h))) {
+            inter.call_answered = (i == 0);
+            return true;
+        }
+    }
+    return false;
 }
 
 const MsgBubble = struct { body: []const u8, sender: []const u8, mine: bool };
@@ -1555,4 +1621,16 @@ test "the agents screen opens an agent on its real task and the person can pause
     const btn = agentPauseRect();
     try testing.expect(agentDetailTap(&inter, btn.x + 10, btn.y + 10));
     try testing.expect(inter.isAgentPaused(index));
+}
+
+test "the phone screens an unknown caller and the person decides" {
+    // The real rule screens an unknown, unverified caller and rings a known one through.
+    try testing.expect(!applications.phone.ringsThrough(.{ .known = false, .verified = false }));
+    try testing.expect(applications.phone.ringsThrough(.{ .known = true, .verified = false }));
+    // The person answers the screened call from its button; the decision is recorded.
+    var inter = Interaction{};
+    try testing.expect(inter.call_answered == null);
+    const btns = phoneButtonRects();
+    try testing.expect(phoneTap(&inter, btns[0].x + 10, btns[0].y + 10));
+    try testing.expect(inter.call_answered.? == true);
 }
