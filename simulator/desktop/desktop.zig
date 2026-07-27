@@ -45,11 +45,19 @@ fn navigate(current: live.Surface, mx: i32, my: i32) live.Surface {
     if (current != .home and sy < 110) return .home;
 
     if (current == .home) {
-        // The dock: hit-test each app tile so a tap opens that app, not a band.
+        // The dock and the app grid: hit-test each tile so a tap opens that app, not a band.
         if (dockApp(sx, sy, screen_w, screen_h)) |app| return app;
+        if (live.homeGridApp(sx, sy)) |app_surface| return app_surface;
+        if (live.homeAllApps(sx, sy)) return .library; // "All apps" opens the full list
         if (sy >= 104 and sy <= 184) return .approval; // the command bar / active task
         if (sy >= 200 and sy <= 440) return .activity; // the in-motion list
         return .home;
+    }
+
+    // The library: a tap on a tile opens that app.
+    if (current == .library) {
+        if (live.libraryApp(sx, sy)) |app_surface| return app_surface;
+        return .library;
     }
 
     // On an app or a sub-surface, tapping the body returns home.
