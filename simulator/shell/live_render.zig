@@ -46,6 +46,10 @@ pub const Interaction = struct {
     calc_buf: [48]u8 = [_]u8{0} ** 48,
     calc_len: usize = 0,
     calc_is_result: bool = false,
+    /// The store's real installed set, so installing actually installs.
+    store_state: applications.store.Store = undefined,
+    store_ready: bool = false,
+    next_key: u128 = 1,
 
     pub fn calcExpr(self: *const Interaction) []const u8 {
         return self.calc_buf[0..self.calc_len];
@@ -94,6 +98,34 @@ pub const Interaction = struct {
         self.calc_len = n;
         self.calc_is_result = true;
     }
+
+    /// Gives the interaction the heap-backed state it needs (the store's installed set). The caller owns
+    /// it and must `release` it.
+    pub fn attach(self: *Interaction, gpa: std.mem.Allocator) void {
+        self.store_state = applications.store.Store.init(gpa);
+        self.store_ready = true;
+    }
+
+    pub fn release(self: *Interaction) void {
+        if (self.store_ready) self.store_state.deinit();
+    }
+
+    /// Installs `name` through the store's real domain — the same `store.install` an agent reaches, here
+    /// completing because it is the person's own decision.
+    pub fn install(self: *Interaction, name: []const u8) void {
+        if (!self.store_ready) return;
+        const key = self.next_key;
+        self.next_key += 1;
+        _ = applications.store.Store.execute(&self.store_state, .{ .operation = "store.install", .args = name }, .{ .kind = .human, .principal = .{ .value = 0 } }, key);
+    }
+
+    pub fn isInstalled(self: *const Interaction, name: []const u8) bool {
+        if (!self.store_ready) return false;
+        for (self.store_state.installed.items) |installed| {
+            if (std.mem.eql(u8, installed, name)) return true;
+        }
+        return false;
+    }
 };
 
 /// Runs the canonical scenario into a fresh host. The caller owns it and must `deinit`.
@@ -135,7 +167,7 @@ pub fn renderSurface(gpa: std.mem.Allocator, target: *Framebuffer, host: *Host, 
                 .activity => try renderActivity(gpa, &screen, host),
                 .approval => renderApproval(&screen, host),
                 .principals => try renderPrincipals(gpa, &screen, host),
-                .store => renderStore(&screen),
+                .store => renderStore(&screen, inter),
                 .phone => renderPhone(&screen, host, t),
                 .messages => renderMessages(&screen, host),
                 .camera => renderCamera(&screen, host, t),
@@ -993,30 +1025,41 @@ pub fn approvalDecide(host: *Host, sx: i32, sy: i32) bool {
     return false;
 }
 
-pub fn renderStore(screen: *Framebuffer) void {
+const StoreItem = struct { name: []const u8, publisher: []const u8, source: applications.store.Source, acknowledged: bool, colour: theme.Colour };
+
+/// The store catalog the person and their agents browse. A reviewed store app installs; a sideload
+/// needs the person's acknowledgement; an unacknowledged sideload is blocked.
+const store_catalog = [_]StoreItem{
+    .{ .name = "Itinerary", .publisher = "Reviewed \u{00B7} signed", .source = .store, .acknowledged = false, .colour = theme.teal },
+    .{ .name = "Ledger Notes", .publisher = "Reviewed \u{00B7} signed", .source = .store, .acknowledged = false, .colour = theme.agent },
+    .{ .name = "Field Tools", .publisher = "Outside source", .source = .sideload, .acknowledged = true, .colour = theme.amber },
+    .{ .name = "Unknown Build", .publisher = "Unreviewed source", .source = .sideload, .acknowledged = false, .colour = theme.denied },
+};
+
+const store_start: i32 = 156;
+const store_row_h: i32 = 66;
+
+fn storeCardRect(i: usize) graphics.paint.Rect {
+    return cardRect(store_start + @as(i32, @intCast(i)) * (store_row_h + 8), store_row_h);
+}
+
+/// Whether a catalog item can be installed with one tap — a reviewed store item that is not already in.
+fn storeInstallable(item: StoreItem, inter: *const Interaction) bool {
+    if (inter.isInstalled(item.name)) return false;
+    const needs_ack = applications.store.installNeedsAcknowledgement(item.source);
+    return !(needs_ack and !item.acknowledged);
+}
+
+pub fn renderStore(screen: *Framebuffer, inter: *const Interaction) void {
     header(screen, "Store", "Reviewed, signed, and sandboxed");
+    agentDoorChip(screen, @floatFromInt(pad), u(96), "store.search \u{00B7} agents browse here");
 
-    const install_source = applications.store;
-    const Catalog = struct { name: []const u8, publisher: []const u8, source: install_source.Source, acknowledged: bool, colour: theme.Colour };
-    const catalog = [_]Catalog{
-        .{ .name = "Itinerary", .publisher = "Reviewed \u{00B7} signed", .source = .store, .acknowledged = false, .colour = theme.teal },
-        .{ .name = "Ledger Notes", .publisher = "Reviewed \u{00B7} signed", .source = .store, .acknowledged = false, .colour = theme.agent },
-        .{ .name = "Field Tools", .publisher = "Outside source", .source = .sideload, .acknowledged = true, .colour = theme.amber },
-        .{ .name = "Unknown Build", .publisher = "Unreviewed source", .source = .sideload, .acknowledged = false, .colour = theme.denied },
-    };
-
-    var heights: [graphics.stack.max_blocks]f32 = undefined;
-    for (catalog, 0..) |_, i| heights[i] = 66;
-    var tops: [graphics.stack.max_blocks]f32 = undefined;
-    graphics.stack.columnTops(120, heights[0..catalog.len], 8, tops[0..catalog.len]);
-
-    for (catalog, 0..) |item, i| {
-        // A Store install proceeds; a sideload needs the person's acknowledgement, and
-        // an unacknowledged sideload is blocked.
-        const needs_ack = install_source.installNeedsAcknowledgement(item.source);
+    for (store_catalog, 0..) |item, i| {
+        const installed = inter.isInstalled(item.name);
+        const needs_ack = applications.store.installNeedsAcknowledgement(item.source);
         const blocked = needs_ack and !item.acknowledged;
-        const action: []const u8 = if (blocked) "Blocked" else if (needs_ack) "Acknowledge" else "Get";
-        const rect = card(screen, @intFromFloat(tops[i]), 66);
+        const action: []const u8 = if (installed) "Installed" else if (blocked) "Blocked" else if (needs_ack) "Acknowledge" else "Get";
+        const rect = card(screen, storeCardRect(i).y, store_row_h);
         paint.paint(screen, &.{.{ .rounded_vgradient = .{
             .rect = .{ .x = rect.x + 16, .y = rect.y + 15, .w = 36, .h = 36 },
             .radius = 10,
@@ -1025,11 +1068,27 @@ pub fn renderStore(screen: *Framebuffer) void {
         } }});
         _ = text.draw(screen, @floatFromInt(rect.x + 64), @floatFromInt(rect.y + 28), item.name, 13, s(theme.screen_text));
         _ = text.draw(screen, @floatFromInt(rect.x + 64), @floatFromInt(rect.y + 46), item.publisher, 10.5, s(theme.screen_text_muted));
-        const hue = if (blocked) theme.denied else theme.agent;
+        const hue = if (installed) theme.teal else if (blocked) theme.denied else theme.agent;
         const bw = text.measure(action, 11);
         paint.paint(screen, &.{.{ .rounded = .{ .rect = .{ .x = rightI(rect) - 20 - @as(i32, @intFromFloat(bw)) - 20, .y = rect.y + 20, .w = @as(u32, @intFromFloat(bw)) + 24, .h = 26 }, .radius = 13, .colour = s(hue) } }});
         text.drawCentred(screen, rightF(rect) - 20 - bw / 2 - 12, @floatFromInt(rect.y + 37), action, 11, s(theme.screen_card));
     }
+}
+
+/// Installs the catalog item whose "Get" a tap landed on, through the real store domain. Returns true
+/// when a tap installed something.
+pub fn storeTap(inter: *Interaction, sx: i32, sy: i32) bool {
+    for (store_catalog, 0..) |item, i| {
+        const rect = storeCardRect(i);
+        // The action button sits on the right of the row; a generous region so the tap is forgiving.
+        if (sy >= rect.y + 20 and sy <= rect.y + 46 and sx >= rightI(rect) - 120 and sx <= rightI(rect) - 12) {
+            if (storeInstallable(item, inter)) {
+                inter.install(item.name);
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 // --- The design's data-driven screen model ---
@@ -1271,4 +1330,20 @@ test "the approval screen decides a held action through the real approvals centr
     // A tap on Approve records the decision through the real centre; nothing is left pending.
     try testing.expect(approvalDecide(&host, pad + 4, approval_button_y + 10));
     try testing.expect(!heldAction(&host).pending);
+}
+
+test "the store screen installs through the real store domain" {
+    var inter = Interaction{};
+    inter.attach(testing.allocator);
+    defer inter.release();
+    // A reviewed store item is installable and not yet installed.
+    try testing.expect(!inter.isInstalled("Itinerary"));
+    // A tap on its Get button installs it through the domain; the row now reads as installed.
+    const rect = storeCardRect(0);
+    try testing.expect(storeTap(&inter, rightI(rect) - 30, rect.y + 33));
+    try testing.expect(inter.isInstalled("Itinerary"));
+    // A blocked sideload does not install from a tap.
+    const blocked = storeCardRect(3);
+    try testing.expect(!storeTap(&inter, rightI(blocked) - 30, blocked.y + 33));
+    try testing.expect(!inter.isInstalled("Unknown Build"));
 }

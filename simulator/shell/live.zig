@@ -59,7 +59,9 @@ pub fn main(init: std.process.Init) !u8 {
 
     var target = try Framebuffer.init(gpa, live.width, live.height, baseFill());
     defer target.deinit();
-    const idle = live.Interaction{};
+    var idle = live.Interaction{};
+    idle.attach(gpa);
+    defer idle.release();
     try live.renderSurface(gpa, &target, &host, surface, t, &idle);
 
     const png = try target.encodePng(gpa);
@@ -85,7 +87,9 @@ fn renderSession(gpa: std.mem.Allocator, io: anytype, err: anytype, host: *live.
         .{ .name = "06_store", .surface = .store },
         .{ .name = "07_rest", .surface = .rest },
     };
-    const idle = live.Interaction{};
+    var idle = live.Interaction{};
+    idle.attach(gpa);
+    defer idle.release();
     for (sequence) |frame| {
         var target = try Framebuffer.init(gpa, live.width, live.height, baseFill());
         defer target.deinit();

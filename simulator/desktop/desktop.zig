@@ -166,7 +166,9 @@ pub fn main(init: std.process.Init) !u8 {
     // never read as a trace, a flash, or lag. Motion lives inside a surface (the boot reveal, breathing
     // dots), not between them.
     var surface: live.Surface = .boot;
-    var interaction: live.Interaction = .{}; // live state a tap changes (the calculator keypad, …)
+    var interaction: live.Interaction = .{}; // live state a tap changes (the calculator keypad, the store, …)
+    interaction.attach(gpa);
+    defer interaction.release();
     var boot_seen: u32 = 0;
     var shutdown_frames: u32 = 0; // frames since the device began winding down
     var lock_seen: u32 = 0;
@@ -212,6 +214,8 @@ pub fn main(init: std.process.Init) !u8 {
                         // handled by the keypad
                     } else if (surface == .approval and live.approvalDecide(&host, sx, sy)) {
                         // handled by the Approve/Hold buttons
+                    } else if (surface == .store and live.storeTap(&interaction, sx, sy)) {
+                        // handled by an install button
                     } else {
                         surface = navigate(surface, mx, my);
                     }
