@@ -64,6 +64,22 @@ pub const Store = struct {
         return store.entries.items.len;
     }
 
+    /// Search the grant for entries whose path contains `query`, case-insensitive. Silent, and
+    /// confined: only entries within the grant are ever returned, so a search cannot surface a file
+    /// the caller could not open. Matches are written into `out` in tree order.
+    pub fn search(store: Store, query: []const u8, out: [][]const u8) []const []const u8 {
+        var n: usize = 0;
+        for (store.entries.items) |entry| {
+            if (n >= out.len) break;
+            if (!withinGrant(entry.path)) continue;
+            if (std.ascii.indexOfIgnoreCase(entry.path, query) != null) {
+                out[n] = entry.path;
+                n += 1;
+            }
+        }
+        return out[0..n];
+    }
+
     fn find(store: *Store, path: []const u8) ?usize {
         for (store.entries.items, 0..) |entry, index| {
             if (std.mem.eql(u8, entry.path, path)) return index;
@@ -102,6 +118,14 @@ pub const Store = struct {
         if (std.mem.eql(u8, op, "file.open")) {
             if (!withinGrant(input.args)) return .failed;
             return if (store.find(input.args) != null) .{ .ok = "opened" } else .failed;
+        }
+        if (std.mem.eql(u8, op, "file.search")) {
+            // A silent, grant-confined search: `args` is the query. The count of matches is
+            // returned; the matched paths are the surface's to read through `search`.
+            var buffer: [64][]const u8 = undefined;
+            const matches = store.search(input.args, &buffer);
+            const text = std.fmt.bufPrint(&store.reply, "{d}", .{matches.len}) catch return .failed;
+            return .{ .ok = text };
         }
 
         // Mutations: confined to the grant and exactly-once by key.
@@ -174,4 +198,20 @@ test "an operation on a path outside the grant is refused before it touches the 
     defer store.deinit();
     try store.add("documents/report.txt", false);
     try testing.expectEqual(DomainResult.failed, Store.execute(&store, .{ .operation = "file.open", .args = "../escape" }, agent(), 1));
+}
+
+test "search is case-insensitive, grant-confined, and returns matching paths" {
+    const gpa = testing.allocator;
+    var store = Store.init(gpa);
+    defer store.deinit();
+    try store.add("documents/Trip-Lisbon.md", false);
+    try store.add("documents/budget.csv", false);
+    try store.add("photos/lisbon.jpg", false);
+
+    var buffer: [8][]const u8 = undefined;
+    const hits = store.search("lisbon", &buffer);
+    try testing.expectEqual(@as(usize, 2), hits.len); // both, case-insensitively
+    // The count comes back through the door as a silent read.
+    const result = Store.execute(&store, .{ .operation = "file.search", .args = "budget" }, agent(), 0);
+    try testing.expectEqualStrings("1", result.ok);
 }

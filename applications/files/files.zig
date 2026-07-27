@@ -19,11 +19,13 @@ pub const App = framework.App;
 /// Whether a path stays within the granted folder. Re-exported from the domain, which
 /// enforces it on every operation.
 pub const withinGrant = domain.withinGrant;
+pub const search = domain.Store.search;
 
 /// The capabilities Files exports for agents to discover and invoke.
 pub const tools = [_]framework.Tool{
     .{ .name = "file.list", .required_capability = "files.read", .effect = .read_only },
     .{ .name = "file.open", .required_capability = "files.read", .effect = .read_only },
+    .{ .name = "file.search", .required_capability = "files.read", .effect = .read_only },
     .{ .name = "file.edit", .required_capability = "files.write", .effect = .local_mutation },
     .{ .name = "file.move", .required_capability = "files.write", .effect = .local_mutation },
     .{ .name = "file.share", .required_capability = "files.share", .effect = .external },
@@ -42,8 +44,10 @@ test "the grant rule is enforced and re-exported from the domain" {
     try testing.expect(!withinGrant("../other/secrets"));
 }
 
-test "sharing is external and held; listing and editing are the agent's" {
-    try testing.expect(tools[4].effect.needsApproval());
-    try testing.expect(!tools[0].effect.needsApproval());
-    try testing.expect(!tools[2].effect.needsApproval());
+test "sharing is external and held; reads and local changes are the agent's" {
+    for (tools) |tool| {
+        const held = tool.effect.needsApproval();
+        // Only sharing reaches outside the device and is held; everything else is silent or local.
+        try testing.expectEqual(std.mem.eql(u8, tool.name, "file.share"), held);
+    }
 }
