@@ -18,6 +18,9 @@ pub const clock = @import("clock/virtual.zig");
 pub const scheduler = @import("scheduler/ordering.zig");
 pub const failure = @import("failure/injection.zig");
 
+// A simulated embodied device, driven through the agent contract until a hardware target is chosen.
+pub const device = @import("hardware/device.zig");
+
 test {
     _ = host;
     _ = model;
@@ -27,4 +30,5 @@ test {
     _ = clock;
     _ = scheduler;
     _ = failure;
+    _ = device;
 }

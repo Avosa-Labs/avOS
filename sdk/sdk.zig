@@ -9,6 +9,7 @@
 
 pub const semver = @import("zig/semver.zig");
 pub const agent_manifest = @import("agents/manifest.zig");
+pub const agent_contract = @import("agents/contract.zig");
 pub const testing = @import("testing/harness.zig");
 pub const wit = @import("wit/interface.zig");
 pub const c_abi = @import("c/abi.zig");
@@ -23,6 +24,7 @@ pub const design = @import("design/reference.zig");
 test {
     _ = semver;
     _ = agent_manifest;
+    _ = agent_contract;
     _ = testing;
     _ = wit;
     _ = c_abi;
