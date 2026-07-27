@@ -17,6 +17,9 @@
 
 const std = @import("std");
 
+/// The delivered glyph assets, embedded for the renderer that draws the app-tile symbols.
+pub const glyphs = @import("glyphs.zig");
+
 /// The outcome of resolving an icon name.
 pub const Resolution = union(enum) {
     /// The name maps to this asset identifier.
@@ -63,6 +66,10 @@ pub fn resolve(name: []const u8) Resolution {
 /// Whether a name is a known icon.
 pub fn has(name: []const u8) bool {
     return resolve(name).hasAsset();
+}
+
+test {
+    _ = glyphs;
 }
 
 test "a known name resolves to its asset" {
