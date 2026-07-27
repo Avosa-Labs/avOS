@@ -21,6 +21,7 @@ pub const scene_hittest = @import("scene/hittest.zig");
 pub const compositor_layers = @import("compositor/layers.zig");
 pub const scheduler = @import("compositor/scheduler.zig");
 pub const raster = @import("compositor/raster.zig");
+pub const gpu_scene = @import("compositor/gpu_scene.zig");
 pub const present = @import("compositor/present.zig");
 pub const accessibility_frame = @import("accessibility/frame.zig");
 pub const animation = @import("animation/animation.zig");
@@ -70,6 +71,7 @@ test {
     _ = scene_damage;
     _ = scene_hittest;
     _ = compositor_layers;
+    _ = gpu_scene;
     _ = accessibility_frame;
     _ = animation;
     _ = interpolate;
