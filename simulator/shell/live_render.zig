@@ -250,18 +250,18 @@ pub fn renderBoot(screen: *Framebuffer, t: f32) void {
     const glow_peak: u8 = @intFromFloat(glow * 26.0);
     vector.fillGlow(screen, cx, cy, u(84), s(theme.human), glow_peak);
 
-    // The mark's motion, exactly the reference's layering:
-    //   reveal  1.6s cubic-bezier(.16,.9,.24,1): scale .8 → 1, opacity 0 → 1
-    //   breathe 6s from 1.7s: scale 1 → 1.05 → 1
-    const reveal_dur: f32 = 1.6;
+    // The mark's motion: a quick reveal (the design's ease, but snappy so the logo appears at once),
+    // then a gentle breathe. reveal: scale .8 → 1, opacity 0 → 1; breathe: scale 1 → 1.05 → 1.
+    const reveal_dur: f32 = 0.7;
+    const breathe_from: f32 = 0.8;
     var scale: f32 = 1.0;
     var opacity: f32 = 1.0;
     if (t < reveal_dur) {
         const p = anim.ease(t / reveal_dur, 0.16, 0.9, 0.24, 1.0);
         scale = 0.8 + 0.2 * p;
         opacity = p;
-    } else if (t >= 1.7) {
-        scale = 1.025 - 0.025 * @cos((t - 1.7) * (2.0 * std.math.pi / 6.0));
+    } else if (t >= breathe_from) {
+        scale = 1.025 - 0.025 * @cos((t - breathe_from) * (2.0 * std.math.pi / 6.0));
     }
     // The mark is the reference's 116px, scaled to this screen's proportions (a third larger than raw),
     // then by the reveal/breathe.
@@ -274,8 +274,8 @@ pub fn renderBoot(screen: *Framebuffer, t: f32) void {
         vector.fillDisc(screen, cx, cy, r + 2.0, .{ .r = theme.base.red, .g = theme.base.green, .b = theme.base.blue, .a = veil });
     }
 
-    // The sheen: a white diagonal band sweeps across the mark once, 1.35s → 2.55s.
-    if (t >= 1.35 and t < 2.55) bootSheen(screen, cx, cy, r, (t - 1.35) / 1.2);
+    // The sheen: a white diagonal band sweeps across the mark once, just after it appears (0.5s → 1.4s).
+    if (t >= 0.5 and t < 1.4) bootSheen(screen, cx, cy, r, (t - 0.5) / 0.9);
 }
 
 /// The reference's `sheen` sweep: a soft white band, skewed ~14°, travelling left→right across the mark
