@@ -161,7 +161,9 @@ pub const dock_apps = [_]iconography.App{ .phone, .messages, .camera, .agents };
 fn dock(screen: *Framebuffer) void {
     const dh: u32 = 76;
     const rect: paint.Rect = .{ .x = 16, .y = @intCast(theme.screen_h - dh - 26), .w = w - 32, .h = dh };
-    paint.paint(screen, &.{.{ .rounded = .{ .rect = rect, .radius = theme.radius_xl + 4, .colour = sa(theme.screen_card, 200) } }});
+    // A dark, translucent floating bar — the design's dock, distinct from the light screen so the
+    // coloured app tiles read against it.
+    paint.paint(screen, &.{.{ .rounded = .{ .rect = rect, .radius = theme.radius_xl + 4, .colour = sa(theme.base, 210) } }});
     const tile: u32 = 52;
     const inner = @as(u32, @intCast(rect.w)) - 44;
     const gap = (inner - dock_apps.len * tile) / (dock_apps.len - 1);
