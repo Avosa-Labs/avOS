@@ -116,6 +116,13 @@ pub const registry = [_]Key{
     .{ .key = "security.developer_mode", .owner = "security", .schema = .boolean, .default = .{ .boolean = false }, .class = .human_only },
     // System
     .{ .key = "system.update_channel", .owner = "system", .schema = .{ .choice = &.{ "stable", "beta" } }, .default = .{ .choice = "stable" }, .class = .hold },
+    // Device safety envelope (embodied agents). The limits a deliberative mind may read to plan
+    // within, but can never widen — human_only, the same structural reason the lock method is. An
+    // embodied agent is a principal like any other, so the envelope binds it through this one
+    // registry; no capability grants a write.
+    .{ .key = "device.speed_limit", .owner = "device", .schema = .{ .integer = .{ .min = 0, .max = 100 } }, .default = .{ .integer = 30 }, .class = .human_only },
+    .{ .key = "device.force_limit", .owner = "device", .schema = .{ .integer = .{ .min = 0, .max = 100 } }, .default = .{ .integer = 40 }, .class = .human_only },
+    .{ .key = "device.geofence_enabled", .owner = "device", .schema = .boolean, .default = .{ .boolean = true }, .class = .human_only },
 };
 
 /// The registered setting for a key, or null if the key is not registered.
@@ -293,4 +300,24 @@ test "a value that violates the schema is rejected before the class is consulted
     try testing.expectEqual(Outcome.rejected_invalid, store.propose("display.text_size", .{ .boolean = true }, .agent)); // wrong shape
     try testing.expectEqual(Outcome.rejected_invalid, store.propose("nonexistent.key", .{ .boolean = true }, .human)); // unknown key
     try testing.expectEqual(@as(i64, 100), store.get("display.text_size").?.integer); // still the default
+}
+
+test "the device safety envelope: an embodied agent reads it but can never widen it" {
+    var store = Store.init();
+
+    // A deliberative mind can read its envelope to plan within it.
+    const speed = find("device.speed_limit") orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(Class.human_only, speed.class);
+    try testing.expectEqual(@as(i64, 30), store.get("device.speed_limit").?.integer);
+
+    // It cannot widen the limit, whatever it holds: the class refuses the write outright, and the
+    // limit is unchanged — the same structural refusal as the lock method.
+    try testing.expectEqual(Outcome.rejected_unauthorized, store.propose("device.speed_limit", .{ .integer = 100 }, .agent));
+    try testing.expectEqual(@as(i64, 30), store.get("device.speed_limit").?.integer); // still the human-set limit
+    try testing.expectEqual(Outcome.rejected_unauthorized, store.propose("device.geofence_enabled", .{ .boolean = false }, .agent));
+    try testing.expect(store.get("device.geofence_enabled").?.boolean); // still fenced
+
+    // The person sets the envelope.
+    try testing.expectEqual(Outcome.applied, store.propose("device.speed_limit", .{ .integer = 20 }, .human));
+    try testing.expectEqual(@as(i64, 20), store.get("device.speed_limit").?.integer);
 }
