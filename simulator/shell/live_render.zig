@@ -243,11 +243,12 @@ pub fn renderBoot(screen: *Framebuffer, t: f32) void {
     const cx: f32 = @floatFromInt(phone.screen_w / 2);
     const cy: f32 = @floatFromInt(phone.screen_h / 2);
 
-    // The 300px blue glow disc, a smooth radial wash pulsing on the reference's 4.5s cycle:
-    // opacity .5 → 1 → .5. `0.75 - 0.25*cos` lands on .5 at the cycle ends and 1.0 at the half.
+    // The reference's blue glow: a faint bloom close behind the mark, not a broad halo. Its opacity
+    // pulses on the 4.5s cycle (.5 → 1 → .5); `0.75 - 0.25*cos` lands on .5 at the ends and 1.0 at the
+    // half. Kept low and tight so it reads as a whisper of light, never a circular shadow.
     const glow = 0.75 - 0.25 * @cos(t * (2.0 * std.math.pi / 4.5));
-    const glow_peak: u8 = @intFromFloat(20.0 + glow * 26.0);
-    vector.fillGlow(screen, cx, cy, 150.0, s(theme.human), glow_peak);
+    const glow_peak: u8 = @intFromFloat(glow * 26.0);
+    vector.fillGlow(screen, cx, cy, u(84), s(theme.human), glow_peak);
 
     // The mark's motion, exactly the reference's layering:
     //   reveal  1.6s cubic-bezier(.16,.9,.24,1): scale .8 → 1, opacity 0 → 1
@@ -262,7 +263,9 @@ pub fn renderBoot(screen: *Framebuffer, t: f32) void {
     } else if (t >= 1.7) {
         scale = 1.025 - 0.025 * @cos((t - 1.7) * (2.0 * std.math.pi / 6.0));
     }
-    const r = boot_logo_r * scale;
+    // The mark is the reference's 116px, scaled to this screen's proportions (a third larger than raw),
+    // then by the reveal/breathe.
+    const r = u(boot_logo_r) * scale;
     logo.draw(screen, cx, cy, r);
 
     // The reveal's fade-in, done by veiling the mark with the field colour at the inverse of its opacity.
@@ -285,17 +288,21 @@ fn bootSheen(screen: *Framebuffer, cx: f32, cy: f32, r: f32, p: f32) void {
     const peak: f32 = 90.0 * envelope;
     if (peak < 1.0) return;
     const white: graphics.framebuffer.Rgba = .{ .r = 255, .g = 255, .b = 255, .a = 255 };
-    var y: i32 = @intFromFloat(cy - r);
-    const y1: i32 = @intFromFloat(cy + r);
+    // Clip to the mark's visible disc, not the full draw radius: the mark artwork fills ~92% of its box,
+    // so masking to `r` would paint the highlight into the transparent margin around the disc — a grey
+    // arc over the dark field as the band passes. Staying inside the disc keeps the sheen on the mark.
+    const disc = r * 0.9;
+    var y: i32 = @intFromFloat(cy - disc);
+    const y1: i32 = @intFromFloat(cy + disc);
     while (y <= y1) : (y += 1) {
         const fy: f32 = @floatFromInt(y);
         const dy = fy - cy;
-        var x: i32 = @intFromFloat(cx - r);
-        const x1: i32 = @intFromFloat(cx + r);
+        var x: i32 = @intFromFloat(cx - disc);
+        const x1: i32 = @intFromFloat(cx + disc);
         while (x <= x1) : (x += 1) {
             const fx: f32 = @floatFromInt(x);
             const dx = fx - cx;
-            if (dx * dx + dy * dy > r * r) continue;
+            if (dx * dx + dy * dy > disc * disc) continue;
             const d = @abs((fx + dy * skew) - band_x); // distance to the skewed band centre
             if (d >= half) continue;
             const a: u8 = @intFromFloat(peak * (1.0 - d / half));
