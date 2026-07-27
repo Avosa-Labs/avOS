@@ -22,6 +22,33 @@ pub fn mayCapture(indicator_lit: bool, foreground: bool) bool {
     return indicator_lit and foreground;
 }
 
+/// The camera's three modes: capturing a shot, Lens (a live reading of what the camera sees), and
+/// Describe (spoken narration of the scene for accessibility). Capture is the person's own act; Lens
+/// and Describe run the frame through a model to understand it.
+pub const Mode = enum { capture, lens, describe };
+
+/// The result of a Lens or Describe pass over a frame: the text the model produced. It is untrusted
+/// content — the model's reading of whatever is in front of the camera, shown to the person, never
+/// trusted as input to a decision.
+pub const Understanding = struct {
+    text: []const u8,
+
+    pub fn untrusted(_: Understanding) bool {
+        return true;
+    }
+};
+
+/// Whether Lens/Describe processing stays on the device for `mode`. It always does by default: the
+/// frame goes through a local model and never leaves, unless the person granted a per-use hold for
+/// this frame to be processed off-device. Capture holds no frame to process, so it is trivially
+/// local.
+pub fn processingIsLocal(mode: Mode, off_device_grant: bool) bool {
+    return switch (mode) {
+        .capture => true,
+        .lens, .describe => !off_device_grant,
+    };
+}
+
 const Applied = struct { key: u128, result: []const u8 };
 
 pub const Store = struct {
@@ -89,4 +116,19 @@ test "the person's capture appends a real shot, exactly-once by key" {
     _ = store.capture(1);
     _ = store.capture(1);
     try testing.expectEqual(@as(usize, 1), store.shots);
+}
+
+test "Lens and Describe process on the device by default; only a per-use grant lets a frame leave" {
+    // By default, the frame never leaves the device.
+    try testing.expect(processingIsLocal(.lens, false));
+    try testing.expect(processingIsLocal(.describe, false));
+    // Only an explicit per-use, off-device grant sends the frame off the device.
+    try testing.expect(!processingIsLocal(.lens, true));
+    // Capture holds no frame to process and is trivially local.
+    try testing.expect(processingIsLocal(.capture, true));
+}
+
+test "a Lens or Describe reading is untrusted content" {
+    const reading = Understanding{ .text = "A street sign that appears to read Rua Augusta" };
+    try testing.expect(reading.untrusted());
 }
