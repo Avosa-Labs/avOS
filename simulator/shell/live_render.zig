@@ -174,10 +174,22 @@ fn kindName(kind: anytype) []const u8 {
 
 const pad: i32 = 22;
 
-/// A screen header: a large title and a subtitle, below the status bar.
+/// The reference lays its screens out on a 326px-wide device; this one is wider, so a reference
+/// dimension is taken times this ratio to keep the type at the reference's proportions rather than a
+/// third smaller. Matches the same factor the home screen scales by.
+const ui: f32 = @as(f32, @floatFromInt(theme.screen_w)) / 326.0;
+
+fn u(reference_px: f32) f32 {
+    return reference_px * ui;
+}
+
+/// A screen header: a large title and a subtitle, below the status bar. The title takes the reference's
+/// 21px semibold, the subtitle its muted regular, both at the screen's scale.
 fn header(screen: *Framebuffer, title: []const u8, subtitle: []const u8) void {
-    _ = text.draw(screen, @floatFromInt(pad), 74, title, 22, s(theme.screen_text));
-    _ = text.draw(screen, @floatFromInt(pad), 96, subtitle, 11.5, s(theme.screen_text_muted));
+    // At these sizes the weight heuristic already lands right: the 21px title in semibold, the 11.5px
+    // subtitle in regular — so a plain draw carries the reference's weights without pinning them.
+    _ = text.draw(screen, @floatFromInt(pad), u(58), title, u(21), s(theme.screen_text));
+    _ = text.draw(screen, @floatFromInt(pad), u(74), subtitle, u(11.5), s(theme.screen_text_muted));
 }
 
 /// The geometry of a content card at a given top: the content column, inset by `pad`.
