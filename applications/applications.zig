@@ -45,6 +45,7 @@ pub const settings_panels = @import("settings/panels.zig");
 pub const store_domain = @import("store/domain.zig");
 pub const store = @import("store/store.zig");
 pub const store_surface = @import("store/surface.zig");
+pub const calculator_domain = @import("calculator/domain.zig");
 pub const calculator = @import("calculator/calculator.zig");
 pub const calculator_surface = @import("calculator/surface.zig");
 pub const agents = @import("agents/console.zig");
@@ -80,6 +81,7 @@ test {
     _ = store_domain;
     _ = store;
     _ = store_surface;
+    _ = calculator_domain;
     _ = calculator;
     _ = calculator_surface;
     _ = agents;
