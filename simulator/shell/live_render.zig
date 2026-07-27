@@ -22,6 +22,7 @@ const Framebuffer = graphics.framebuffer.Framebuffer;
 const phone = graphics.phone;
 const logo = graphics.logo;
 const home = graphics.home;
+const iconography = graphics.iconography;
 const paint = graphics.paint;
 const vector = graphics.vector;
 const text = graphics.font;
@@ -35,7 +36,7 @@ pub const height: u32 = phone.window_h;
 const max_rows: usize = 6;
 
 /// The surfaces the shell can show.
-pub const Surface = enum { boot, lock, home, activity, approval, principals, store, rest, phone, messages, camera, agents, calendar, weather, contacts, files, settings };
+pub const Surface = enum { boot, lock, home, library, activity, approval, principals, store, rest, phone, messages, camera, agents, calendar, weather, contacts, files, settings };
 
 /// Runs the canonical scenario into a fresh host. The caller owns it and must `deinit`.
 pub fn runScenario(host: *Host, gpa: std.mem.Allocator) !void {
@@ -69,6 +70,7 @@ pub fn renderSurface(gpa: std.mem.Allocator, target: *Framebuffer, host: *Host, 
             phone.statusBar(&screen);
             switch (surface) {
                 .home => renderHome(&screen, host, t),
+                .library => renderLibrary(&screen),
                 .activity => try renderActivity(gpa, &screen, host),
                 .approval => renderApproval(&screen, host),
                 .principals => try renderPrincipals(gpa, &screen, host),
@@ -417,6 +419,88 @@ pub fn renderHome(screen: *Framebuffer, host: *Host, t: f32) void {
         },
         .active_title = active,
     }, t);
+}
+
+/// The fixed home layout the live shell always shows — one in-motion task and an active task — used to
+/// hit-test the home app grid without rebuilding the full model.
+fn homeLayoutModel() home.Model {
+    return .{ .tasks = &.{.{ .title = "", .note = "", .hue = theme.teal }}, .active_title = "" };
+}
+
+/// The surface an app opens to, or null when its screen does not exist yet (so the tap is ignored rather
+/// than opening the wrong screen).
+pub fn appSurface(app: iconography.App) ?Surface {
+    return switch (app) {
+        .phone => .phone,
+        .messages => .messages,
+        .camera => .camera,
+        .agents => .agents,
+        .calendar => .calendar,
+        .files => .files,
+        .contacts => .contacts,
+        .settings => .settings,
+        .weather => .weather,
+        .store => .store,
+        .browser, .calculator, .health, .mail, .notes, .maps => null,
+    };
+}
+
+/// The surface a tap on the home app grid opens, or null. Hit-tests the grid through the same layout it
+/// is drawn with.
+pub fn homeGridApp(sx: i32, sy: i32) ?Surface {
+    if (home.gridTileAt(homeLayoutModel(), sx, sy)) |app| return appSurface(app);
+    return null;
+}
+
+/// Whether a tap on the home screen falls on the "All apps" link.
+pub fn homeAllApps(sx: i32, sy: i32) bool {
+    return home.allAppsAt(homeLayoutModel(), sx, sy);
+}
+
+/// Every default application, in the order the library lists them.
+const library_apps = [_]iconography.App{
+    .agents, .settings, .messages, .phone,      .calendar,   .files,
+    .contacts, .camera, .weather,  .browser,    .calculator, .store,
+};
+
+/// The four-column grid geometry the library draws and hit-tests against.
+const LibGrid = struct {
+    const cols: usize = 4;
+    fn cellW() f32 {
+        const content = @as(f32, @floatFromInt(width_screen())) - 2.0 * @as(f32, @floatFromInt(pad));
+        return (content - u(10) * @as(f32, @floatFromInt(cols - 1))) / @as(f32, @floatFromInt(cols));
+    }
+    fn tileRect(i: usize) graphics.paint.Rect {
+        const col: usize = i % cols;
+        const row: usize = i / cols;
+        const cw = cellW();
+        const tile = u(58);
+        const cell_x = @as(f32, @floatFromInt(pad)) + @as(f32, @floatFromInt(col)) * (cw + u(10));
+        const top = u(120) + @as(f32, @floatFromInt(row)) * u(90);
+        return .{ .x = @intFromFloat(cell_x + (cw - tile) / 2.0), .y = @intFromFloat(top), .w = @intFromFloat(tile), .h = @intFromFloat(tile) };
+    }
+};
+
+/// The full app list: the reference's "All apps" library, every default application as a labelled tile.
+fn renderLibrary(screen: *Framebuffer) void {
+    header(screen, "All apps", "Every app on your device");
+    for (library_apps, 0..) |app, i| {
+        const r = LibGrid.tileRect(i);
+        iconography.draw(screen, r, app);
+        const cx = @as(f32, @floatFromInt(r.x)) + @as(f32, @floatFromInt(r.w)) / 2.0;
+        text.drawCentred(screen, cx, @as(f32, @floatFromInt(r.y)) + @as(f32, @floatFromInt(r.h)) + u(13), home.appName(app), u(9.5), s(theme.screen_text_muted));
+    }
+}
+
+/// The surface a tap on the library grid opens, or null.
+pub fn libraryApp(sx: i32, sy: i32) ?Surface {
+    for (library_apps, 0..) |app, i| {
+        const r = LibGrid.tileRect(i);
+        if (sx >= r.x and sx <= r.x + @as(i32, @intCast(r.w)) and sy >= r.y and sy <= r.y + @as(i32, @intCast(r.w)) + @as(i32, @intFromFloat(u(18)))) {
+            return appSurface(app);
+        }
+    }
+    return null;
 }
 
 pub fn renderActivity(gpa: std.mem.Allocator, screen: *Framebuffer, host: *Host) !void {

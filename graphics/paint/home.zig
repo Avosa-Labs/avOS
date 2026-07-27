@@ -109,7 +109,7 @@ pub fn render(screen: *Framebuffer, model: Model, t: f32) void {
         y += @as(i32, @intCast(active.h)) + @as(i32, @intFromFloat(u(10)));
     }
 
-    appGrid(screen, y + @as(i32, @intFromFloat(u(6))));
+    appGrid(screen, gridTop(model));
     dock(screen);
 }
 
@@ -117,8 +117,48 @@ pub fn render(screen: *Framebuffer, model: Model, t: f32) void {
 /// list reached by "All apps" / a swipe left. Phone, Messages, Camera and Agents are already in the dock.
 pub const grid_apps = [_]iconography.App{ .settings, .calendar, .files, .contacts, .weather, .browser, .calculator, .store };
 
+/// The y at which the "Your apps" section begins, derived from the same layout the body draws, so a
+/// hit-test lands on exactly what is shown. Kept in step with `render`'s vertical accumulation.
+pub fn gridTop(model: Model) i32 {
+    const label_y = u(90) + u(48) + u(24);
+    var y: f32 = label_y + u(12);
+    for (model.tasks) |_| y += u(50) + u(10);
+    if (model.active_title != null) y += u(122) + u(10);
+    return @intFromFloat(y + u(6));
+}
+
+/// The grid tile (app) at a screen-local point, or null. The hit region is the whole cell down through
+/// the label, so tapping a tile or its name opens the app.
+pub fn gridTileAt(model: Model, x: i32, y: i32) ?iconography.App {
+    const cols: usize = 4;
+    const content_w = @as(f32, @floatFromInt(w)) - 2.0 * @as(f32, @floatFromInt(pad_home));
+    const gap_x = u(8);
+    const cell_w = (content_w - gap_x * @as(f32, @floatFromInt(cols - 1))) / @as(f32, @floatFromInt(cols));
+    const tile = u(54);
+    const grid_top = @as(f32, @floatFromInt(gridTop(model))) + u(16);
+    const row_h = u(74);
+    const fx: f32 = @floatFromInt(x);
+    const fy: f32 = @floatFromInt(y);
+    for (grid_apps, 0..) |app, i| {
+        const col: usize = i % cols;
+        const row: usize = i / cols;
+        const cell_x = @as(f32, @floatFromInt(pad_home)) + @as(f32, @floatFromInt(col)) * (cell_w + gap_x);
+        const tile_y = grid_top + @as(f32, @floatFromInt(row)) * row_h;
+        if (fx >= cell_x and fx <= cell_x + cell_w and fy >= tile_y and fy <= tile_y + tile + u(18)) return app;
+    }
+    return null;
+}
+
+/// Whether a screen-local point falls on the "All apps" link in the grid header.
+pub fn allAppsAt(model: Model, x: i32, y: i32) bool {
+    const top: f32 = @floatFromInt(gridTop(model));
+    const fy: f32 = @floatFromInt(y);
+    if (fy < top - u(8) or fy > top + u(14)) return false;
+    return @as(f32, @floatFromInt(x)) > @as(f32, @floatFromInt(w)) * 0.58;
+}
+
 /// A short label for an app tile.
-fn appName(app: iconography.App) []const u8 {
+pub fn appName(app: iconography.App) []const u8 {
     return switch (app) {
         .phone => "Phone",
         .messages => "Messages",
