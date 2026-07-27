@@ -21,6 +21,7 @@ pub const settings = @embedFile("source/glyphs/settings.svg");
 pub const location = @embedFile("source/glyphs/location.svg");
 pub const running = @embedFile("source/glyphs/running.svg");
 pub const file = @embedFile("source/glyphs/file.svg");
+pub const globe = @embedFile("source/glyphs/globe.svg");
 
 test "an embedded glyph carries its SVG payload" {
     // A sanity check that the asset is present and is the designed currentColor SVG.

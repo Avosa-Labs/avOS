@@ -95,6 +95,10 @@ pub const Palette = struct {
     icon_weather: Gradient,
     icon_notes: Gradient,
     icon_maps: Gradient,
+    icon_contacts: Gradient,
+    icon_browser: Gradient,
+    icon_calculator: Gradient,
+    icon_store: Gradient,
     // The brand mark: the diagonal blue-to-cyan of the boot logo, top-left to
     // bottom-right. `top` is the upper-left indigo, `bottom` the lower-right cyan.
     logo: Gradient,
@@ -191,6 +195,11 @@ fn referencePalette() Palette {
         .icon_weather = .{ .top = rgb(0x5a, 0xc8, 0xff), .bottom = rgb(0x2f, 0x9f, 0xe0) },
         .icon_notes = .{ .top = rgb(0xff, 0xd1, 0x5c), .bottom = rgb(0xf0, 0xa5, 0x2f) },
         .icon_maps = .{ .top = rgb(0x4f, 0xd0, 0x8a), .bottom = rgb(0x2a, 0x9e, 0x86) },
+        // The delivered default-app tiles (design/icons/source/app-tiles): the twelve default apps.
+        .icon_contacts = .{ .top = rgb(0xff, 0x8f, 0x6b), .bottom = rgb(0x9a, 0x6c, 0xff) },
+        .icon_browser = .{ .top = rgb(0x5f, 0xe0, 0xb0), .bottom = rgb(0x28, 0xa9, 0x8d) },
+        .icon_calculator = .{ .top = rgb(0x8e, 0x97, 0xab), .bottom = rgb(0x4c, 0x55, 0x68) },
+        .icon_store = .{ .top = rgb(0xb4, 0x92, 0xff), .bottom = rgb(0x84, 0x52, 0xf0) },
         .logo = .{ .top = rgb(0x3b, 0x5c, 0xf6), .bottom = rgb(0x1a, 0xb8, 0xff) },
     };
 }

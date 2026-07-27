@@ -111,6 +111,10 @@ pub const icon_mail = palette.icon_mail;
 pub const icon_weather = palette.icon_weather;
 pub const icon_notes = palette.icon_notes;
 pub const icon_maps = palette.icon_maps;
+pub const icon_contacts = palette.icon_contacts;
+pub const icon_browser = palette.icon_browser;
+pub const icon_calculator = palette.icon_calculator;
+pub const icon_store = palette.icon_store;
 
 // --- Layout geometry ---
 
