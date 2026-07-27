@@ -36,6 +36,11 @@ fn navigate(current: live.Surface, mx: i32, my: i32) live.Surface {
     const screen_w: i32 = @intCast(graphics.phone.screen_w);
     const screen_h: i32 = @intCast(graphics.phone.screen_h);
 
+    // Boot and lock are the opening cycle: a tap anywhere skips boot to the lock screen, and a tap
+    // (or swipe) on the lock screen opens the home screen — the reference's "Swipe up to open".
+    if (current == .boot) return .lock;
+    if (current == .lock) return .home;
+
     // A tap in the header returns home from any sub-surface.
     if (current != .home and sy < 110) return .home;
 
@@ -149,6 +154,7 @@ pub fn main(init: std.process.Init) !u8 {
     var surface: live.Surface = .boot;
     var progress: f32 = 0.0;
     var boot_seen: u32 = 0;
+    var lock_seen: u32 = 0;
     var frames: u32 = 0;
     var running = true;
     var event: c.SDL_Event = undefined;
@@ -158,7 +164,17 @@ pub fn main(init: std.process.Init) !u8 {
             switch (event.type) {
                 c.SDL_QUIT => running = false,
                 c.SDL_KEYDOWN => {
-                    if (event.key.keysym.sym == c.SDLK_ESCAPE) running = false;
+                    const key = event.key.keysym.sym;
+                    if (key == c.SDLK_ESCAPE) running = false;
+                    // Up / space / return is the "swipe up to open": it skips boot to the lock screen
+                    // and unlocks the lock screen to home. Confined to the opening cycle so it never
+                    // stray-navigates an app surface.
+                    if ((surface == .boot or surface == .lock) and
+                        (key == c.SDLK_UP or key == c.SDLK_SPACE or key == c.SDLK_RETURN))
+                    {
+                        surface = if (surface == .boot) .lock else .home;
+                        progress = 0.0;
+                    }
                 },
                 c.SDL_MOUSEBUTTONDOWN => {
                     // The click arrives in window coordinates; map it back to the
@@ -175,10 +191,18 @@ pub fn main(init: std.process.Init) !u8 {
             }
         }
 
-        // The boot screen shows briefly, then home takes over.
+        // The opening cycle plays hands-off: boot holds long enough for the mark to reveal, breathe,
+        // and take its sheen, then the lock screen greets and — after a beat, or on a tap/swipe — the
+        // home screen takes over. Either can be skipped by input, handled in `navigate`.
         if (surface == .boot) {
             boot_seen += 1;
-            if (boot_seen > 90) {
+            if (boot_seen > 170) { // ~2.8s at 60fps: past the 1.6s reveal and the 2.55s sheen
+                surface = .lock;
+                progress = 0.0;
+            }
+        } else if (surface == .lock) {
+            lock_seen += 1;
+            if (lock_seen > 210) { // ~3.5s: the greeting settles, then home opens
                 surface = .home;
                 progress = 0.0;
             }

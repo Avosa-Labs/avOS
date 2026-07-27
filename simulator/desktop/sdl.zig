@@ -30,6 +30,10 @@ pub const SDL_KEYDOWN: u32 = 0x300;
 pub const SDL_MOUSEBUTTONDOWN: u32 = 0x401;
 
 pub const SDLK_ESCAPE: i32 = 27;
+pub const SDLK_RETURN: i32 = 13;
+pub const SDLK_SPACE: i32 = 32;
+// Arrow keys carry the scancode mask (0x40000000) over their scancode; Up is scancode 82.
+pub const SDLK_UP: i32 = 0x40000000 | 82;
 
 pub const Keysym = extern struct {
     scancode: c_int,
