@@ -187,9 +187,11 @@ fn u(reference_px: f32) f32 {
 /// 21px semibold, the subtitle its muted regular, both at the screen's scale.
 fn header(screen: *Framebuffer, title: []const u8, subtitle: []const u8) void {
     // At these sizes the weight heuristic already lands right: the 21px title in semibold, the 11.5px
-    // subtitle in regular — so a plain draw carries the reference's weights without pinning them.
+    // subtitle in regular. The subtitle is clipped to the content column so a long one cannot spill off
+    // the screen edge.
+    const edge: f32 = @as(f32, @floatFromInt(width_screen())) - @as(f32, @floatFromInt(pad));
     _ = text.draw(screen, @floatFromInt(pad), u(58), title, u(21), s(theme.screen_text));
-    _ = text.draw(screen, @floatFromInt(pad), u(74), subtitle, u(11.5), s(theme.screen_text_muted));
+    _ = text.drawClipped(screen, @floatFromInt(pad), u(74), subtitle, u(11.5), s(theme.screen_text_muted), edge);
 }
 
 /// The geometry of a content card at a given top: the content column, inset by `pad`.
@@ -699,7 +701,7 @@ fn layoutScreen(model: Screen, out: []Placed) usize {
         n += 1;
         for (section.rows, 0..) |_, ri| {
             blocks[n] = .{ .kind = .card, .section = si, .row = ri };
-            heights[n] = 68; // a 60-tall card plus the 8 gap below it
+            heights[n] = u(50) + u(8); // a reference-scaled card plus the gap below it
             n += 1;
         }
         blocks[n] = .{ .kind = .spacer, .section = si, .row = 0 };
@@ -720,7 +722,7 @@ fn layoutScreen(model: Screen, out: []Placed) usize {
                 count += 1;
             },
             .card => {
-                out[count] = .{ .kind = .card, .rect = cardRect(y, 60), .section = b.section, .row = b.row };
+                out[count] = .{ .kind = .card, .rect = cardRect(y, @intFromFloat(u(50))), .section = b.section, .row = b.row };
                 count += 1;
             },
         }
@@ -739,18 +741,23 @@ fn renderScreen(screen: *Framebuffer, model: Screen) void {
     for (placed[0..count]) |p| {
         const rect = p.rect;
         switch (p.kind) {
-            .label => _ = text.draw(screen, @floatFromInt(pad + 4), @floatFromInt(rect.y + 12), model.sections[p.section].label, 10.5, s(theme.screen_label)),
+            .label => _ = text.drawClipped(screen, @as(f32, @floatFromInt(pad)) + u(4), @as(f32, @floatFromInt(rect.y)) + u(9), model.sections[p.section].label, u(11), s(theme.screen_label), rightF(rect) - u(8)),
             .card => {
                 const row = model.sections[p.section].rows[p.row];
+                const rx: f32 = @floatFromInt(rect.x);
+                const ry: f32 = @floatFromInt(rect.y);
                 paintCard(screen, rect);
                 // A soft halo behind the dot, in the row's colour, then the dot.
-                vector.fillDisc(screen, @floatFromInt(rect.x + 30), @floatFromInt(rect.y + 30), 15, sa(row.colour, 32));
-                vector.fillDisc(screen, @floatFromInt(rect.x + 30), @floatFromInt(rect.y + 30), 6, s(row.colour));
-                _ = text.draw(screen, @floatFromInt(rect.x + 52), @floatFromInt(rect.y + 26), row.title, 12.5, s(theme.screen_text));
-                _ = text.draw(screen, @floatFromInt(rect.x + 52), @floatFromInt(rect.y + 44), row.sub, 10, s(theme.screen_text_muted));
+                vector.fillDisc(screen, rx + u(22), ry + u(25), u(11), sa(row.colour, 32));
+                vector.fillDisc(screen, rx + u(22), ry + u(25), u(4.5), s(row.colour));
+                // The value badge takes the right edge; the title and subtitle are clipped to stop before
+                // it, so a long name is cut at the badge rather than running under it.
+                const value_left = if (row.value.len > 0) rightF(rect) - u(16) - text.measure(row.value, u(10.5)) - u(8) else rightF(rect) - u(16);
+                _ = text.drawClipped(screen, rx + u(42), ry + u(21), row.title, u(12.5), s(theme.screen_text), value_left);
+                _ = text.drawClipped(screen, rx + u(42), ry + u(37), row.sub, u(10.5), s(theme.screen_text_muted), value_left);
                 if (row.value.len > 0) {
-                    const vw = text.measure(row.value, 10.5);
-                    _ = text.draw(screen, rightF(rect) - 18 - vw, @floatFromInt(rect.y + 35), row.value, 10.5, s(row.colour));
+                    const vw = text.measure(row.value, u(10.5));
+                    _ = text.draw(screen, rightF(rect) - u(16) - vw, ry + u(28), row.value, u(10.5), s(row.colour));
                 }
             },
         }
