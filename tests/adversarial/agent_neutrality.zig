@@ -16,6 +16,7 @@ const capability = core.capability;
 const principal = core.principal;
 const identity = core.identity;
 const time = core.time;
+const audit = core.audit;
 
 /// The enforcement world under test: a principal registry and the capability service over it, with
 /// one human who issues grants to agents.
@@ -134,6 +135,41 @@ test "the model a use runs against never changes the authorization outcome" {
         }));
         try std.testing.expectEqual(capability.Refusal.operation_not_granted, world.store.last_refusal.?);
     }
+}
+
+test "the ledger records one action as the same shape, whatever agent took it" {
+    const gpa = std.testing.allocator;
+    var ids: identity.Source = .initDeterministic(20260727);
+    var manual: time.ManualClock = .init(.fromSeconds(1_000));
+    var ledger = audit.Ledger.init(gpa, &ids, manual.clock());
+    defer ledger.deinit();
+
+    // Two agents, identified differently, take the identical action.
+    const record = audit.Record{
+        .actor = .{ .value = 0xA },
+        .action = .tool_invoked,
+        .outcome = .succeeded,
+        .target_kind = "calendar",
+    };
+    _ = try ledger.append(record);
+    var other = record;
+    other.actor = .{ .value = 0xB };
+    _ = try ledger.append(other);
+
+    const first = ledger.at(0).?;
+    const second = ledger.at(1).?;
+
+    // The recorded shape is identical — action, outcome, target kind, provenance, movement, and
+    // refusal all match — so the activity feed a person reads cannot be coloured by which agent
+    // acted. The ledger records who acted without letting that change what is recorded.
+    try std.testing.expectEqual(first.action, second.action);
+    try std.testing.expectEqual(first.outcome, second.outcome);
+    try std.testing.expect(std.mem.eql(u8, first.target_kind, second.target_kind));
+    try std.testing.expectEqual(first.provenance, second.provenance);
+    try std.testing.expectEqual(first.data_movement, second.data_movement);
+    try std.testing.expectEqual(first.refusal, second.refusal);
+    // Only the actor differs.
+    try std.testing.expect(!std.meta.eql(first.actor, second.actor));
 }
 
 test "an agent cannot use a grant issued to a different agent, whatever mind it runs" {
