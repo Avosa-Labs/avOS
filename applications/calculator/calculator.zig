@@ -15,14 +15,20 @@
 
 const std = @import("std");
 const framework = @import("../framework/agent_app.zig");
+const domain = @import("domain.zig");
 
 pub const tools = [_]framework.Tool{
     .{ .name = "calc.evaluate", .required_capability = "calculator.use", .effect = .read_only },
 };
 
+/// `calc.evaluate` — evaluate a full arithmetic expression, the app's expression domain. Both the
+/// person's keypad and an agent reach this one function; it is read-only and needs no approval.
+pub const evaluateExpression = domain.evaluate;
+pub const ExpressionError = domain.Error;
+
 pub const Op = enum { add, subtract, multiply, divide };
 
-pub const Error = error{ DivideByZero };
+pub const Error = error{DivideByZero};
 
 /// Evaluates a binary operation, refusing a division by zero rather than trapping.
 pub fn evaluate(op: Op, a: f64, b: f64) Error!f64 {
