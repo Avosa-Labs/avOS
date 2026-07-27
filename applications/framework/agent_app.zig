@@ -37,6 +37,10 @@ pub const Tool = registry.Tool;
 pub const Registry = registry.Registry;
 pub const Effect = registry.Effect;
 
+/// The settings policy registry, reached through the framework so an app is a viewer over policy
+/// without importing the system directly.
+pub const settings = core.policy.settings;
+
 /// Who is acting through the app: the person, or a specific agent.
 pub const Actor = struct {
     kind: enum { human, agent },

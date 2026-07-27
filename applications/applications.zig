@@ -41,6 +41,7 @@ pub const contacts_surface = @import("contacts/surface.zig");
 pub const settings_domain = @import("settings/domain.zig");
 pub const settings = @import("settings/settings.zig");
 pub const settings_surface = @import("settings/surface.zig");
+pub const settings_panels = @import("settings/panels.zig");
 pub const store_domain = @import("store/domain.zig");
 pub const store = @import("store/store.zig");
 pub const store_surface = @import("store/surface.zig");
@@ -75,6 +76,7 @@ test {
     _ = settings_domain;
     _ = settings;
     _ = settings_surface;
+    _ = settings_panels;
     _ = store_domain;
     _ = store;
     _ = store_surface;
