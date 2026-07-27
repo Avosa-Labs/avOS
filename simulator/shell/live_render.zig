@@ -25,6 +25,7 @@ const home = graphics.home;
 const paint = graphics.paint;
 const vector = graphics.vector;
 const text = graphics.font;
+const anim = graphics.anim;
 const theme = design.theme;
 
 /// The render target is the whole window: the framed device on its desktop.
@@ -209,21 +210,33 @@ fn rightI(rect: graphics.paint.Rect) i32 {
 
 // --- Surfaces ---
 
+/// Boot, matching the design: a near-black screen, a large soft-blue radial glow that breathes, and
+/// the round mark revealing — scaling up from 0.8 with the design's ease over 1.6s, then breathing.
+/// No caption; the mark alone, over the top.
 pub fn renderBoot(screen: *Framebuffer, t: f32) void {
     paint.paint(screen, &.{.{ .solid = .{ .rect = .{ .x = 0, .y = 0, .w = phone.screen_w, .h = phone.screen_h }, .colour = s(theme.base) } }});
     const cx: f32 = @floatFromInt(phone.screen_w / 2);
     const cy: f32 = @floatFromInt(phone.screen_h / 2);
-    const mark_r: f32 = 64.0;
-    // A soft glow behind the mark that breathes, in the logo's own blue.
-    const pulse = 0.5 + 0.5 * @sin(t * 1.4);
+
+    // A large soft blue radial glow behind the mark, breathing on a slow cycle.
+    const glow_pulse = 0.5 + 0.5 * @sin(t * 1.4);
     var g: u8 = 0;
-    while (g < 4) : (g += 1) {
-        const r = (mark_r + 84.0 + pulse * 20.0) - @as(f32, @floatFromInt(g)) * 30.0;
-        vector.fillDisc(screen, cx, cy, r, .{ .r = theme.logo.top.red, .g = theme.logo.top.green, .b = theme.logo.top.blue, .a = 20 });
+    while (g < 8) : (g += 1) {
+        const r = 150.0 - @as(f32, @floatFromInt(g)) * 18.0;
+        const a: u8 = @intFromFloat(5.0 + glow_pulse * 6.0);
+        vector.fillDisc(screen, cx, cy, r, .{ .r = theme.human.red, .g = theme.human.green, .b = theme.human.blue, .a = a });
     }
-    // The brand mark.
-    logo.draw(screen, cx, cy, mark_r);
-    text.drawCentred(screen, cx, cy + mark_r + 58.0, "Starting your world", 15, s(theme.text_primary));
+
+    // The mark reveals: scaling up from 0.8 with the design's ease over 1.6s, then a gentle breathe.
+    const reveal_dur: f32 = 1.6;
+    var scale: f32 = 1.0;
+    if (t < reveal_dur) {
+        const p = t / reveal_dur;
+        scale = 0.8 + 0.2 * anim.ease(p, 0.16, 0.9, 0.24, 1.0);
+    } else {
+        scale = 1.0 + 0.02 * @sin((t - reveal_dur) * 1.05);
+    }
+    logo.draw(screen, cx, cy, 58.0 * scale);
 }
 
 pub fn renderRest(screen: *Framebuffer) void {
