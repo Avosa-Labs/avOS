@@ -34,7 +34,7 @@ pub const height: u32 = phone.window_h;
 const max_rows: usize = 6;
 
 /// The surfaces the shell can show.
-pub const Surface = enum { boot, home, activity, approval, principals, store, rest, phone, messages, camera, agents };
+pub const Surface = enum { boot, home, activity, approval, principals, store, rest, phone, messages, camera, agents, calendar, weather, contacts };
 
 /// Runs the canonical scenario into a fresh host. The caller owns it and must `deinit`.
 pub fn runScenario(host: *Host, gpa: std.mem.Allocator) !void {
@@ -69,6 +69,9 @@ pub fn renderSurface(gpa: std.mem.Allocator, target: *Framebuffer, host: *Host, 
                 .messages => renderMessages(&screen, host),
                 .camera => renderCamera(&screen, host, t),
                 .agents => renderAgents(&screen, host),
+                .calendar => renderCalendar(&screen),
+                .weather => renderWeather(&screen),
+                .contacts => renderContacts(&screen),
                 else => unreachable,
             }
             phone.homeIndicator(&screen);
@@ -315,6 +318,48 @@ pub fn renderPrincipals(gpa: std.mem.Allocator, screen: *Framebuffer, host: *Hos
     _ = gpa;
     _ = host;
     renderScreen(screen, principals_screen);
+}
+
+/// Calendar: the day arranged into focus blocks — committed time, in the teal of a done block, and
+/// the one held for the person in the awaiting amber.
+pub fn renderCalendar(screen: *Framebuffer) void {
+    const blocks = [_]Row{
+        .{ .title = "Design review", .sub = "09:00 – 10:30 \u{00B7} focus", .colour = theme.teal, .value = "" },
+        .{ .title = "Lisbon trip planning", .sub = "11:00 – 12:00 \u{00B7} with your agents", .colour = theme.agent, .value = "LIVE" },
+        .{ .title = "Hotel deposit", .sub = "held for you to approve", .colour = theme.amber, .value = "HOLD" },
+    };
+    const sections = [_]Section{.{ .label = "Today \u{00B7} focus blocks", .rows = &blocks }};
+    renderScreen(screen, .{ .title = "Calendar", .sub = "Your day, in blocks", .sections = &sections });
+}
+
+/// Weather: saved locations and their current reading, external data an agent may retrieve.
+pub fn renderWeather(screen: *Framebuffer) void {
+    const places = [_]Row{
+        .{ .title = "Lisbon", .sub = "Clear \u{00B7} light breeze", .colour = theme.amber, .value = "24\u{00B0}" },
+        .{ .title = "Porto", .sub = "Cloudy", .colour = theme.human, .value = "19\u{00B0}" },
+        .{ .title = "Home", .sub = "Rain later", .colour = theme.human, .value = "17\u{00B0}" },
+    };
+    const sections = [_]Section{.{ .label = "Your places", .rows = &places }};
+    renderScreen(screen, .{ .title = "Weather", .sub = "Saved locations", .sections = &sections });
+}
+
+/// Contacts: people, and — surfaced honestly alongside them — the non-human principals a person
+/// shares their world with.
+pub fn renderContacts(screen: *Framebuffer) void {
+    const people = [_]Row{
+        .{ .title = "Ana Silva", .sub = "mobile \u{00B7} email", .colour = theme.human, .value = "" },
+        .{ .title = "Marco Dias", .sub = "work", .colour = theme.human, .value = "" },
+    };
+    const world = [_]Row{
+        .{ .title = "Weather", .sub = "service", .colour = theme.amber, .value = "" },
+        .{ .title = "Living-room display", .sub = "device", .colour = theme.human, .value = "" },
+        .{ .title = "Kitchen session", .sub = "session", .colour = theme.agent_soft, .value = "" },
+    };
+    const sections = [_]Section{
+        .{ .label = "People", .rows = &people },
+        .{ .label = "Also in your world", .rows = &world },
+    };
+    renderScreen(screen, .{ .title = "Contacts", .sub = "People and principals", .sections = &sections });
 }
 
 /// The Agents flagship: the roster of agents acting in the person's world, read from the real run —
