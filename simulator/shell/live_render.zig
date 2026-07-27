@@ -36,7 +36,7 @@ pub const height: u32 = phone.window_h;
 const max_rows: usize = 6;
 
 /// The surfaces the shell can show.
-pub const Surface = enum { boot, lock, home, library, calculator, activity, approval, principals, store, rest, phone, messages, camera, agents, calendar, weather, contacts, files, settings };
+pub const Surface = enum { boot, lock, home, library, calculator, activity, approval, principals, store, rest, shutdown, phone, messages, camera, agents, calendar, weather, contacts, files, settings };
 
 /// The interactive state the shell carries between frames — what a tap has changed on a live surface.
 /// The headless renderer passes a default; the windowed shell owns one and mutates it on input, so a
@@ -117,6 +117,7 @@ pub fn renderSurface(gpa: std.mem.Allocator, target: *Framebuffer, host: *Host, 
     switch (surface) {
         .boot => renderBoot(&screen, t),
         .rest => renderRest(&screen),
+        .shutdown => renderShutdown(&screen, t),
         .lock => {
             // The lock screen is a light field with the status bar but its own swipe-up affordance,
             // so it takes the wash and status bar but not the standard home indicator.
@@ -450,6 +451,45 @@ pub fn renderRest(screen: *Framebuffer) void {
     const cx: f32 = @floatFromInt(phone.screen_w / 2);
     text.drawCentred(screen, cx, @floatFromInt(phone.screen_h / 2 - 8), "Everything handled.", 18, s(theme.text_primary));
     text.drawCentred(screen, cx, @floatFromInt(phone.screen_h / 2 + 24), "Hello, world.", 14, s(theme.text_secondary));
+}
+
+/// The shutdown screen: the device winds down to black with the reference's CRT power-off — a bright
+/// line that flashes on, collapses to a point, and fades. `t` is seconds since shutdown began.
+pub fn renderShutdown(screen: *Framebuffer, t: f32) void {
+    paint.paint(screen, &.{.{ .solid = .{ .rect = .{ .x = 0, .y = 0, .w = phone.screen_w, .h = phone.screen_h }, .colour = .{ .r = 0, .g = 0, .b = 0, .a = 255 } } }});
+
+    // The crtoff timeline: 0.25s delay, then 1.6s. width 80% → a point, opacity in then out.
+    const local = t - 0.25;
+    if (local <= 0) return;
+    const p = std.math.clamp(local / 1.6, 0.0, 1.0);
+    const full = @as(f32, @floatFromInt(phone.screen_w)) * 0.8;
+
+    var w_px: f32 = full;
+    var h_px: f32 = 2.0;
+    var op: f32 = 1.0;
+    if (p < 0.18) {
+        op = p / 0.18; // flash on
+    } else if (p < 0.68) {
+        const k = (p - 0.18) / 0.5;
+        w_px = full + (10.0 - full) * k; // collapse horizontally to ~10px
+    } else {
+        const k = (p - 0.68) / 0.32;
+        w_px = 10.0 + (4.0 - 10.0) * k;
+        h_px = 2.0 + 2.0 * k;
+        op = 1.0 - k; // the point fades out
+    }
+    if (op <= 0.0) return;
+
+    const cx: f32 = @floatFromInt(phone.screen_w / 2);
+    const cy: f32 = @floatFromInt(phone.screen_h / 2);
+    const a: u8 = @intFromFloat(op * 255.0);
+    // A soft glow around the line, then the bright line itself.
+    vector.fillGlow(screen, cx, cy, @max(h_px * 6.0, w_px * 0.5), .{ .r = 255, .g = 255, .b = 255, .a = 255 }, @intFromFloat(op * 90.0));
+    paint.paint(screen, &.{.{ .rounded = .{
+        .rect = .{ .x = @intFromFloat(cx - w_px / 2.0), .y = @intFromFloat(cy - h_px / 2.0), .w = @intFromFloat(@max(w_px, 1.0)), .h = @intFromFloat(@max(h_px, 1.0)) },
+        .radius = @intFromFloat(@max(h_px / 2.0, 1.0)),
+        .colour = .{ .r = 255, .g = 255, .b = 255, .a = a },
+    } }});
 }
 
 pub fn renderHome(screen: *Framebuffer, host: *Host, t: f32) void {

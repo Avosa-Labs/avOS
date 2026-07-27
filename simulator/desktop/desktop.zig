@@ -168,6 +168,7 @@ pub fn main(init: std.process.Init) !u8 {
     var surface: live.Surface = .boot;
     var interaction: live.Interaction = .{}; // live state a tap changes (the calculator keypad, …)
     var boot_seen: u32 = 0;
+    var shutdown_frames: u32 = 0; // frames since the device began winding down
     var lock_seen: u32 = 0;
     var frames: u32 = 0;
     var running = true;
@@ -180,6 +181,15 @@ pub fn main(init: std.process.Init) !u8 {
                 c.SDL_KEYDOWN => {
                     const key = event.key.keysym.sym;
                     if (key == c.SDLK_ESCAPE) running = false;
+                    // Power controls: S winds the device down to black; R restarts, replaying the boot
+                    // cycle — the shutdown and restart the design calls for.
+                    if (key == c.SDLK_s) {
+                        surface = .shutdown;
+                        shutdown_frames = 0;
+                    } else if (key == c.SDLK_r) {
+                        surface = .boot;
+                        boot_seen = 0;
+                    }
                     // Up / space / return is the "swipe up to open": it skips boot to the lock screen
                     // and unlocks the lock screen to home. Confined to the opening cycle so it never
                     // stray-navigates an app surface.
@@ -221,9 +231,13 @@ pub fn main(init: std.process.Init) !u8 {
             if (lock_seen > 140) surface = .home; // ~2.3s: the greeting settles, then home opens
         }
 
-        // The continuous-motion clock, for the living detail inside a surface.
+        // The continuous-motion clock, for the living detail inside a surface. The shutdown screen runs
+        // on its own clock from the moment it began, so the wind-down plays from its start.
         frames += 1;
-        const t = @as(f32, @floatFromInt(frames)) / 60.0;
+        const t = if (surface == .shutdown) blk: {
+            shutdown_frames += 1;
+            break :blk @as(f32, @floatFromInt(shutdown_frames)) / 60.0;
+        } else @as(f32, @floatFromInt(frames)) / 60.0;
 
         // Paint the current surface straight to the framebuffer — an instant cut, no transition frames.
         try live.renderSurface(gpa, &fb, &host, surface, t, &interaction);
