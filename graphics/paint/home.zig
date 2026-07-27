@@ -52,45 +52,58 @@ pub const demo = Model{
     .active_title = "Planning your Lisbon trip",
 };
 
+/// The reference lays the home out on a 326px-wide device; this screen is wider, so every reference
+/// dimension — type size, padding, card height — is taken times this factor to keep the proportions,
+/// and the weight of a heading or prompt is pinned rather than inferred, so the screen reads at the
+/// reference's scale and typographic weight rather than a size smaller.
+const ui: f32 = @as(f32, @floatFromInt(theme.screen_w)) / 326.0;
+
+fn u(reference_px: f32) f32 {
+    return reference_px * ui;
+}
+
 /// Renders the home content onto a light screen framebuffer. `t` is elapsed seconds, used for the
 /// living motion (the glow dots breathe, the orb turns); pass 0 for a still frame.
 pub fn render(screen: *Framebuffer, model: Model, t: f32) void {
-    const pad: i32 = 22;
+    const pad: i32 = @intFromFloat(u(16));
 
-    // Greeting.
-    _ = text.draw(screen, @floatFromInt(pad), 74, model.greeting, 19, s(theme.screen_text));
-    _ = text.draw(screen, @floatFromInt(pad), 94, model.day_line, 11.5, s(theme.screen_text_muted));
+    // Greeting: the heading in semibold, the day line in the muted regular weight.
+    _ = text.draw(screen, @floatFromInt(pad), u(60), model.greeting, u(19), s(theme.screen_text));
+    _ = text.drawWeighted(screen, @floatFromInt(pad), u(77), model.day_line, u(11.5), s(theme.screen_text_muted), .regular);
 
-    // Command bar: a white pill with the conic AI orb and a soft prompt.
-    const bar: paint.Rect = .{ .x = pad, .y = 108, .w = @intCast(w - @as(u32, @intCast(pad)) * 2), .h = 50 };
+    // Command bar: a white pill with the conic AI orb and a soft, light prompt.
+    const bar: paint.Rect = .{ .x = pad, .y = @intFromFloat(u(90)), .w = @intCast(w - @as(u32, @intCast(pad)) * 2), .h = @intFromFloat(u(48)) };
+    const bar_mid: f32 = @as(f32, @floatFromInt(bar.y)) + @as(f32, @floatFromInt(bar.h)) / 2.0;
     commandBar(screen, bar);
-    orb(screen, @floatFromInt(bar.x + 26), @floatFromInt(bar.y + 25), 10, t);
-    _ = text.draw(screen, @floatFromInt(bar.x + 46), @floatFromInt(bar.y + 30), "What should we do next?", 13, s(theme.screen_text_faint));
+    orb(screen, @as(f32, @floatFromInt(bar.x)) + u(24), bar_mid, u(10), t);
+    _ = text.drawWeighted(screen, @as(f32, @floatFromInt(bar.x)) + u(44), bar_mid + u(4.5), "What should we do next?", u(13), s(theme.screen_text_faint), .regular);
 
-    // Section label.
-    _ = text.draw(screen, @floatFromInt(pad + 2), 190, "IN MOTION", 11, s(theme.screen_label));
+    // Section label and the task-graph link, both pinned to the reference's heavier weights.
+    const label_y = u(90) + u(48) + u(24);
+    _ = text.drawWeighted(screen, @floatFromInt(pad), label_y, "IN MOTION", u(11), s(theme.screen_label), .semibold);
     const graph_label = "Task graph \u{203A}";
-    _ = text.draw(screen, @as(f32, @floatFromInt(w)) - @as(f32, @floatFromInt(pad)) - text.measure(graph_label, 11), 190, graph_label, 11, s(theme.agent));
+    _ = text.drawWeighted(screen, @as(f32, @floatFromInt(w)) - @as(f32, @floatFromInt(pad)) - text.measureWeighted(graph_label, u(11), .semibold), label_y, graph_label, u(11), s(theme.agent), .semibold);
 
     // In-motion task rows.
-    var y: i32 = 204;
+    var y: i32 = @intFromFloat(label_y + u(12));
+    const row_h: i32 = @intFromFloat(u(50));
     for (model.tasks) |task| {
-        const row: paint.Rect = .{ .x = pad, .y = y, .w = @intCast(w - @as(u32, @intCast(pad)) * 2), .h = 52 };
+        const row: paint.Rect = .{ .x = pad, .y = y, .w = @intCast(w - @as(u32, @intCast(pad)) * 2), .h = @intCast(row_h) };
         card(screen, row, theme.radius_xl, false);
-        glowDot(screen, @floatFromInt(row.x + 22), @floatFromInt(row.y + 26), task.hue, t, 0.0);
-        _ = text.draw(screen, @floatFromInt(row.x + 40), @floatFromInt(row.y + 22), task.title, 12.5, s(theme.screen_text_soft));
-        _ = text.draw(screen, @floatFromInt(row.x + 40), @floatFromInt(row.y + 39), task.note, 10.5, s(theme.screen_text_muted));
-        y += @as(i32, @intCast(row.h)) + 10;
+        glowDot(screen, @as(f32, @floatFromInt(row.x)) + u(20), @as(f32, @floatFromInt(row.y)) + @as(f32, @floatFromInt(row.h)) / 2.0, task.hue, t, 0.0);
+        _ = text.draw(screen, @as(f32, @floatFromInt(row.x)) + u(38), @as(f32, @floatFromInt(row.y)) + u(21), task.title, u(12.5), s(theme.screen_text_soft));
+        _ = text.drawWeighted(screen, @as(f32, @floatFromInt(row.x)) + u(38), @as(f32, @floatFromInt(row.y)) + u(37), task.note, u(10.5), s(theme.screen_text_muted), .regular);
+        y += row_h + @as(i32, @intFromFloat(u(10)));
     }
 
     // The active task: a tinted card with a small agent flow graph.
     if (model.active_title) |title| {
-        const active: paint.Rect = .{ .x = pad, .y = y, .w = @intCast(w - @as(u32, @intCast(pad)) * 2), .h = 128 };
+        const active: paint.Rect = .{ .x = pad, .y = y, .w = @intCast(w - @as(u32, @intCast(pad)) * 2), .h = @intFromFloat(u(122)) };
         card(screen, active, theme.radius_xl + 4, true);
-        glowDot(screen, @floatFromInt(active.x + 22), @floatFromInt(active.y + 24), theme.agent, t, 0.0);
-        _ = text.draw(screen, @floatFromInt(active.x + 40), @floatFromInt(active.y + 20), title, 13.5, s(theme.screen_text_soft));
-        flowGraph(screen, active.x + 20, active.y + 52, active.w - 40, t);
-        y += @as(i32, @intCast(active.h)) + 10;
+        glowDot(screen, @as(f32, @floatFromInt(active.x)) + u(20), @as(f32, @floatFromInt(active.y)) + u(24), theme.agent, t, 0.0);
+        _ = text.draw(screen, @as(f32, @floatFromInt(active.x)) + u(38), @as(f32, @floatFromInt(active.y)) + u(20), title, u(12), s(theme.screen_text_soft));
+        flowGraph(screen, active.x + @as(i32, @intFromFloat(u(18))), active.y + @as(i32, @intFromFloat(u(50))), active.w - @as(u32, @intFromFloat(u(36))), t);
+        y += @as(i32, @intCast(active.h)) + @as(i32, @intFromFloat(u(10)));
     }
 
     dock(screen);
@@ -162,9 +175,9 @@ fn mix(a: theme.Colour, b: theme.Colour, t: f32) fb.Rgba {
 /// A presence dot that breathes: a coloured core inside a soft halo whose radius pulses.
 fn glowDot(screen: *Framebuffer, cx: f32, cy: f32, hue: theme.Colour, t: f32, phase: f32) void {
     const pulse = 0.5 + 0.5 * @sin(t * 3.2 + phase);
-    const halo = 6.0 + pulse * 2.0;
+    const halo = u(6.0) + pulse * u(2.0);
     vector.fillDisc(screen, cx, cy, halo, .{ .r = hue.red, .g = hue.green, .b = hue.blue, .a = 40 });
-    vector.fillDisc(screen, cx, cy, 4.5, s(hue));
+    vector.fillDisc(screen, cx, cy, u(4.5), s(hue));
 }
 
 /// A tiny agent task graph: a person node, an agent node that spins, and three branch endpoints joined
