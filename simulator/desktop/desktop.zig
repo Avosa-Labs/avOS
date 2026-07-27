@@ -218,6 +218,21 @@ pub fn main(init: std.process.Init) !u8 {
                         // handled by an install button
                     } else if (surface == .messages and live.messagesTap(&interaction, sx, sy)) {
                         // handled by the send button
+                    } else if (surface == .agents) {
+                        // A tap on an agent opens its detail; anything else navigates as usual.
+                        if (live.agentRowAt(&host, sx, sy)) |index| {
+                            interaction.open_agent = index;
+                            surface = .agent_detail;
+                        } else {
+                            surface = navigate(surface, mx, my);
+                        }
+                    } else if (surface == .agent_detail) {
+                        // The pause button acts on the agent; the header returns to the roster.
+                        if (live.agentDetailTap(&interaction, sx, sy)) {
+                            // handled
+                        } else if (sy < 110) {
+                            surface = .agents;
+                        }
                     } else {
                         surface = navigate(surface, mx, my);
                     }

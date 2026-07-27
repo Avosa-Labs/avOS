@@ -36,7 +36,7 @@ pub const height: u32 = phone.window_h;
 const max_rows: usize = 6;
 
 /// The surfaces the shell can show.
-pub const Surface = enum { boot, lock, home, library, calculator, activity, approval, principals, store, rest, shutdown, phone, messages, camera, agents, calendar, weather, contacts, files, settings };
+pub const Surface = enum { boot, lock, home, library, calculator, activity, approval, principals, store, rest, shutdown, phone, messages, camera, agents, agent_detail, calendar, weather, contacts, files, settings };
 
 /// The interactive state the shell carries between frames — what a tap has changed on a live surface.
 /// The headless renderer passes a default; the windowed shell owns one and mutates it on input, so a
@@ -51,6 +51,9 @@ pub const Interaction = struct {
     /// The messages thread's real exchanges, and whether the person has sent their reply.
     msgs_state: applications.messages.Store = undefined,
     person_replied: bool = false,
+    /// Which agent's detail is open (an index into the roster), and which agents the person has paused.
+    open_agent: ?usize = null,
+    agent_paused: [8]bool = [_]bool{false} ** 8,
     store_ready: bool = false,
     next_key: u128 = 1,
 
@@ -135,6 +138,14 @@ pub const Interaction = struct {
         return self.msgs_state.agentToAgentCount();
     }
 
+    pub fn isAgentPaused(self: *const Interaction, index: usize) bool {
+        return index < self.agent_paused.len and self.agent_paused[index];
+    }
+
+    pub fn toggleAgentPaused(self: *Interaction, index: usize) void {
+        if (index < self.agent_paused.len) self.agent_paused[index] = !self.agent_paused[index];
+    }
+
     /// Installs `name` through the store's real domain — the same `store.install` an agent reaches, here
     /// completing because it is the person's own decision.
     pub fn install(self: *Interaction, name: []const u8) void {
@@ -196,7 +207,8 @@ pub fn renderSurface(gpa: std.mem.Allocator, target: *Framebuffer, host: *Host, 
                 .phone => renderPhone(&screen, host, t),
                 .messages => renderMessages(&screen, inter),
                 .camera => renderCamera(&screen, host, t),
-                .agents => renderAgents(&screen, host),
+                .agents => renderAgents(&screen, host, inter),
+                .agent_detail => renderAgentDetail(&screen, host, inter),
                 .calendar => renderCalendar(&screen),
                 .weather => renderWeather(&screen),
                 .contacts => renderContacts(&screen),
@@ -905,16 +917,90 @@ pub fn renderContacts(screen: *Framebuffer) void {
 
 /// The Agents flagship: the roster of agents acting in the person's world, read from the real run —
 /// each agent named, in agent-violet, marked LIVE while it works.
-pub fn renderAgents(screen: *Framebuffer, host: *Host) void {
-    var rows: [max_rows]Row = undefined;
-    var count: usize = 0;
-    for (host.agents.items) |a| {
-        if (count >= rows.len) break;
-        rows[count] = .{ .title = a.name, .sub = "coordinating your day", .colour = theme.agent, .value = "LIVE" };
-        count += 1;
+const agents_start: i32 = 172;
+const agents_row_h: i32 = 62;
+
+fn agentRowRect(i: usize) graphics.paint.Rect {
+    return cardRect(agents_start + @as(i32, @intCast(i)) * (agents_row_h + 10), agents_row_h);
+}
+
+/// The agent whose row a tap landed on, or null.
+pub fn agentRowAt(host: *Host, sx: i32, sy: i32) ?usize {
+    const n = @min(host.agents.items.len, @as(usize, @intCast(max_rows)));
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        const r = agentRowRect(i);
+        if (sx >= r.x and sx <= rightI(r) and sy >= r.y and sy <= r.y + @as(i32, @intCast(r.h))) return i;
     }
-    const sections = [_]Section{.{ .label = "Agents at work", .rows = rows[0..count] }};
-    renderScreen(screen, .{ .title = "Agents", .sub = "Who is acting in your world", .sections = &sections });
+    return null;
+}
+
+/// The agent's live task purpose, read from the graph, or a resting note.
+fn agentPurpose(host: *Host, agent: anytype) []const u8 {
+    if (host.graph.get(agent.task)) |task| {
+        if (task.purpose.len > 0) return task.purpose;
+    }
+    return "coordinating your day";
+}
+
+pub fn renderAgents(screen: *Framebuffer, host: *Host, inter: *const Interaction) void {
+    header(screen, "Agents", "Who is acting in your world");
+    agentDoorChip(screen, @floatFromInt(pad), u(96), "your agents \u{00B7} tap to open one");
+
+    const n = @min(host.agents.items.len, @as(usize, @intCast(max_rows)));
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        const agent = host.agents.items[i];
+        const paused = inter.isAgentPaused(i);
+        const rect = card(screen, agentRowRect(i).y, agents_row_h);
+        const hue = if (paused) theme.amber else theme.agent;
+        vector.fillDisc(screen, @as(f32, @floatFromInt(rect.x)) + u(20), @as(f32, @floatFromInt(rect.y)) + @as(f32, @floatFromInt(rect.h)) / 2.0, u(11), sa(hue, 32));
+        vector.fillDisc(screen, @as(f32, @floatFromInt(rect.x)) + u(20), @as(f32, @floatFromInt(rect.y)) + @as(f32, @floatFromInt(rect.h)) / 2.0, u(4.5), s(hue));
+        _ = text.draw(screen, @as(f32, @floatFromInt(rect.x)) + u(42), @as(f32, @floatFromInt(rect.y)) + u(24), agent.name, u(13), s(theme.screen_text));
+        _ = text.drawClipped(screen, @as(f32, @floatFromInt(rect.x)) + u(42), @as(f32, @floatFromInt(rect.y)) + u(40), agentPurpose(host, agent), u(10.5), s(theme.screen_text_muted), rightF(rect) - u(70));
+        const badge: []const u8 = if (paused) "PAUSED" else "LIVE";
+        const bw = text.measureWeighted(badge, u(10), .semibold);
+        _ = text.drawWeighted(screen, rightF(rect) - u(18) - bw, @as(f32, @floatFromInt(rect.y)) + u(28), badge, u(10), s(hue), .semibold);
+    }
+}
+
+/// The detail for the open agent: its name, its live task purpose, and a pause the person controls.
+fn renderAgentDetail(screen: *Framebuffer, host: *Host, inter: *const Interaction) void {
+    const index = inter.open_agent orelse 0;
+    if (index >= host.agents.items.len) {
+        header(screen, "Agent", "");
+        return;
+    }
+    const agent = host.agents.items[index];
+    const paused = inter.isAgentPaused(index);
+    header(screen, agent.name, if (paused) "Paused by you" else "Working in your world");
+    agentDoorChip(screen, @floatFromInt(pad), u(96), "scoped, revocable authority");
+
+    const rect = card(screen, 172, 132);
+    _ = text.draw(screen, @floatFromInt(rect.x + 22), @floatFromInt(rect.y + 30), "Doing now", 11, s(theme.screen_text_muted));
+    _ = text.drawClipped(screen, @floatFromInt(rect.x + 22), @floatFromInt(rect.y + 52), agentPurpose(host, agent), 13, s(theme.screen_text), rightF(rect) - u(22));
+    _ = text.draw(screen, @floatFromInt(rect.x + 22), @floatFromInt(rect.y + 82), "Authority", 11, s(theme.screen_text_muted));
+    _ = text.draw(screen, @floatFromInt(rect.x + 22), @floatFromInt(rect.y + 104), "Scoped \u{00B7} revocable \u{00B7} budgeted", 12, s(theme.screen_text));
+
+    // The pause control — the person holding or releasing this agent.
+    const btn = agentPauseRect();
+    paint.paint(screen, &.{.{ .rounded = .{ .rect = btn, .radius = @intFromFloat(u(19)), .colour = s(if (paused) theme.teal else theme.amber) } }});
+    text.drawCentred(screen, @as(f32, @floatFromInt(btn.x)) + @as(f32, @floatFromInt(btn.w)) / 2.0, @as(f32, @floatFromInt(btn.y)) + u(25), if (paused) "Resume agent" else "Pause agent", u(12.5), s(theme.screen_card));
+}
+
+fn agentPauseRect() graphics.paint.Rect {
+    const w_px: i32 = @intFromFloat(u(160));
+    return .{ .x = @divTrunc(@as(i32, @intCast(width_screen())) - w_px, 2), .y = 340, .w = @intCast(w_px), .h = @intFromFloat(u(40)) };
+}
+
+/// Toggles the open agent's pause when the tap lands on the pause button.
+pub fn agentDetailTap(inter: *Interaction, sx: i32, sy: i32) bool {
+    const btn = agentPauseRect();
+    if (sx >= btn.x and sx <= btn.x + @as(i32, @intCast(btn.w)) and sy >= btn.y and sy <= btn.y + @as(i32, @intCast(btn.h))) {
+        if (inter.open_agent) |index| inter.toggleAgentPaused(index);
+        return true;
+    }
+    return false;
 }
 
 // The approval card's geometry, shared by the renderer and the button hit-test so a tap lands on the
@@ -1449,4 +1535,24 @@ test "the messages screen sends the person's reply through the real domain" {
     const send = msgSendRect();
     try testing.expect(messagesTap(&inter, send.x + 10, send.y + 10));
     try testing.expect(inter.person_replied);
+}
+
+test "the agents screen opens an agent on its real task and the person can pause it" {
+    var host: Host = undefined;
+    try runScenario(&host, testing.allocator);
+    defer host.deinit();
+    var inter = Interaction{};
+    inter.attach(testing.allocator);
+    defer inter.release();
+    // A tap on the first agent row selects that agent.
+    const r = agentRowRect(0);
+    const index = agentRowAt(&host, r.x + 10, r.y + 10) orelse return error.TestUnexpectedResult;
+    // The roster shows the agent's real task purpose, not a placeholder.
+    try testing.expect(!std.mem.eql(u8, agentPurpose(&host, host.agents.items[index]), "coordinating your day"));
+    // The person pauses it from the detail; the state flips.
+    inter.open_agent = index;
+    try testing.expect(!inter.isAgentPaused(index));
+    const btn = agentPauseRect();
+    try testing.expect(agentDetailTap(&inter, btn.x + 10, btn.y + 10));
+    try testing.expect(inter.isAgentPaused(index));
 }
