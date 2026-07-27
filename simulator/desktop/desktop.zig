@@ -162,10 +162,18 @@ pub fn main(init: std.process.Init) !u8 {
 
     var fb = try Framebuffer.init(gpa, live.width, live.height, .{ .r = theme.base.red, .g = theme.base.green, .b = theme.base.blue, .a = 255 });
     defer fb.deinit();
-    // A snapshot of the frame on screen when a surface change begins, so the change crossfades from the
-    // old surface to the new one instead of flashing through the dark desktop colour.
-    var prev = try Framebuffer.init(gpa, live.width, live.height, .{ .r = theme.base.red, .g = theme.base.green, .b = theme.base.blue, .a = 255 });
-    defer prev.deinit();
+    // The base a surface change fades in over: the device frame holding an empty light screen — no
+    // content. A new surface dissolves in over this, so a change never shows the previous screen
+    // fading out beneath it (which reads as a lingering "trace"), and never flashes the dark desktop.
+    var base = try Framebuffer.init(gpa, live.width, live.height, .{ .r = theme.base.red, .g = theme.base.green, .b = theme.base.blue, .a = 255 });
+    defer base.deinit();
+    graphics.phone.renderDevice(&base);
+    {
+        var blank = try Framebuffer.init(gpa, graphics.phone.screen_w, graphics.phone.screen_h, .{ .r = theme.base.red, .g = theme.base.green, .b = theme.base.blue, .a = 255 });
+        defer blank.deinit();
+        graphics.phone.screenWash(&blank);
+        graphics.phone.composite(&base, blank);
+    }
 
     var surface: live.Surface = .boot;
     var displayed: live.Surface = .boot; // the surface the framebuffer currently holds
@@ -226,29 +234,27 @@ pub fn main(init: std.process.Init) !u8 {
             }
         }
 
-        // A surface change captures the frame currently on screen, so the new surface can crossfade over
-        // it. The capture happens before the framebuffer is repainted, while it still holds the old view.
+        // A surface change begins a short fade-in of the new surface over the blank base.
         if (surface != displayed) {
-            @memcpy(prev.pixels, fb.pixels);
             transitioning = true;
             progress = 0.0;
         }
 
-        // Advance the entrance animation and the continuous-motion clock.
-        progress = @min(1.0, progress + 0.06);
+        // Advance the entrance animation and the continuous-motion clock. The fade is quick and linear so
+        // it resolves cleanly to the new surface with no lingering tail.
+        progress = @min(1.0, progress + 0.14);
         frames += 1;
         const t = @as(f32, @floatFromInt(frames)) / 60.0;
 
-        // Paint the current surface, then, mid-transition, crossfade the captured previous frame out over
-        // it with the spring easing — a seamless dissolve, never a flash to the desktop colour.
+        // Paint the current surface, then, mid-transition, dissolve it in over the blank base: the base
+        // fades out as the new surface fades in, so the previous screen is never seen underneath.
         try live.renderSurface(gpa, &fb, &host, surface, t);
         if (transitioning) {
-            const eased = std.math.clamp(anim.springEase(progress), 0.0, 1.0);
-            const carry: u8 = @intFromFloat((1.0 - eased) * 255.0); // how much of the previous frame remains
+            const carry: u8 = @intFromFloat((1.0 - progress) * 255.0); // how much of the blank base still shows
             if (carry == 0) {
                 transitioning = false;
             } else {
-                crossfade(&fb, &prev, carry);
+                crossfade(&fb, &base, carry);
             }
         }
         displayed = surface;
