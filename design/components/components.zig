@@ -21,6 +21,8 @@ const std = @import("std");
 /// The shared component grammar the surfaces repeat. Components consume design tokens and decide
 /// layout and meaning; they draw nothing. The library grows a component per shared element.
 pub const status_chip = @import("status_chip.zig");
+pub const approval_sheet = @import("approval_sheet.zig");
+pub const list_row = @import("list_row.zig");
 
 /// The minimum touch-target size, in points, on each axis for a reliably tappable control.
 pub const min_touch_points: u32 = 44;
@@ -85,4 +87,6 @@ test "an expanded target always meets the minimum, swept" {
 
 test {
     _ = status_chip;
+    _ = approval_sheet;
+    _ = list_row;
 }
