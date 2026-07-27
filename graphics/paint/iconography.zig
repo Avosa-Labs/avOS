@@ -14,7 +14,10 @@ const std = @import("std");
 const fb = @import("framebuffer.zig");
 const paint = @import("paint.zig");
 const vector = @import("vector.zig");
-const theme = @import("design").theme;
+const svg_icon = @import("svg_icon.zig");
+const design = @import("design");
+const theme = design.theme;
+const glyphs = design.icons.glyphs;
 
 const Framebuffer = fb.Framebuffer;
 const Rgba = fb.Rgba;
@@ -69,6 +72,13 @@ pub fn draw(target: *Framebuffer, rect: paint.Rect, app: App) void {
         .bottom = paint.sample(gradient.bottom),
     } }});
 
+    // Prefer the delivered glyph: the designed 24-grid SVG, rendered white and centred on the tile.
+    // Apps without a delivered symbol keep their hand-built glyph so the whole set still reads.
+    if (deliveredGlyph(app)) |svg| {
+        svg_icon.drawInRect(target, svg, rect.x, rect.y, rect.w, rect.h, 0.58, white);
+        return;
+    }
+
     const side = @as(f32, @floatFromInt(rect.w));
     const w = side * 0.075; // stroke weight, proportional to the tile
     switch (app) {
@@ -85,6 +95,24 @@ pub fn draw(target: *Framebuffer, rect: paint.Rect, app: App) void {
         .notes => drawNotes(target, rect, w),
         .maps => drawMaps(target, rect, w),
     }
+}
+
+/// The delivered glyph asset for an app tile, or null when the app has no designed symbol yet and
+/// should keep its hand-built glyph.
+fn deliveredGlyph(app: App) ?[]const u8 {
+    return switch (app) {
+        .phone => glyphs.call,
+        .messages => glyphs.message,
+        .calendar => glyphs.calendar,
+        .camera => glyphs.camera,
+        .agents => glyphs.agent,
+        .files => glyphs.folder,
+        .settings => glyphs.settings,
+        .maps => glyphs.location,
+        .health => glyphs.running,
+        .notes => glyphs.file,
+        .mail, .weather => null,
+    };
 }
 
 fn drawPhone(target: *Framebuffer, rect: paint.Rect, w: f32) void {

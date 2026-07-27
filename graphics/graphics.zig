@@ -46,6 +46,7 @@ pub const capture = @import("capture/capture.zig");
 pub const framebuffer = @import("paint/framebuffer.zig");
 pub const paint = @import("paint/paint.zig");
 pub const vector = @import("paint/vector.zig");
+pub const svg_icon = @import("paint/svg_icon.zig");
 pub const iconography = @import("paint/iconography.zig");
 pub const text = @import("paint/text.zig");
 pub const phone = @import("paint/phone.zig");
@@ -88,6 +89,7 @@ test {
     _ = framebuffer;
     _ = paint;
     _ = vector;
+    _ = svg_icon;
     _ = iconography;
     _ = text;
     _ = home;
