@@ -20,6 +20,7 @@ const framework = @import("../framework/agent_app.zig");
 const domain = @import("domain.zig");
 
 pub const Store = domain.Store;
+pub const Party = domain.Party;
 pub const App = framework.App;
 
 /// The capabilities Messages exports for agents to discover and invoke. Reading and
