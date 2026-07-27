@@ -24,6 +24,7 @@ pub const status_chip = @import("status_chip.zig");
 pub const approval_sheet = @import("approval_sheet.zig");
 pub const list_row = @import("list_row.zig");
 pub const card = @import("card.zig");
+pub const plan_step = @import("plan_step.zig");
 
 /// The minimum touch-target size, in points, on each axis for a reliably tappable control.
 pub const min_touch_points: u32 = 44;
@@ -91,4 +92,5 @@ test {
     _ = approval_sheet;
     _ = list_row;
     _ = card;
+    _ = plan_step;
 }
