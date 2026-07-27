@@ -13,6 +13,7 @@ const domain = @import("domain.zig");
 pub const Store = domain.Store;
 pub const App = framework.App;
 pub const Availability = domain.Availability;
+pub const FocusBlock = domain.FocusBlock;
 
 pub const tools = [_]framework.Tool{
     .{ .name = "calendar.read", .required_capability = "calendar.read", .effect = .read_only },
