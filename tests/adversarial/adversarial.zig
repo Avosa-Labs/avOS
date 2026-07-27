@@ -24,6 +24,11 @@ test {
     _ = @import("agent_neutrality.zig");
 }
 
+// A setting's sensitivity class cannot be bypassed by writing the policy store directly.
+test {
+    _ = @import("settings_sensitivity.zig");
+}
+
 test "attack: escape a folder grant with parent traversal" {
     // A path that climbs above the granted root must be refused, however it is dressed up.
     try std.testing.expect(!applications.files.withinGrant("../etc/secret"));
