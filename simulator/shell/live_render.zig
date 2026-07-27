@@ -459,8 +459,8 @@ pub fn homeAllApps(sx: i32, sy: i32) bool {
 
 /// Every default application, in the order the library lists them.
 const library_apps = [_]iconography.App{
-    .agents, .settings, .messages, .phone,      .calendar,   .files,
-    .contacts, .camera, .weather,  .browser,    .calculator, .store,
+    .agents,   .settings, .messages, .phone,   .calendar,   .files,
+    .contacts, .camera,   .weather,  .browser, .calculator, .store,
 };
 
 /// The four-column grid geometry the library draws and hit-tests against.
