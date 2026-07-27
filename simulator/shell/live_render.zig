@@ -819,55 +819,137 @@ pub fn renderAgents(screen: *Framebuffer, host: *Host) void {
     renderScreen(screen, .{ .title = "Agents", .sub = "Who is acting in your world", .sections = &sections });
 }
 
-pub fn renderApproval(screen: *Framebuffer, host: *Host) void {
-    var agent: []const u8 = "An agent";
-    var reaches: []const u8 = "an external destination";
-    var index: usize = 0;
-    while (index < host.ledger.count()) : (index += 1) {
-        const event = host.ledger.at(index) orelse continue;
-        if (event.action != .approval_requested) continue;
-        if (host.registry.lookup(event.actor)) |actor| agent = actor.display_name;
-        if (event.target_kind.len > 0) reaches = event.target_kind;
-        break;
-    }
+// The approval card's geometry, shared by the renderer and the button hit-test so a tap lands on the
+// button drawn.
+const approval_card_y: i32 = 128;
+const approval_card_h: i32 = 240;
+const approval_button_y: i32 = approval_card_y + approval_card_h - 52;
 
+/// A held action awaiting the person, read from the live approvals — the requesting agent, what it
+/// reaches, and whether it is still pending.
+const HeldAction = struct { agent: []const u8, summary: []const u8, reaches: []const u8, pending: bool };
+
+fn heldAction(host: *Host) HeldAction {
+    var it = host.approvals.requests.iterator();
+    while (it.next()) |entry| {
+        if (entry.value_ptr.state != .pending) continue;
+        var agent: []const u8 = "An agent";
+        if (host.registry.lookup(entry.value_ptr.requester)) |actor| agent = actor.display_name;
+        const reaches = if (entry.value_ptr.target_kind.len > 0) entry.value_ptr.target_kind else "an external destination";
+        return .{ .agent = agent, .summary = entry.value_ptr.summary, .reaches = reaches, .pending = true };
+    }
+    return .{ .agent = "An agent", .summary = "", .reaches = "", .pending = false };
+}
+
+pub fn renderApproval(screen: *Framebuffer, host: *Host) void {
     header(screen, "Approval", "Nothing consequential without you");
 
-    const rect = card(screen, 128, 240);
-    vector.fillDisc(screen, @floatFromInt(rect.x + 34), @floatFromInt(rect.y + 40), 16, s(theme.agent));
-    _ = text.draw(screen, @floatFromInt(rect.x + 60), @floatFromInt(rect.y + 36), agent, 14, s(theme.screen_text));
-    _ = text.draw(screen, @floatFromInt(rect.x + 60), @floatFromInt(rect.y + 54), "asks to confirm the venue", 11, s(theme.screen_text_muted));
+    const held = heldAction(host);
+    const rect = card(screen, approval_card_y, @intCast(approval_card_h));
 
+    // The requesting agent — an agent proposed this, and it waits for the person: co-inhabitance, at the
+    // one point the two are in the loop together.
+    vector.fillDisc(screen, @floatFromInt(rect.x + 34), @floatFromInt(rect.y + 40), 16, s(theme.agent));
+    _ = text.draw(screen, @floatFromInt(rect.x + 60), @floatFromInt(rect.y + 34), held.agent, 14, s(theme.screen_text));
+    const asks = if (held.pending) "asks for your decision" else "acted on your decision";
+    _ = text.draw(screen, @floatFromInt(rect.x + 60), @floatFromInt(rect.y + 54), asks, 11, s(theme.screen_text_muted));
+
+    const summary = if (held.summary.len > 0) held.summary else "confirm attendance with the venue";
     const rowsy: i32 = rect.y + 84;
     const facts = [_]struct { k: []const u8, v: []const u8 }{
-        .{ .k = "Action", .v = "confirm attendance" },
-        .{ .k = "Reaches", .v = reaches },
+        .{ .k = "Action", .v = summary },
+        .{ .k = "Reaches", .v = if (held.reaches.len > 0) held.reaches else "the venue" },
         .{ .k = "Scope", .v = "Once \u{00B7} cannot repeat" },
     };
     for (facts, 0..) |f, i| {
         const fy = rowsy + @as(i32, @intCast(i)) * 30;
         _ = text.draw(screen, @floatFromInt(rect.x + 22), @floatFromInt(fy), f.k, 11, s(theme.screen_text_muted));
-        _ = text.draw(screen, rightF(rect) - 22 - text.measure(f.v, 11.5), @floatFromInt(fy), f.v, 11.5, s(theme.screen_text));
+        _ = text.drawClipped(screen, @floatFromInt(rect.x + 22 + 62), @floatFromInt(fy), f.v, 11.5, s(theme.screen_text), rightF(rect) - 22);
     }
 
-    // Approve / hold buttons — a flex row of two equal cells split by the layout engine.
-    const by: i32 = rect.y + @as(i32, @intCast(rect.h)) - 52;
-    var buttons: [2]graphics.flex.Rect = undefined;
-    graphics.flex.solve(
-        .{ .axis = .row, .gap = 12 },
-        &.{ .{ .main = .{ .flex = 1 } }, .{ .main = .{ .flex = 1 } } },
-        .{ .w = @floatFromInt(rect.w), .h = 40 },
-        &buttons,
-    );
-    const cells = [_]struct { rect: graphics.flex.Rect, fill: theme.Colour, label: []const u8, ink: theme.Colour }{
-        .{ .rect = buttons[0], .fill = theme.agent, .label = "Approve", .ink = theme.screen_card },
-        .{ .rect = buttons[1], .fill = theme.screen_hairline, .label = "Hold", .ink = theme.screen_text },
-    };
-    for (cells) |cell| {
-        const x: i32 = rect.x + @as(i32, @intFromFloat(cell.rect.x));
-        paint.paint(screen, &.{.{ .rounded = .{ .rect = .{ .x = x, .y = by, .w = @intFromFloat(cell.rect.w), .h = 40 }, .radius = theme.radius_lg, .colour = s(cell.fill) } }});
-        text.drawCentred(screen, @as(f32, @floatFromInt(x)) + cell.rect.w / 2, @floatFromInt(by + 25), cell.label, 12.5, s(cell.ink));
+    if (held.pending) {
+        // Approve / hold buttons — a flex row of two equal cells split by the layout engine.
+        var buttons: [2]graphics.flex.Rect = undefined;
+        graphics.flex.solve(
+            .{ .axis = .row, .gap = 12 },
+            &.{ .{ .main = .{ .flex = 1 } }, .{ .main = .{ .flex = 1 } } },
+            .{ .w = @floatFromInt(rect.w), .h = 40 },
+            &buttons,
+        );
+        const cells = [_]struct { rect: graphics.flex.Rect, fill: theme.Colour, label: []const u8, ink: theme.Colour }{
+            .{ .rect = buttons[0], .fill = theme.agent, .label = "Approve", .ink = theme.screen_card },
+            .{ .rect = buttons[1], .fill = theme.screen_hairline, .label = "Hold", .ink = theme.screen_text },
+        };
+        for (cells) |cell| {
+            const x: i32 = rect.x + @as(i32, @intFromFloat(cell.rect.x));
+            paint.paint(screen, &.{.{ .rounded = .{ .rect = .{ .x = x, .y = approval_button_y, .w = @intFromFloat(cell.rect.w), .h = 40 }, .radius = theme.radius_lg, .colour = s(cell.fill) } }});
+            text.drawCentred(screen, @as(f32, @floatFromInt(x)) + cell.rect.w / 2, @floatFromInt(approval_button_y + 25), cell.label, 12.5, s(cell.ink));
+        }
+    } else {
+        // Decided: a confirmation in place of the buttons, so the screen reflects the real state.
+        const done: graphics.paint.Rect = .{ .x = rect.x, .y = approval_button_y, .w = @intCast(rect.w), .h = 40 };
+        paint.paint(screen, &.{.{ .rounded = .{ .rect = done, .radius = theme.radius_lg, .colour = sa(theme.teal, 34) } }});
+        text.drawCentred(screen, @as(f32, @floatFromInt(rect.x)) + @as(f32, @floatFromInt(rect.w)) / 2.0, @floatFromInt(approval_button_y + 25), "Approved \u{00B7} it runs exactly once", 12.5, s(theme.teal));
     }
+}
+
+/// A held action the shell offers the person to decide — the travel agent proposes a booking and it
+/// waits, so the windowed shell has a live pending approval to approve or hold. Distinct from the
+/// canonical run's own approval, which that scenario decides itself.
+pub fn arrangePendingApproval(host: *Host) void {
+    const travel = host.agentNamed("travel") orelse return;
+    // A standalone held task — the run's own tree was cancelled at the end, so this action stands on its
+    // own rather than hanging off a cancelled parent.
+    const task = host.graph.create(.{
+        .owner = travel.id,
+        .requester = host.human,
+        .purpose = "reserve the venue",
+        .budget_bytes = 4 * 1024,
+    }) catch return;
+    host.graph.transition(task, .waiting_for_approval) catch {};
+    _ = host.approvals.request(.{
+        .requester = travel.id,
+        .approver = host.human,
+        .task = task,
+        .operation = .send,
+        .target_kind = "the venue",
+        .summary = "reserve the venue for your trip",
+    }) catch return;
+    _ = host.ledger.append(.{
+        .actor = travel.id,
+        .on_behalf_of = host.human,
+        .action = .approval_requested,
+        .outcome = .awaiting_approval,
+        .task = task,
+        .target_kind = "the venue",
+    }) catch {};
+}
+
+/// Decides the held action from a tap on the Approve/Hold buttons. Approve records the human's decision
+/// through the real approvals centre; Hold leaves it pending. Returns true when the tap was on a button.
+pub fn approvalDecide(host: *Host, sx: i32, sy: i32) bool {
+    if (sy < approval_button_y or sy > approval_button_y + 40) return false;
+    const content_right = rightI(cardRect(approval_card_y, @intCast(approval_card_h)));
+    const mid = @divTrunc(pad + content_right, 2);
+    if (sx >= pad and sx < mid - 6) {
+        // Approve: record the person's decision on the pending action.
+        var it = host.approvals.requests.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.state != .pending) continue;
+            host.approvals.decide(entry.value_ptr.id, host.human, .approved) catch {};
+            _ = host.ledger.append(.{
+                .actor = host.human,
+                .action = .approval_decided,
+                .outcome = .succeeded,
+                .task = entry.value_ptr.task,
+                .target_kind = entry.value_ptr.target_kind,
+            }) catch {};
+            return true;
+        }
+        return false;
+    }
+    if (sx >= mid + 6 and sx <= content_right) return true; // Hold: leave it pending
+    return false;
 }
 
 pub fn renderStore(screen: *Framebuffer) void {
@@ -1129,4 +1211,16 @@ test "the calculator keypad drives the real expression domain" {
     for ("1/0") |ch| inter.calcPush(ch);
     inter.calcEval();
     try testing.expectEqualStrings("Error", inter.calcExpr());
+}
+
+test "the approval screen decides a held action through the real approvals centre" {
+    var host: Host = undefined;
+    try runScenario(&host, testing.allocator);
+    defer host.deinit();
+    arrangePendingApproval(&host);
+    // The travel agent's held action is waiting for the person.
+    try testing.expect(heldAction(&host).pending);
+    // A tap on Approve records the decision through the real centre; nothing is left pending.
+    try testing.expect(approvalDecide(&host, pad + 4, approval_button_y + 10));
+    try testing.expect(!heldAction(&host).pending);
 }
