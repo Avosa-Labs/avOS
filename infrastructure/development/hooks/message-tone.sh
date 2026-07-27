@@ -7,6 +7,13 @@
 # are the tell of a message written to impress rather than to inform, and they
 # make the history read as machine-produced. This catches both before they land.
 #
+# It also refuses any reference to the local-only engineering documents. Those
+# documents are never committed, so quoting their structure — a section mark, a
+# "Part N", the document names — leaks a private source into the permanent
+# history and reads as writing to a spec rather than describing a change. (A pull
+# request description is GitHub metadata no gate over the tree can see; keeping it
+# clean is a discipline, but the committed message is enforced here.)
+#
 # Usage: message-tone.sh <path-to-message-file>
 # Exit:  0 clean, 1 a problem was found (details on stderr).
 
@@ -51,6 +58,16 @@ filler='seamlessl|effortlessl|robustl|leverag|furthermore|moreover|comprehensive
 if printf '%s\n' "$body" | grep -qEi "$filler"; then
     printf 'message-tone: marketing or padded wording:\n' >&2
     printf '%s\n' "$body" | grep -nEi "$filler" >&2
+    status=1
+fi
+
+# References to the local-only engineering documents. The section mark and the
+# document names are distinctive enough to catch without snagging ordinary
+# engineering words.
+docref='§|APPLICATION_LAYER|PLATFORM_SPEC|the reference design|per the spec'
+if printf '%s\n' "$body" | grep -qE "$docref"; then
+    printf 'message-tone: a message must not reference the local-only spec or design documents:\n' >&2
+    printf '%s\n' "$body" | grep -nE "$docref" >&2
     status=1
 fi
 
