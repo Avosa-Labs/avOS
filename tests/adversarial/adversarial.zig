@@ -18,6 +18,12 @@ const session = @import("session");
 const emulator = @import("emulator");
 const shell = @import("shell");
 
+// No agent is special at the enforcement point: identical grants and requests yield identical
+// authorization whatever mind is behind the agent.
+test {
+    _ = @import("agent_neutrality.zig");
+}
+
 test "attack: escape a folder grant with parent traversal" {
     // A path that climbs above the granted root must be refused, however it is dressed up.
     try std.testing.expect(!applications.files.withinGrant("../etc/secret"));
