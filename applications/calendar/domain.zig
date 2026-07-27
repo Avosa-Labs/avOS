@@ -20,6 +20,9 @@ pub const Input = framework.Input;
 /// What a free/busy query is allowed to learn about a slot: only whether it is taken.
 pub const Availability = enum { free, busy };
 
+/// A focus block: an inclusive run of consecutive busy slots, all committed time.
+pub const FocusBlock = struct { start: u32, end: u32 };
+
 const Event = struct { title: []const u8, slot: u32 };
 const Applied = struct { key: u128, result: []const u8 };
 
@@ -49,6 +52,40 @@ pub const Store = struct {
             if (event.slot == slot) return .busy;
         }
         return .free;
+    }
+
+    /// The day arranged into focus blocks: the maximal runs of consecutive busy slots, derived
+    /// from the real events. This is the view the person and a reading agent see — where time is
+    /// already committed — rather than a flat list of events; it is computed, never stored, so it
+    /// can never drift from the events. Blocks are written into `out` in slot order.
+    pub fn focusBlocks(store: Store, out: []FocusBlock) []const FocusBlock {
+        var max_slot: u32 = 0;
+        var any = false;
+        for (store.events.items) |event| {
+            if (!any or event.slot > max_slot) max_slot = event.slot;
+            any = true;
+        }
+        if (!any) return out[0..0];
+
+        var n: usize = 0;
+        var in_block = false;
+        var block_start: u32 = 0;
+        var slot: u32 = 0;
+        // Scan one past the last slot so a block ending at max_slot is closed.
+        while (slot <= max_slot + 1) : (slot += 1) {
+            const busy = slot <= max_slot and store.availabilityOf(slot) == .busy;
+            if (busy and !in_block) {
+                in_block = true;
+                block_start = slot;
+            } else if (!busy and in_block) {
+                if (n < out.len) {
+                    out[n] = .{ .start = block_start, .end = slot - 1 };
+                    n += 1;
+                }
+                in_block = false;
+            }
+        }
+        return out[0..n];
     }
 
     fn priorResult(store: *Store, key: u128) ?[]const u8 {
@@ -115,4 +152,28 @@ test "adding an event is exactly-once by key" {
     _ = Store.execute(&store, .{ .operation = "calendar.add", .args = "Lunch@12" }, agent(), 5);
     _ = Store.execute(&store, .{ .operation = "calendar.add", .args = "Lunch@12" }, agent(), 5);
     try testing.expectEqual(@as(usize, 1), store.count());
+}
+
+test "the day arranges into focus blocks: maximal runs of consecutive busy slots" {
+    const gpa = testing.allocator;
+    var store = Store.init(gpa);
+    defer store.deinit();
+    // Busy at 2, 3, and 5 — a two-slot block, then a one-slot block, a free slot between them.
+    _ = Store.execute(&store, .{ .operation = "calendar.add", .args = "Design@2" }, agent(), 1);
+    _ = Store.execute(&store, .{ .operation = "calendar.add", .args = "Review@3" }, agent(), 2);
+    _ = Store.execute(&store, .{ .operation = "calendar.add", .args = "Ship@5" }, agent(), 3);
+
+    var buffer: [8]FocusBlock = undefined;
+    const blocks = store.focusBlocks(&buffer);
+    try testing.expectEqual(@as(usize, 2), blocks.len);
+    try testing.expectEqual(FocusBlock{ .start = 2, .end = 3 }, blocks[0]);
+    try testing.expectEqual(FocusBlock{ .start = 5, .end = 5 }, blocks[1]);
+}
+
+test "an empty calendar has no focus blocks" {
+    const gpa = testing.allocator;
+    var store = Store.init(gpa);
+    defer store.deinit();
+    var buffer: [8]FocusBlock = undefined;
+    try testing.expectEqual(@as(usize, 0), store.focusBlocks(&buffer).len);
 }
