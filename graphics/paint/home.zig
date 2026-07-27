@@ -62,6 +62,9 @@ fn u(reference_px: f32) f32 {
     return reference_px * ui;
 }
 
+/// The content inset, at the reference's proportion — shared by the render body and the app grid.
+const pad_home: i32 = @intFromFloat(u(16.0));
+
 /// Renders the home content onto a light screen framebuffer. `t` is elapsed seconds, used for the
 /// living motion (the glow dots breathe, the orb turns); pass 0 for a still frame.
 pub fn render(screen: *Framebuffer, model: Model, t: f32) void {
@@ -106,7 +109,57 @@ pub fn render(screen: *Framebuffer, model: Model, t: f32) void {
         y += @as(i32, @intCast(active.h)) + @as(i32, @intFromFloat(u(10)));
     }
 
+    appGrid(screen, y + @as(i32, @intFromFloat(u(6))));
     dock(screen);
+}
+
+/// The apps shown on the home screen — those that fit above the dock. The rest live in the full app
+/// list reached by "All apps" / a swipe left. Phone, Messages, Camera and Agents are already in the dock.
+pub const grid_apps = [_]iconography.App{ .calendar, .mail, .maps, .weather, .files, .notes, .health, .settings };
+
+/// A short label for an app tile.
+fn appName(app: iconography.App) []const u8 {
+    return switch (app) {
+        .phone => "Phone",
+        .messages => "Messages",
+        .calendar => "Calendar",
+        .camera => "Camera",
+        .health => "Health",
+        .agents => "Agents",
+        .files => "Files",
+        .settings => "Settings",
+        .mail => "Mail",
+        .weather => "Weather",
+        .notes => "Notes",
+        .maps => "Maps",
+    };
+}
+
+/// The "Your apps" section: a label with an "All apps" link, then a four-column grid of app tiles with
+/// their names — the reference's home app grid, drawn with the delivered icons.
+fn appGrid(screen: *Framebuffer, top: i32) void {
+    const ft: f32 = @floatFromInt(top);
+    _ = text.drawWeighted(screen, @floatFromInt(pad_home), ft, "YOUR APPS", u(11), s(theme.screen_label), .semibold);
+    const link = "All apps \u{203A}";
+    _ = text.drawWeighted(screen, @as(f32, @floatFromInt(w)) - @as(f32, @floatFromInt(pad_home)) - text.measureWeighted(link, u(11), .semibold), ft, link, u(11), s(theme.agent), .semibold);
+
+    const cols: usize = 4;
+    const content_w = @as(f32, @floatFromInt(w)) - 2.0 * @as(f32, @floatFromInt(pad_home));
+    const gap_x = u(8);
+    const cell_w = (content_w - gap_x * @as(f32, @floatFromInt(cols - 1))) / @as(f32, @floatFromInt(cols));
+    const tile = u(54);
+    const grid_top = ft + u(16);
+    const row_h = u(74);
+
+    for (grid_apps, 0..) |app, i| {
+        const col: usize = i % cols;
+        const row: usize = i / cols;
+        const cell_x = @as(f32, @floatFromInt(pad_home)) + @as(f32, @floatFromInt(col)) * (cell_w + gap_x);
+        const tile_x = cell_x + (cell_w - tile) / 2.0;
+        const tile_y = grid_top + @as(f32, @floatFromInt(row)) * row_h;
+        iconography.draw(screen, .{ .x = @intFromFloat(tile_x), .y = @intFromFloat(tile_y), .w = @intFromFloat(tile), .h = @intFromFloat(tile) }, app);
+        text.drawCentred(screen, cell_x + cell_w / 2.0, tile_y + tile + u(13), appName(app), u(9.5), s(theme.screen_text_muted));
+    }
 }
 
 // --- Pieces ---
