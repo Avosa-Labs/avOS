@@ -283,6 +283,11 @@ pub fn build(b: *std.Build) void {
             .description = "Reduce an icon set to a single deterministic digest",
         },
         .{
+            .name = "icon-lint",
+            .root = "tools/icon-lint/main.zig",
+            .description = "Verify UI glyphs are currentColor only and 24x24",
+        },
+        .{
             .name = "protocol-codegen",
             .root = "tools/protocol-codegen/main.zig",
             .description = "Validate a protocol definition and emit a deterministic binding signature",
