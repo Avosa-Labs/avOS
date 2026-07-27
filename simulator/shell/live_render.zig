@@ -48,6 +48,9 @@ pub const Interaction = struct {
     calc_is_result: bool = false,
     /// The store's real installed set, so installing actually installs.
     store_state: applications.store.Store = undefined,
+    /// The messages thread's real exchanges, and whether the person has sent their reply.
+    msgs_state: applications.messages.Store = undefined,
+    person_replied: bool = false,
     store_ready: bool = false,
     next_key: u128 = 1,
 
@@ -103,11 +106,33 @@ pub const Interaction = struct {
     /// it and must `release` it.
     pub fn attach(self: *Interaction, gpa: std.mem.Allocator) void {
         self.store_state = applications.store.Store.init(gpa);
+        self.msgs_state = applications.messages.Store.init(gpa);
+        // Seed the two agent-to-agent exchanges the thread shows, so the a2a count is real.
+        self.msgs_state.recordExchange(.agent, .agent) catch {};
+        self.msgs_state.recordExchange(.agent, .agent) catch {};
         self.store_ready = true;
     }
 
     pub fn release(self: *Interaction) void {
-        if (self.store_ready) self.store_state.deinit();
+        if (self.store_ready) {
+            self.store_state.deinit();
+            self.msgs_state.deinit();
+        }
+    }
+
+    /// The person sends their reply through the real messages domain — the same `message.send` an agent
+    /// reaches, here completing as the person's own send.
+    pub fn sendReply(self: *Interaction) void {
+        if (!self.store_ready or self.person_replied) return;
+        const key = self.next_key;
+        self.next_key += 1;
+        _ = applications.messages.Store.execute(&self.msgs_state, .{ .operation = "message.send" }, .{ .kind = .human, .principal = .{ .value = 0 } }, key);
+        self.person_replied = true;
+    }
+
+    pub fn agentToAgent(self: *const Interaction) usize {
+        if (!self.store_ready) return 0;
+        return self.msgs_state.agentToAgentCount();
     }
 
     /// Installs `name` through the store's real domain — the same `store.install` an agent reaches, here
@@ -169,7 +194,7 @@ pub fn renderSurface(gpa: std.mem.Allocator, target: *Framebuffer, host: *Host, 
                 .principals => try renderPrincipals(gpa, &screen, host),
                 .store => renderStore(&screen, inter),
                 .phone => renderPhone(&screen, host, t),
-                .messages => renderMessages(&screen, host),
+                .messages => renderMessages(&screen, inter),
                 .camera => renderCamera(&screen, host, t),
                 .agents => renderAgents(&screen, host),
                 .calendar => renderCalendar(&screen),
@@ -1241,9 +1266,74 @@ pub fn renderPhone(screen: *Framebuffer, host: *Host, t: f32) void {
     renderScreen(screen, phone_screen);
 }
 
-pub fn renderMessages(screen: *Framebuffer, host: *Host) void {
-    _ = host;
-    renderScreen(screen, messages_screen);
+const MsgBubble = struct { body: []const u8, sender: []const u8, mine: bool };
+
+/// The thread the person is looking in on: two agents negotiating the venue on their behalf, then asking
+/// for the one consequential confirmation. The agent-to-agent structure is real in the domain; the words
+/// are the human-readable surface of it.
+const msg_thread = [_]MsgBubble{
+    .{ .body = "The 14th is clear.", .sender = "Calendar agent", .mine = false },
+    .{ .body = "Reserving the 2pm slot.", .sender = "Travel agent", .mine = false },
+    .{ .body = "Confirm the booking?", .sender = "Travel agent", .mine = false },
+};
+
+const msg_reply = MsgBubble{ .body = "Yes \u{2014} go ahead.", .sender = "You", .mine = true };
+
+/// The send button at the foot of the thread, shared by the renderer and the hit-test.
+fn msgSendRect() graphics.paint.Rect {
+    const w_px: i32 = @intFromFloat(u(120));
+    return .{ .x = @divTrunc(@as(i32, @intCast(width_screen())) - w_px, 2), .y = @intCast(phone.screen_h - 96), .w = @intCast(w_px), .h = @intFromFloat(u(38)) };
+}
+
+/// Draws one chat bubble at `top`, returning the y below it. The person's messages sit right in the
+/// accent; the agents' sit left in a light card, each under its sender's name.
+fn chatBubble(screen: *Framebuffer, top: f32, bubble: MsgBubble) f32 {
+    const size = u(12.5);
+    const max_w = @as(f32, @floatFromInt(width_screen())) * 0.78;
+    const tw = @min(text.measure(bubble.body, size), max_w);
+    const bw = tw + u(26);
+    const bh = u(38);
+    const x = if (bubble.mine) @as(f32, @floatFromInt(width_screen())) - @as(f32, @floatFromInt(pad)) - bw else @as(f32, @floatFromInt(pad));
+    const fill = if (bubble.mine) s(theme.agent) else s(theme.screen_card);
+    const ink = if (bubble.mine) s(theme.screen_card) else s(theme.screen_text);
+    paint.paint(screen, &.{.{ .rounded = .{ .rect = .{ .x = @intFromFloat(x), .y = @intFromFloat(top), .w = @intFromFloat(bw), .h = @intFromFloat(bh) }, .radius = @intFromFloat(u(15)), .colour = fill } }});
+    _ = text.drawClipped(screen, x + u(13), top + u(24), bubble.body, size, ink, x + bw - u(10));
+    // The sender, small and muted, under the bubble on its side.
+    const label_x = if (bubble.mine) x + bw - text.measure(bubble.sender, u(9.5)) else x;
+    _ = text.draw(screen, label_x, top + bh + u(13), bubble.sender, u(9.5), s(if (bubble.mine) theme.agent else theme.screen_text_muted));
+    return top + bh + u(26);
+}
+
+pub fn renderMessages(screen: *Framebuffer, inter: *const Interaction) void {
+    header(screen, "Messages", "Your agents, negotiating");
+    agentDoorChip(screen, @floatFromInt(pad), u(96), "message.send \u{00B7} held for you");
+
+    var y: f32 = u(128);
+    for (msg_thread) |bubble| y = chatBubble(screen, y, bubble);
+    if (inter.person_replied) _ = chatBubble(screen, y, msg_reply);
+
+    // The foot: how many of the exchanges above were agent-to-agent — read from the real domain — and
+    // the send control, which sends the person's reply for real.
+    var count_buf: [64]u8 = undefined;
+    const count_line = std.fmt.bufPrint(&count_buf, "{d} agent-to-agent exchanges above", .{inter.agentToAgent()}) catch "agent-to-agent above";
+    text.drawCentred(screen, @as(f32, @floatFromInt(width_screen())) / 2.0, @floatFromInt(phone.screen_h - 118), count_line, u(10.5), s(theme.screen_text_muted));
+
+    if (!inter.person_replied) {
+        const send = msgSendRect();
+        paint.paint(screen, &.{.{ .rounded = .{ .rect = send, .radius = @intFromFloat(u(19)), .colour = s(theme.agent) } }});
+        text.drawCentred(screen, @as(f32, @floatFromInt(send.x)) + @as(f32, @floatFromInt(send.w)) / 2.0, @as(f32, @floatFromInt(send.y)) + u(25), "Send reply", u(12.5), s(theme.screen_card));
+    }
+}
+
+/// Sends the person's reply when the tap lands on the send button. Returns true when it did.
+pub fn messagesTap(inter: *Interaction, sx: i32, sy: i32) bool {
+    if (inter.person_replied) return false;
+    const send = msgSendRect();
+    if (sx >= send.x and sx <= send.x + @as(i32, @intCast(send.w)) and sy >= send.y and sy <= send.y + @as(i32, @intCast(send.h))) {
+        inter.sendReply();
+        return true;
+    }
+    return false;
 }
 
 pub fn renderCamera(screen: *Framebuffer, host: *Host, t: f32) void {
@@ -1346,4 +1436,17 @@ test "the store screen installs through the real store domain" {
     const blocked = storeCardRect(3);
     try testing.expect(!storeTap(&inter, rightI(blocked) - 30, blocked.y + 33));
     try testing.expect(!inter.isInstalled("Unknown Build"));
+}
+
+test "the messages screen sends the person's reply through the real domain" {
+    var inter = Interaction{};
+    inter.attach(testing.allocator);
+    defer inter.release();
+    // The seeded thread carries two real agent-to-agent exchanges.
+    try testing.expectEqual(@as(usize, 2), inter.agentToAgent());
+    try testing.expect(!inter.person_replied);
+    // A tap on Send sends the reply through the domain and marks it sent.
+    const send = msgSendRect();
+    try testing.expect(messagesTap(&inter, send.x + 10, send.y + 10));
+    try testing.expect(inter.person_replied);
 }

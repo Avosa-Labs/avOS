@@ -216,6 +216,8 @@ pub fn main(init: std.process.Init) !u8 {
                         // handled by the Approve/Hold buttons
                     } else if (surface == .store and live.storeTap(&interaction, sx, sy)) {
                         // handled by an install button
+                    } else if (surface == .messages and live.messagesTap(&interaction, sx, sy)) {
+                        // handled by the send button
                     } else {
                         surface = navigate(surface, mx, my);
                     }
