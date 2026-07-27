@@ -79,6 +79,7 @@ run_gate 'standin-check' zig build standin-check
 run_gate 'image reproducibility' zig build source-repro
 run_gate 'palette-check' zig build palette-check
 run_gate 'boundary-check' zig build boundary-check
+run_gate 'icon-lint' zig build icon-lint
 run_gate 'example-check' zig build example-check
 run_gate 'design-conformance' zig build design-conformance
 run_gate 'no-abs-path' "$repository_root/infrastructure/ci/no-abs-path.sh"
