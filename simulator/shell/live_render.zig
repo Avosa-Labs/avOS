@@ -680,11 +680,12 @@ fn renderCalculator(screen: *Framebuffer, inter: *const Interaction) void {
 /// A small violet chip that names an app's agent door — the tool an agent uses on the same surface a
 /// person does, so the co-inhabitance is on screen rather than implied.
 fn agentDoorChip(screen: *Framebuffer, x: f32, y: f32, label: []const u8) void {
-    const tw = text.measureWeighted(label, u(10.5), .semibold);
+    const max_w = @as(f32, @floatFromInt(width_screen())) - 2.0 * @as(f32, @floatFromInt(pad));
+    const tw = @min(text.measureWeighted(label, u(10.5), .semibold), max_w - u(28));
     const chip: graphics.paint.Rect = .{ .x = @intFromFloat(x), .y = @intFromFloat(y), .w = @intFromFloat(tw + u(28)), .h = @intFromFloat(u(22)) };
     paint.paint(screen, &.{.{ .rounded = .{ .rect = chip, .radius = @intFromFloat(u(11)), .colour = sa(theme.agent, 30) } }});
     vector.fillDisc(screen, x + u(12), y + u(11), u(3.0), s(theme.agent));
-    _ = text.drawWeighted(screen, x + u(20), y + u(15), label, u(10.5), s(theme.agent), .semibold);
+    _ = text.drawClipped(screen, x + u(20), y + u(15), label, u(10.5), s(theme.agent), x + u(20) + tw);
 }
 
 /// Applies a keypad tap to the interaction state, or does nothing if the tap missed every key. Returns
@@ -773,7 +774,7 @@ pub fn renderFiles(screen: *Framebuffer) void {
         .{ .title = "lisbon.jpg", .sub = "photos \u{00B7} 1.8 MB", .colour = theme.teal, .value = "" },
     };
     const sections = [_]Section{.{ .label = "Documents \u{00B7} within your grant", .rows = &entries }};
-    renderScreen(screen, .{ .title = "Files", .sub = "Search stays inside the grant", .sections = &sections });
+    renderScreen(screen, .{ .title = "Files", .sub = "Search stays inside the grant", .sections = &sections, .agent_tool = "files.list \u{00B7} agents search here" });
 }
 
 /// Settings: rendered from the policy registry, each setting shown with its sensitivity — what an
@@ -812,7 +813,7 @@ pub fn renderCalendar(screen: *Framebuffer) void {
         .{ .title = "Hotel deposit", .sub = "held for you to approve", .colour = theme.amber, .value = "HOLD" },
     };
     const sections = [_]Section{.{ .label = "Today \u{00B7} focus blocks", .rows = &blocks }};
-    renderScreen(screen, .{ .title = "Calendar", .sub = "Your day, in blocks", .sections = &sections });
+    renderScreen(screen, .{ .title = "Calendar", .sub = "Your day, in blocks", .sections = &sections, .agent_tool = "calendar.read \u{00B7} agents plan here" });
 }
 
 /// Weather: saved locations and their current reading, external data an agent may retrieve.
@@ -823,7 +824,7 @@ pub fn renderWeather(screen: *Framebuffer) void {
         .{ .title = "Home", .sub = "Rain later", .colour = theme.human, .value = "17\u{00B0}" },
     };
     const sections = [_]Section{.{ .label = "Your places", .rows = &places }};
-    renderScreen(screen, .{ .title = "Weather", .sub = "Saved locations", .sections = &sections });
+    renderScreen(screen, .{ .title = "Weather", .sub = "Saved locations", .sections = &sections, .agent_tool = "weather.read \u{00B7} open to agents" });
 }
 
 /// Contacts: people, and — surfaced honestly alongside them — the non-human principals a person
@@ -842,7 +843,7 @@ pub fn renderContacts(screen: *Framebuffer) void {
         .{ .label = "People", .rows = &people },
         .{ .label = "Also in your world", .rows = &world },
     };
-    renderScreen(screen, .{ .title = "Contacts", .sub = "People and principals", .sections = &sections });
+    renderScreen(screen, .{ .title = "Contacts", .sub = "People and principals", .sections = &sections, .agent_tool = "contacts.lookup \u{00B7} agents & principals" });
 }
 
 /// The Agents flagship: the roster of agents acting in the person's world, read from the real run —
@@ -1040,7 +1041,7 @@ pub fn renderStore(screen: *Framebuffer) void {
 
 const Row = struct { title: []const u8, sub: []const u8, colour: theme.Colour, value: []const u8 = "" };
 const Section = struct { label: []const u8, rows: []const Row };
-const Screen = struct { title: []const u8, sub: []const u8, sections: []const Section };
+const Screen = struct { title: []const u8, sub: []const u8, sections: []const Section, agent_tool: ?[]const u8 = null };
 
 fn sa(colour: theme.Colour, alpha: u8) graphics.framebuffer.Rgba {
     return .{ .r = colour.red, .g = colour.green, .b = colour.blue, .a = alpha };
@@ -1076,7 +1077,10 @@ fn layoutScreen(model: Screen, out: []Placed) usize {
     }
 
     var tops: [graphics.stack.max_blocks]f32 = undefined;
-    graphics.stack.columnTops(122, heights[0..n], 0, tops[0..n]);
+    // When the screen names an agent door, the content starts lower to leave room for the chip below
+    // the header; otherwise it sits directly under the subtitle.
+    const content_top: f32 = if (model.agent_tool != null) 172 else 122;
+    graphics.stack.columnTops(content_top, heights[0..n], 0, tops[0..n]);
 
     var count: usize = 0;
     for (blocks[0..n], 0..) |b, i| {
@@ -1101,6 +1105,10 @@ fn layoutScreen(model: Screen, out: []Placed) usize {
 /// the right in the row's own accent. Placement comes from `layoutScreen`; this only paints.
 fn renderScreen(screen: *Framebuffer, model: Screen) void {
     header(screen, model.title, model.sub);
+
+    // The app's agent door, on its own screen: what an agent may do here, so co-inhabitance is visible
+    // on every app rather than only where an agent happens to be acting.
+    if (model.agent_tool) |tool| agentDoorChip(screen, @floatFromInt(pad), u(96), tool);
 
     var placed: [graphics.stack.max_blocks]Placed = undefined;
     const count = layoutScreen(model, &placed);
