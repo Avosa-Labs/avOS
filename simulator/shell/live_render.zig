@@ -58,6 +58,10 @@ pub const Interaction = struct {
     contacts_state: applications.contacts.Store = undefined,
     /// Which contact fields the person has granted their agents to read (a field-scoped grant).
     agent_grant: applications.contacts.FieldSet = .initEmpty(),
+    /// The files tree, and the last entry a tap tried to open (with whether the grant allowed it).
+    files_state: applications.files.Store = undefined,
+    file_opened: ?usize = null,
+    file_open_ok: bool = false,
     person_replied: bool = false,
     /// Which agent's detail is open (an index into the roster), and which agents the person has paused.
     open_agent: ?usize = null,
@@ -125,6 +129,12 @@ pub const Interaction = struct {
         self.settings_state = applications.settings.Store.init(gpa);
         self.weather_state = applications.weather.Store.init(gpa, applications.weather.Deterministic.connector());
         self.contacts_state = applications.contacts.Store.init(gpa);
+        self.files_state = applications.files.Store.init(gpa);
+        // Seed the tree: the in-grant entries the screen opens for real (the escaping one is not
+        // added — the grant refuses it before the tree is ever touched).
+        for (file_entries) |entry| {
+            if (applications.files.withinGrant(entry.path)) self.files_state.add(entry.path, entry.is_dir) catch {};
+        }
         // Seed the two agent-to-agent exchanges the thread shows, so the a2a count is real.
         self.msgs_state.recordExchange(.agent, .agent) catch {};
         self.msgs_state.recordExchange(.agent, .agent) catch {};
@@ -145,7 +155,30 @@ pub const Interaction = struct {
             self.settings_state.deinit();
             self.weather_state.deinit();
             self.contacts_state.deinit();
+            self.files_state.deinit();
         }
+    }
+
+    /// Opens the i-th file entry through the real files domain. A path within the grant opens; one that
+    /// escapes the grant is refused before the tree is touched — the same `file.open` an agent reaches.
+    pub fn fileOpen(self: *Interaction, i: usize) void {
+        if (!self.store_ready or i >= file_entries.len) return;
+        const key = self.next_key;
+        self.next_key += 1;
+        const result = applications.files.Store.execute(&self.files_state, .{ .operation = "file.open", .args = file_entries[i].path }, .{ .kind = .human, .principal = .{ .value = 0 } }, key);
+        self.file_opened = i;
+        self.file_open_ok = switch (result) {
+            .ok => true,
+            .failed => false,
+        };
+    }
+
+    /// Whether the i-th entry was the last opened, and if so whether the grant allowed it.
+    pub fn fileOpenedState(self: *const Interaction, i: usize) ?bool {
+        if (self.file_opened) |opened| {
+            if (opened == i) return self.file_open_ok;
+        }
+        return null;
     }
 
     /// Seeds the address book through the real contacts store: two people via `contact.add`, and the
@@ -322,7 +355,7 @@ pub fn renderSurface(gpa: std.mem.Allocator, target: *Framebuffer, host: *Host, 
                 .calendar => renderCalendar(&screen),
                 .weather => renderWeather(&screen, inter),
                 .contacts => renderContacts(&screen, inter),
-                .files => renderFiles(&screen),
+                .files => renderFiles(&screen, inter),
                 .settings => renderSettings(&screen, inter),
                 else => unreachable,
             }
@@ -946,14 +979,49 @@ pub fn renderPrincipals(gpa: std.mem.Allocator, screen: *Framebuffer, host: *Hos
 }
 
 /// Files: the granted folder's contents, and the agent search confined to it.
-pub fn renderFiles(screen: *Framebuffer) void {
-    const entries = [_]Row{
-        .{ .title = "Trip-Lisbon.md", .sub = "documents \u{00B7} 4 KB", .colour = theme.human, .value = "" },
-        .{ .title = "budget.csv", .sub = "documents \u{00B7} 2 KB", .colour = theme.human, .value = "" },
-        .{ .title = "lisbon.jpg", .sub = "photos \u{00B7} 1.8 MB", .colour = theme.teal, .value = "" },
-    };
-    const sections = [_]Section{.{ .label = "Documents \u{00B7} within your grant", .rows = &entries }};
-    renderScreen(screen, .{ .title = "Files", .sub = "Search stays inside the grant", .sections = &sections, .agent_tool = "files.list \u{00B7} agents search here" });
+/// The entries the Files screen shows: the first are within the grant and open for real; the last
+/// escapes it, kept in the list so the grant boundary is visible — opening it is refused.
+const FileEntry = struct { path: []const u8, label: []const u8, sub: []const u8, is_dir: bool = false };
+const file_entries = [_]FileEntry{
+    .{ .path = "documents/Trip-Lisbon.md", .label = "Trip-Lisbon.md", .sub = "documents \u{00B7} 4 KB" },
+    .{ .path = "documents/budget.csv", .label = "budget.csv", .sub = "documents \u{00B7} 2 KB" },
+    .{ .path = "photos/lisbon.jpg", .label = "lisbon.jpg", .sub = "photos \u{00B7} 1.8 MB" },
+    .{ .path = "../system/keychain", .label = "keychain", .sub = "outside your grant" },
+};
+
+fn fileRowRect(i: usize) graphics.paint.Rect {
+    return cardRect(168 + @as(i32, @intCast(i)) * (@as(i32, @intFromFloat(u(56))) + 8), @intFromFloat(u(56)));
+}
+
+pub fn renderFiles(screen: *Framebuffer, inter: *const Interaction) void {
+    header(screen, "Files", "Everything stays inside your grant");
+    agentDoorChip(screen, @floatFromInt(pad), u(96), "file.open \u{00B7} confined to the grant");
+
+    for (file_entries, 0..) |entry, i| {
+        const rect = card(screen, fileRowRect(i).y, @intFromFloat(u(56)));
+        const in_grant = applications.files.withinGrant(entry.path);
+        const left = @as(f32, @floatFromInt(rect.x)) + u(20);
+        _ = text.drawWeighted(screen, left, @as(f32, @floatFromInt(rect.y)) + u(24), entry.label, u(14), s(theme.screen_text), .semibold);
+        _ = text.draw(screen, left, @as(f32, @floatFromInt(rect.y)) + u(41), entry.sub, u(10.5), s(if (in_grant) theme.screen_text_muted else theme.denied));
+
+        // The right-hand state: what the last open decided for this row, or a hint at what it will do.
+        const state = inter.fileOpenedState(i);
+        const label: []const u8 = if (state) |ok| (if (ok) "Opened" else "Blocked") else if (in_grant) "Open" else "Locked";
+        const colour = if (state) |ok| (if (ok) theme.teal else theme.denied) else if (in_grant) theme.screen_text_muted else theme.denied;
+        _ = text.drawWeighted(screen, rightF(rect) - u(18) - text.measureWeighted(label, u(11), .semibold), @as(f32, @floatFromInt(rect.y)) + u(34), label, u(11), s(colour), .semibold);
+    }
+}
+
+/// Opens the file entry a tap landed on, through the real domain. Returns true when a row was hit.
+pub fn filesTap(inter: *Interaction, sx: i32, sy: i32) bool {
+    for (file_entries, 0..) |_, i| {
+        const rect = fileRowRect(i);
+        if (sy >= rect.y and sy <= rect.y + @as(i32, @intCast(rect.h)) and sx >= rect.x and sx <= rightI(rect)) {
+            inter.fileOpen(i);
+            return true;
+        }
+    }
+    return false;
 }
 
 /// Settings: rendered from the policy registry, each setting shown with its sensitivity — what an
@@ -2017,6 +2085,24 @@ test "the camera selects a mode and gates capture by the real rule" {
     // Capture proceeds only while the indicator is lit and the app is foreground — the real rule.
     try testing.expect(applications.camera.mayCapture(true, true));
     try testing.expect(!applications.camera.mayCapture(false, true));
+}
+
+test "files opens an in-grant entry and the grant refuses one that escapes it" {
+    var inter = Interaction{};
+    inter.attach(testing.allocator);
+    defer inter.release();
+    // Nothing opened yet.
+    try testing.expect(inter.fileOpenedState(0) == null);
+    // An in-grant file opens through the real domain.
+    const in_grant = fileRowRect(0);
+    try testing.expect(filesTap(&inter, in_grant.x + 20, in_grant.y + 10));
+    try testing.expectEqual(@as(?bool, true), inter.fileOpenedState(0));
+    // The escaping entry (the last) is refused before the tree is touched.
+    const escaping = fileRowRect(file_entries.len - 1);
+    try testing.expect(filesTap(&inter, escaping.x + 20, escaping.y + 10));
+    try testing.expectEqual(@as(?bool, false), inter.fileOpenedState(file_entries.len - 1));
+    // Opening the escaping one moved the "opened" marker off row 0.
+    try testing.expect(inter.fileOpenedState(0) == null);
 }
 
 test "contacts reads people and principals from the book and grants fields per the domain" {

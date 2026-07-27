@@ -228,6 +228,8 @@ pub fn main(init: std.process.Init) !u8 {
                         // handled by adding a place or arming its alert
                     } else if (surface == .contacts and live.contactsTap(&interaction, sx, sy)) {
                         // handled by granting or revoking an agent's read of a field
+                    } else if (surface == .files and live.filesTap(&interaction, sx, sy)) {
+                        // handled by opening a file, or the grant refusing one that escapes it
                     } else if (surface == .agents) {
                         // A tap on an agent opens its detail; anything else navigates as usual.
                         if (live.agentRowAt(&host, sx, sy)) |index| {
