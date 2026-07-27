@@ -9,6 +9,9 @@ const domain = @import("domain.zig");
 pub const Store = domain.Store;
 pub const App = framework.App;
 pub const mayCapture = domain.mayCapture;
+pub const Mode = domain.Mode;
+pub const Understanding = domain.Understanding;
+pub const processingIsLocal = domain.processingIsLocal;
 
 pub const tools = [_]framework.Tool{
     .{ .name = "camera.preview", .required_capability = "camera.preview", .effect = .read_only },
