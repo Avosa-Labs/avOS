@@ -40,6 +40,7 @@ pub fn main(init: std.process.Init) !u8 {
     var host: live.Host = undefined;
     try live.runScenario(&host, gpa);
     defer host.deinit();
+    live.arrangePendingApproval(&host);
 
     if (std.mem.eql(u8, which, "session")) {
         const prefix = if (args.len > 2) args[2] else "session_";

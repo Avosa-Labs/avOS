@@ -114,6 +114,8 @@ pub fn main(init: std.process.Init) !u8 {
     var host: live.Host = undefined;
     try live.runScenario(&host, gpa);
     defer host.deinit();
+    // A held action the person can actually decide on the approval screen — the two doors, live.
+    live.arrangePendingApproval(&host);
 
     if (c.SDL_Init(c.SDL_INIT_VIDEO) != 0) {
         std.debug.print("desktop: SDL_Init failed: {s}\n", .{c.SDL_GetError()});
@@ -198,6 +200,8 @@ pub fn main(init: std.process.Init) !u8 {
                     const sy = my - graphics.phone.screen_y;
                     if (surface == .calculator and live.calcTap(&interaction, sx, sy)) {
                         // handled by the keypad
+                    } else if (surface == .approval and live.approvalDecide(&host, sx, sy)) {
+                        // handled by the Approve/Hold buttons
                     } else {
                         surface = navigate(surface, mx, my);
                     }
