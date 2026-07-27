@@ -464,34 +464,37 @@ pub fn build(b: *std.Build) void {
     // been vendored (`zig build vendor-engines`). Absent, the checkout still builds everything
     // else and falls back to the software path; present, the adapter compiles against the
     // pinned headers and its loader and instance tests run.
+    var vulkan_module: ?*std.Build.Module = null;
     if (vulkanHeadersRoot(b)) |include| {
-        const vulkan_module = b.createModule(.{
+        const module = b.createModule(.{
             .root_source_file = b.path("graphics/device/vulkan/vulkan.zig"),
             .target = target,
             .optimize = optimize,
         });
-        vulkan_module.addIncludePath(.{ .cwd_relative = include });
-        vulkan_module.link_libc = true;
-        addModuleTests(b, test_step, "device-vulkan", vulkan_module);
-        addCompileCheck(b, engine_compile_step, "device-vulkan", vulkan_module);
+        module.addIncludePath(.{ .cwd_relative = include });
+        module.link_libc = true;
+        addModuleTests(b, test_step, "device-vulkan", module);
+        addCompileCheck(b, engine_compile_step, "device-vulkan", module);
+        vulkan_module = module;
     }
 
     // The FreeType glyph rasterizer (ADR 0005) is compiled from the vendored source where it is
     // present, and its tests rasterize real glyphs. Absent, the shell falls back to the
     // pure-Zig rasterizer. The module list is narrowed to what the text path needs (see
     // graphics/text/freetype/ftmodules.h), selected with FT_CONFIG_MODULES_H.
+    var freetype_module: ?*std.Build.Module = null;
     if (freetypeRoot(b)) |root| {
-        const freetype_module = b.createModule(.{
+        const module = b.createModule(.{
             .root_source_file = b.path("graphics/text/freetype/freetype.zig"),
             .target = target,
             .optimize = optimize,
         });
-        freetype_module.addImport("design", design_module);
-        freetype_module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{root}) });
-        freetype_module.addIncludePath(b.path("graphics/text/freetype")); // the custom ftmodules.h
-        freetype_module.link_libc = true;
+        module.addImport("design", design_module);
+        module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{root}) });
+        module.addIncludePath(b.path("graphics/text/freetype")); // the custom ftmodules.h
+        module.link_libc = true;
         const ft_flags = [_][]const u8{ "-DFT2_BUILD_LIBRARY", "-DFT_CONFIG_MODULES_H=<ftmodules.h>" };
-        freetype_module.addCSourceFiles(.{
+        module.addCSourceFiles(.{
             .root = .{ .cwd_relative = root },
             .files = &.{
                 "src/base/ftbase.c",       "src/base/ftinit.c",   "src/base/ftsystem.c",
@@ -503,8 +506,24 @@ pub fn build(b: *std.Build) void {
             },
             .flags = &ft_flags,
         });
-        addModuleTests(b, test_step, "text-freetype", freetype_module);
-        addCompileCheck(b, engine_compile_step, "text-freetype", freetype_module);
+        addModuleTests(b, test_step, "text-freetype", module);
+        addCompileCheck(b, engine_compile_step, "text-freetype", module);
+        freetype_module = module;
+    }
+
+    // The text-on-GPU bridge: rasterise a glyph with FreeType, upload it as coverage, and draw it
+    // with the Vulkan device. Built only where both engines are vendored, so it composes the two
+    // adapters — real shaped-glyph coverage becoming pixels on the device.
+    if (vulkan_module != null and freetype_module != null) {
+        const bridge = b.createModule(.{
+            .root_source_file = b.path("graphics/text/gpu_glyph.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        bridge.addImport("vulkan", vulkan_module.?);
+        bridge.addImport("freetype", freetype_module.?);
+        bridge.addImport("design", design_module);
+        addModuleTests(b, test_step, "text-gpu-glyph", bridge);
     }
 
     addModuleTests(b, test_step, "simulator", simulator_module);
