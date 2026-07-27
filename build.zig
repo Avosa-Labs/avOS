@@ -876,6 +876,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .imports = &.{
+            .{ .name = "core", .module = core_module },
             .{ .name = "applications", .module = applications_module },
             .{ .name = "session", .module = session_module },
             .{ .name = "emulator", .module = emulator_module },
