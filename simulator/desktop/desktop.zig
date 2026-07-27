@@ -164,6 +164,7 @@ pub fn main(init: std.process.Init) !u8 {
     // never read as a trace, a flash, or lag. Motion lives inside a surface (the boot reveal, breathing
     // dots), not between them.
     var surface: live.Surface = .boot;
+    var interaction: live.Interaction = .{}; // live state a tap changes (the calculator keypad, …)
     var boot_seen: u32 = 0;
     var lock_seen: u32 = 0;
     var frames: u32 = 0;
@@ -191,7 +192,15 @@ pub fn main(init: std.process.Init) !u8 {
                     // device's full-resolution coordinates the surfaces are laid out in.
                     const mx: i32 = @intFromFloat(@as(f32, @floatFromInt(event.button.x)) / fit);
                     const my: i32 = @intFromFloat(@as(f32, @floatFromInt(event.button.y)) / fit);
-                    surface = navigate(surface, mx, my);
+                    // On an interactive surface, a tap on a control acts on it and does not navigate; a
+                    // tap that misses every control falls through to navigation (e.g. the header → home).
+                    const sx = mx - graphics.phone.screen_x;
+                    const sy = my - graphics.phone.screen_y;
+                    if (surface == .calculator and live.calcTap(&interaction, sx, sy)) {
+                        // handled by the keypad
+                    } else {
+                        surface = navigate(surface, mx, my);
+                    }
                 },
                 else => {},
             }
@@ -213,7 +222,7 @@ pub fn main(init: std.process.Init) !u8 {
         const t = @as(f32, @floatFromInt(frames)) / 60.0;
 
         // Paint the current surface straight to the framebuffer — an instant cut, no transition frames.
-        try live.renderSurface(gpa, &fb, &host, surface, t);
+        try live.renderSurface(gpa, &fb, &host, surface, t, &interaction);
 
         _ = c.SDL_UpdateTexture(texture, null, @ptrCast(fb.pixels.ptr), @intCast(live.width * 4));
         _ = c.SDL_RenderClear(renderer);

@@ -36,7 +36,65 @@ pub const height: u32 = phone.window_h;
 const max_rows: usize = 6;
 
 /// The surfaces the shell can show.
-pub const Surface = enum { boot, lock, home, library, activity, approval, principals, store, rest, phone, messages, camera, agents, calendar, weather, contacts, files, settings };
+pub const Surface = enum { boot, lock, home, library, calculator, activity, approval, principals, store, rest, phone, messages, camera, agents, calendar, weather, contacts, files, settings };
+
+/// The interactive state the shell carries between frames — what a tap has changed on a live surface.
+/// The headless renderer passes a default; the windowed shell owns one and mutates it on input, so a
+/// button press runs a real domain call and the next frame shows the result.
+pub const Interaction = struct {
+    /// The calculator's current expression (what the keypad has entered), or a result after "=".
+    calc_buf: [48]u8 = [_]u8{0} ** 48,
+    calc_len: usize = 0,
+    calc_is_result: bool = false,
+
+    pub fn calcExpr(self: *const Interaction) []const u8 {
+        return self.calc_buf[0..self.calc_len];
+    }
+
+    /// Appends a character the keypad produced. A fresh entry after a result starts a new expression.
+    pub fn calcPush(self: *Interaction, ch: u8) void {
+        if (self.calc_is_result) {
+            self.calc_len = 0;
+            self.calc_is_result = false;
+        }
+        if (self.calc_len < self.calc_buf.len) {
+            self.calc_buf[self.calc_len] = ch;
+            self.calc_len += 1;
+        }
+    }
+
+    pub fn calcClear(self: *Interaction) void {
+        self.calc_len = 0;
+        self.calc_is_result = false;
+    }
+
+    pub fn calcBack(self: *Interaction) void {
+        if (self.calc_is_result) {
+            self.calcClear();
+        } else if (self.calc_len > 0) {
+            self.calc_len -= 1;
+        }
+    }
+
+    /// Evaluates the expression through the real calculator domain — the same `calc.evaluate` an agent
+    /// would call — and shows the result, or "Error" for a bad expression or a division by zero.
+    pub fn calcEval(self: *Interaction) void {
+        const value = applications.calculator.evaluateExpression(self.calcExpr()) catch {
+            self.setCalc("Error");
+            return;
+        };
+        var formatted: [48]u8 = undefined;
+        const text_out = std.fmt.bufPrint(&formatted, "{d}", .{value}) catch "0";
+        self.setCalc(text_out);
+    }
+
+    fn setCalc(self: *Interaction, value: []const u8) void {
+        const n = @min(value.len, self.calc_buf.len);
+        @memcpy(self.calc_buf[0..n], value[0..n]);
+        self.calc_len = n;
+        self.calc_is_result = true;
+    }
+};
 
 /// Runs the canonical scenario into a fresh host. The caller owns it and must `deinit`.
 pub fn runScenario(host: *Host, gpa: std.mem.Allocator) !void {
@@ -48,8 +106,9 @@ fn s(colour: theme.Colour) graphics.framebuffer.Rgba {
     return paint.sample(colour);
 }
 
-/// Renders a surface into the window `target`, from the run's real state, at time `t`.
-pub fn renderSurface(gpa: std.mem.Allocator, target: *Framebuffer, host: *Host, surface: Surface, t: f32) !void {
+/// Renders a surface into the window `target`, from the run's real state, at time `t`. `inter` carries
+/// the live interaction state (e.g. what the calculator keypad has entered).
+pub fn renderSurface(gpa: std.mem.Allocator, target: *Framebuffer, host: *Host, surface: Surface, t: f32, inter: *const Interaction) !void {
     phone.renderDevice(target);
 
     var screen = try phone.blankScreen(gpa);
@@ -71,6 +130,7 @@ pub fn renderSurface(gpa: std.mem.Allocator, target: *Framebuffer, host: *Host, 
             switch (surface) {
                 .home => renderHome(&screen, host, t),
                 .library => renderLibrary(&screen),
+                .calculator => renderCalculator(&screen, inter),
                 .activity => try renderActivity(gpa, &screen, host),
                 .approval => renderApproval(&screen, host),
                 .principals => try renderPrincipals(gpa, &screen, host),
@@ -441,7 +501,8 @@ pub fn appSurface(app: iconography.App) ?Surface {
         .settings => .settings,
         .weather => .weather,
         .store => .store,
-        .browser, .calculator, .health, .mail, .notes, .maps => null,
+        .calculator => .calculator,
+        .browser, .health, .mail, .notes, .maps => null,
     };
 }
 
@@ -501,6 +562,107 @@ pub fn libraryApp(sx: i32, sy: i32) ?Surface {
         }
     }
     return null;
+}
+
+// --- Calculator: a working keypad on the real expression domain, open to agents too ---
+
+const CalcKey = struct {
+    label: []const u8,
+    kind: enum { char, clear, eval, back },
+    ch: u8 = 0,
+    /// Whether the key is an operator/action, tinted apart from the digits.
+    accent: bool = false,
+};
+
+/// The keypad, four columns by five rows. Operator characters feed the expression the domain parses.
+const calc_keys = [_]CalcKey{
+    .{ .label = "C", .kind = .clear, .accent = true },
+    .{ .label = "(", .kind = .char, .ch = '(', .accent = true },
+    .{ .label = ")", .kind = .char, .ch = ')', .accent = true },
+    .{ .label = "/", .kind = .char, .ch = '/', .accent = true },
+    .{ .label = "7", .kind = .char, .ch = '7' },
+    .{ .label = "8", .kind = .char, .ch = '8' },
+    .{ .label = "9", .kind = .char, .ch = '9' },
+    .{ .label = "*", .kind = .char, .ch = '*', .accent = true },
+    .{ .label = "4", .kind = .char, .ch = '4' },
+    .{ .label = "5", .kind = .char, .ch = '5' },
+    .{ .label = "6", .kind = .char, .ch = '6' },
+    .{ .label = "-", .kind = .char, .ch = '-', .accent = true },
+    .{ .label = "1", .kind = .char, .ch = '1' },
+    .{ .label = "2", .kind = .char, .ch = '2' },
+    .{ .label = "3", .kind = .char, .ch = '3' },
+    .{ .label = "+", .kind = .char, .ch = '+', .accent = true },
+    .{ .label = "0", .kind = .char, .ch = '0' },
+    .{ .label = ".", .kind = .char, .ch = '.' },
+    .{ .label = "<", .kind = .back },
+    .{ .label = "=", .kind = .eval, .accent = true },
+};
+
+fn calcKeyRect(i: usize) graphics.paint.Rect {
+    const col: usize = i % 4;
+    const row: usize = i / 4;
+    const content = @as(f32, @floatFromInt(width_screen())) - 2.0 * @as(f32, @floatFromInt(pad));
+    const gap = u(9);
+    const kw = (content - gap * 3.0) / 4.0;
+    const kh = u(52);
+    const top = u(240); // below the display card
+    const x = @as(f32, @floatFromInt(pad)) + @as(f32, @floatFromInt(col)) * (kw + gap);
+    const y = top + @as(f32, @floatFromInt(row)) * (kh + gap);
+    return .{ .x = @intFromFloat(x), .y = @intFromFloat(y), .w = @intFromFloat(kw), .h = @intFromFloat(kh) };
+}
+
+/// Renders the calculator: a display of the current expression, a keypad, and an agent-presence line
+/// that names the very door an agent would compute through — the two doors, side by side.
+fn renderCalculator(screen: *Framebuffer, inter: *const Interaction) void {
+    header(screen, "Calculator", "Compute \u{00B7} agents welcome here");
+
+    // The display card: the running expression, right-aligned and large.
+    const display: graphics.paint.Rect = .{ .x = pad, .y = @intFromFloat(u(112)), .w = @intCast(width_screen() - @as(u32, @intCast(pad)) * 2), .h = @intFromFloat(u(74)) };
+    paintCard(screen, display);
+    const shown = if (inter.calc_len == 0) "0" else inter.calcExpr();
+    const size = u(30);
+    const tw = text.measure(shown, size);
+    _ = text.draw(screen, rightF(display) - u(18) - tw, @as(f32, @floatFromInt(display.y)) + u(48), shown, size, s(theme.screen_text));
+
+    // The agent-presence chip: this app's agent door, open and unprivileged — co-inhabitance made literal.
+    agentDoorChip(screen, @floatFromInt(display.x), @as(f32, @floatFromInt(display.y)) + u(90), "calc.evaluate \u{00B7} open to agents");
+
+    // The keypad.
+    for (calc_keys, 0..) |key, i| {
+        const r = calcKeyRect(i);
+        const fill = if (key.accent) sa(theme.agent, 28) else s(theme.screen_card);
+        paint.paint(screen, &.{.{ .rounded = .{ .rect = r, .radius = theme.radius_lg, .colour = fill } }});
+        const colour = if (key.accent) s(theme.agent) else s(theme.screen_text);
+        text.drawCentred(screen, @as(f32, @floatFromInt(r.x)) + @as(f32, @floatFromInt(r.w)) / 2.0, @as(f32, @floatFromInt(r.y)) + @as(f32, @floatFromInt(r.h)) / 2.0 + u(6), key.label, u(17), colour);
+    }
+}
+
+/// A small violet chip that names an app's agent door — the tool an agent uses on the same surface a
+/// person does, so the co-inhabitance is on screen rather than implied.
+fn agentDoorChip(screen: *Framebuffer, x: f32, y: f32, label: []const u8) void {
+    const tw = text.measureWeighted(label, u(10.5), .semibold);
+    const chip: graphics.paint.Rect = .{ .x = @intFromFloat(x), .y = @intFromFloat(y), .w = @intFromFloat(tw + u(28)), .h = @intFromFloat(u(22)) };
+    paint.paint(screen, &.{.{ .rounded = .{ .rect = chip, .radius = @intFromFloat(u(11)), .colour = sa(theme.agent, 30) } }});
+    vector.fillDisc(screen, x + u(12), y + u(11), u(3.0), s(theme.agent));
+    _ = text.drawWeighted(screen, x + u(20), y + u(15), label, u(10.5), s(theme.agent), .semibold);
+}
+
+/// Applies a keypad tap to the interaction state, or does nothing if the tap missed every key. Returns
+/// true when a key was hit, so the caller knows the frame changed.
+pub fn calcTap(inter: *Interaction, sx: i32, sy: i32) bool {
+    for (calc_keys, 0..) |key, i| {
+        const r = calcKeyRect(i);
+        if (sx >= r.x and sx <= r.x + @as(i32, @intCast(r.w)) and sy >= r.y and sy <= r.y + @as(i32, @intCast(r.h))) {
+            switch (key.kind) {
+                .char => inter.calcPush(key.ch),
+                .clear => inter.calcClear(),
+                .back => inter.calcBack(),
+                .eval => inter.calcEval(),
+            }
+            return true;
+        }
+    }
+    return false;
 }
 
 pub fn renderActivity(gpa: std.mem.Allocator, screen: *Framebuffer, host: *Host) !void {
@@ -951,4 +1113,20 @@ test "the camera surface carries its design tokens at the placed rectangles" {
 
 test "the principals surface carries its design tokens at the placed rectangles" {
     try expectScreenConformant(testing.allocator, principals_screen);
+}
+
+test "the calculator keypad drives the real expression domain" {
+    var inter = Interaction{};
+    // Enter 2+3*4 through the keypad's push, then evaluate — precedence is the domain's, not the shell's.
+    for ("2+3*4") |ch| inter.calcPush(ch);
+    inter.calcEval();
+    try testing.expectEqualStrings("14", inter.calcExpr());
+    // A fresh digit after a result starts a new expression rather than appending to it.
+    inter.calcPush('9');
+    try testing.expectEqualStrings("9", inter.calcExpr());
+    // A malformed expression is refused, shown as an error rather than trapping.
+    inter.calcClear();
+    for ("1/0") |ch| inter.calcPush(ch);
+    inter.calcEval();
+    try testing.expectEqualStrings("Error", inter.calcExpr());
 }
