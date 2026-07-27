@@ -63,7 +63,7 @@ pub fn render(screen: *Framebuffer, model: Model, t: f32) void {
 
     // Command bar: a white pill with the conic AI orb and a soft prompt.
     const bar: paint.Rect = .{ .x = pad, .y = 108, .w = @intCast(w - @as(u32, @intCast(pad)) * 2), .h = 50 };
-    card(screen, bar, theme.radius_xl, false);
+    commandBar(screen, bar);
     orb(screen, @floatFromInt(bar.x + 26), @floatFromInt(bar.y + 25), 10, t);
     _ = text.draw(screen, @floatFromInt(bar.x + 46), @floatFromInt(bar.y + 30), "What should we do next?", 13, s(theme.screen_text_faint));
 
@@ -113,16 +113,50 @@ fn card(screen: *Framebuffer, rect: paint.Rect, radius: u16, tint: bool) void {
     } }});
 }
 
-/// The conic AI orb: approximated by a warm-to-cool stack that slowly turns.
+/// The command bar: the white pill with the design's soft elevation and its faint violet inset border.
+fn commandBar(screen: *Framebuffer, bar: paint.Rect) void {
+    card(screen, bar, theme.radius_xl, false);
+    // The reference's `inset 0 0 0 1.5px #9a6cff33`: a violet ring is laid down, then the white
+    // interior inset over it, leaving a thin violet border around the pill.
+    paint.paint(screen, &.{.{ .rounded = .{ .rect = bar, .radius = theme.radius_xl, .colour = sa(theme.agent, 52) } }});
+    const inner: paint.Rect = .{ .x = bar.x + 2, .y = bar.y + 2, .w = bar.w - 4, .h = bar.h - 4 };
+    paint.paint(screen, &.{.{ .rounded = .{ .rect = inner, .radius = theme.radius_xl - 2, .colour = s(theme.screen_card) } }});
+}
+
+/// The conic AI orb: a ring of tinted discs cycling coral → violet → sky → coral around the centre,
+/// turning slowly, so it reads as the design's conic gradient rather than a flat dot.
 fn orb(screen: *Framebuffer, cx: f32, cy: f32, r: f32, t: f32) void {
-    const turn = t * 0.6;
+    const turn = t * 0.5;
     vector.fillDisc(screen, cx, cy, r, s(theme.agent));
-    // Two offset highlights sweep around to suggest the conic gradient turning.
-    const a1 = turn;
-    const a2 = turn + 2.1;
-    vector.fillDisc(screen, cx + @cos(a1) * r * 0.5, cy + @sin(a1) * r * 0.5, r * 0.5, s(theme.coral));
-    vector.fillDisc(screen, cx + @cos(a2) * r * 0.5, cy + @sin(a2) * r * 0.5, r * 0.5, s(theme.sky));
-    vector.fillDisc(screen, cx, cy, r * 0.42, s(theme.agent_soft));
+    const petals = 14;
+    var i: u32 = 0;
+    while (i < petals) : (i += 1) {
+        const f = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(petals));
+        const a = turn + f * std.math.tau;
+        vector.fillDisc(screen, cx + @cos(a) * r * 0.52, cy + @sin(a) * r * 0.52, r * 0.44, conicStop(f));
+    }
+    // A bright core keeps the centre reading as one orb.
+    vector.fillDisc(screen, cx, cy, r * 0.4, s(theme.agent_soft));
+}
+
+/// The colour at fraction `f` around the orb's conic sweep: coral → violet → sky → coral, matching the
+/// reference's `conic-gradient(from 200deg, #ff8f6b, #9a6cff, #39b7e6, #ff8f6b)`.
+fn conicStop(f: f32) fb.Rgba {
+    const stops = [_]theme.Colour{ theme.coral, theme.agent, theme.sky, theme.coral };
+    const span = f * 3.0; // three segments between four stops
+    const seg: usize = @min(2, @as(usize, @intFromFloat(span)));
+    return mix(stops[seg], stops[seg + 1], span - @as(f32, @floatFromInt(seg)));
+}
+
+/// A linear blend between two palette colours; channels are read from the resolved tokens, never authored.
+fn mix(a: theme.Colour, b: theme.Colour, t: f32) fb.Rgba {
+    const l = std.math.clamp(t, 0.0, 1.0);
+    return .{
+        .r = @intFromFloat(@as(f32, @floatFromInt(a.red)) * (1.0 - l) + @as(f32, @floatFromInt(b.red)) * l),
+        .g = @intFromFloat(@as(f32, @floatFromInt(a.green)) * (1.0 - l) + @as(f32, @floatFromInt(b.green)) * l),
+        .b = @intFromFloat(@as(f32, @floatFromInt(a.blue)) * (1.0 - l) + @as(f32, @floatFromInt(b.blue)) * l),
+        .a = 255,
+    };
 }
 
 /// A presence dot that breathes: a coloured core inside a soft halo whose radius pulses.
