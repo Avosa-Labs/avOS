@@ -526,6 +526,25 @@ pub fn build(b: *std.Build) void {
         addModuleTests(b, test_step, "text-gpu-glyph", bridge);
     }
 
+    // The HarfBuzz shaper (ADR 0006), compiled from its single-file amalgamation where the source
+    // is vendored. Absent, the layout falls back to unshaped advances.
+    if (harfbuzzRoot(b)) |root| {
+        const harfbuzz_module = b.createModule(.{
+            .root_source_file = b.path("graphics/text/harfbuzz/harfbuzz.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        harfbuzz_module.addImport("design", design_module);
+        harfbuzz_module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/src", .{root}) });
+        harfbuzz_module.link_libcpp = true; // the amalgamation is C++
+        harfbuzz_module.addCSourceFile(.{
+            .file = .{ .cwd_relative = b.fmt("{s}/src/harfbuzz.cc", .{root}) },
+            .flags = &.{"-DHB_NO_MT"},
+        });
+        addModuleTests(b, test_step, "text-harfbuzz", harfbuzz_module);
+        addCompileCheck(b, engine_compile_step, "text-harfbuzz", harfbuzz_module);
+    }
+
     addModuleTests(b, test_step, "simulator", simulator_module);
     addModuleTests(b, test_step, "emulator", emulator_module);
 
@@ -1031,6 +1050,15 @@ fn freetypeRoot(b: *std.Build) ?[]const u8 {
     const io = b.graph.io;
     const root = ".engines/freetype";
     b.build_root.handle.access(io, root ++ "/src/base/ftbase.c", .{}) catch return null;
+    return root;
+}
+
+/// The root of the vendored HarfBuzz source, or null if absent. The shaper (ADR 0006) is built
+/// only when the amalgamation is present; `zig build vendor-engines` fetches it.
+fn harfbuzzRoot(b: *std.Build) ?[]const u8 {
+    const io = b.graph.io;
+    const root = ".engines/harfbuzz";
+    b.build_root.handle.access(io, root ++ "/src/harfbuzz.cc", .{}) catch return null;
     return root;
 }
 
