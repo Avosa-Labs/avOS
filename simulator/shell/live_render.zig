@@ -34,7 +34,7 @@ pub const height: u32 = phone.window_h;
 const max_rows: usize = 6;
 
 /// The surfaces the shell can show.
-pub const Surface = enum { boot, home, activity, approval, principals, store, rest, phone, messages, camera };
+pub const Surface = enum { boot, home, activity, approval, principals, store, rest, phone, messages, camera, agents };
 
 /// Runs the canonical scenario into a fresh host. The caller owns it and must `deinit`.
 pub fn runScenario(host: *Host, gpa: std.mem.Allocator) !void {
@@ -68,6 +68,7 @@ pub fn renderSurface(gpa: std.mem.Allocator, target: *Framebuffer, host: *Host, 
                 .phone => renderPhone(&screen, host, t),
                 .messages => renderMessages(&screen, host),
                 .camera => renderCamera(&screen, host, t),
+                .agents => renderAgents(&screen, host),
                 else => unreachable,
             }
             phone.homeIndicator(&screen);
@@ -314,6 +315,20 @@ pub fn renderPrincipals(gpa: std.mem.Allocator, screen: *Framebuffer, host: *Hos
     _ = gpa;
     _ = host;
     renderScreen(screen, principals_screen);
+}
+
+/// The Agents flagship: the roster of agents acting in the person's world, read from the real run —
+/// each agent named, in agent-violet, marked LIVE while it works.
+pub fn renderAgents(screen: *Framebuffer, host: *Host) void {
+    var rows: [max_rows]Row = undefined;
+    var count: usize = 0;
+    for (host.agents.items) |a| {
+        if (count >= rows.len) break;
+        rows[count] = .{ .title = a.name, .sub = "coordinating your day", .colour = theme.agent, .value = "LIVE" };
+        count += 1;
+    }
+    const sections = [_]Section{.{ .label = "Agents at work", .rows = rows[0..count] }};
+    renderScreen(screen, .{ .title = "Agents", .sub = "Who is acting in your world", .sections = &sections });
 }
 
 pub fn renderApproval(screen: *Framebuffer, host: *Host) void {
