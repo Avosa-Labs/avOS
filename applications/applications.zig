@@ -52,7 +52,10 @@ pub const store_surface = @import("store/surface.zig");
 pub const calculator_domain = @import("calculator/domain.zig");
 pub const calculator = @import("calculator/calculator.zig");
 pub const calculator_surface = @import("calculator/surface.zig");
-pub const agents = @import("agents/console.zig");
+pub const agents_console = @import("agents/console.zig");
+pub const agents_domain = @import("agents/domain.zig");
+pub const agents = @import("agents/agents.zig");
+pub const agents_surface = @import("agents/surface.zig");
 pub const acceptance_tests = @import("tests/acceptance.zig");
 pub const manifest_conformance = @import("tests/manifest_conformance.zig");
 
@@ -92,7 +95,10 @@ test {
     _ = calculator_domain;
     _ = calculator;
     _ = calculator_surface;
+    _ = agents_console;
+    _ = agents_domain;
     _ = agents;
+    _ = agents_surface;
     _ = acceptance_tests;
     _ = manifest_conformance;
 }
