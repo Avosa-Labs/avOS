@@ -17,6 +17,7 @@ const vk = @import("vulkan");
 const gfx = @import("graphics");
 
 const gpu_scene = gfx.gpu_scene;
+const dev = gfx.device;
 
 pub const Frame = vk.rounded.Frame;
 pub const Rgba = vk.offscreen.Rgba;
@@ -62,6 +63,67 @@ pub fn renderTree(
     return vk.rounded.composite(device, gpa, width, height, clear, cards);
 }
 
+/// The GPU device behind the seam: a `device.Device` whose `submit` draws the frame's scene with
+/// `renderTree` on the Vulkan device. It is the primary path in `device.path`'s policy, and it
+/// satisfies the exact interface the software device does — the compositor holds a `Device` and
+/// never knows which is behind it. The rendered image is kept for readback, the offscreen stand-in
+/// for a display present until the swapchain path exists.
+pub const GpuDevice = struct {
+    vk_device: *vk.Device,
+    gpa: std.mem.Allocator,
+    width: u32,
+    height: u32,
+    /// The colour a frame is cleared to before its scene is drawn over it.
+    clear: [4]f32,
+    /// The device's own flatten buffer; a frame whose scene needs more layers is refused.
+    layer_buffer: []Layer,
+    /// The most recently rendered frame, read back from the GPU and owned by this device.
+    image: ?Frame = null,
+    presented: u64 = 0,
+    last_target: ?Target = null,
+
+    pub fn init(vk_device: *vk.Device, gpa: std.mem.Allocator, width: u32, height: u32, clear: [4]f32, layer_buffer: []Layer) GpuDevice {
+        return .{ .vk_device = vk_device, .gpa = gpa, .width = width, .height = height, .clear = clear, .layer_buffer = layer_buffer };
+    }
+
+    pub fn deinit(self: *GpuDevice) void {
+        if (self.image) |*image| image.deinit(self.gpa);
+        self.image = null;
+    }
+
+    fn submitImpl(context: *anyopaque, frame: dev.Frame) dev.Error!void {
+        const self: *GpuDevice = @ptrCast(@alignCast(context));
+        if (frame.tree.nodes.len > self.layer_buffer.len) return error.FrameTooLarge;
+
+        const image = renderTree(self.vk_device, self.gpa, self.width, self.height, self.clear, frame.tree, frame.lists, self.layer_buffer, frame.target) catch |failure| return switch (failure) {
+            error.OutOfMemory => error.OutOfMemory,
+            error.NoSuitableMemory, error.VulkanCallFailed => error.RenderFailed,
+        };
+
+        if (self.image) |*old| old.deinit(self.gpa); // release the previous frame before keeping this one
+        self.image = image;
+        self.last_target = frame.target;
+    }
+
+    fn presentImpl(context: *anyopaque) dev.Error!void {
+        const self: *GpuDevice = @ptrCast(@alignCast(context));
+        if (self.image == null) return error.NothingToPresent;
+        self.presented += 1;
+    }
+
+    /// The interface handle for this GPU device.
+    pub fn device(self: *GpuDevice) dev.Device {
+        return .{
+            .context = self,
+            // The conservative baseline until the swapchain surface reports the panel's real
+            // colour space and depth; the offscreen path attests to no more than this.
+            .capabilities = .{},
+            .submit_fn = submitImpl,
+            .present_fn = presentImpl,
+        };
+    }
+};
+
 // --- Tests (a real compositor scene on the GPU; strict on the lavapipe lane) ---
 
 const testing = std.testing;
@@ -96,4 +158,36 @@ test "a two-layer scene draws through the device at the layers' world positions"
     try testing.expect(bg_pixel.r > 200 and bg_pixel.g < 40);
     const fg_pixel = frame.at(30, 30); // inside the green node at its world offset
     try testing.expect(fg_pixel.g > 200 and fg_pixel.r < 40);
+}
+
+test "the GPU device draws a scene driven through the abstract seam" {
+    var instance = vk.Instance.create("gpu-device-test") catch return;
+    defer instance.deinit();
+    var vk_device = vk.Device.create(&instance, testing.allocator) catch return;
+    defer vk_device.deinit();
+
+    var nodes = [_]scene.Node{
+        .{ .bounds = .{ .x = 0, .y = 0, .width = 64, .height = 64 } },
+        .{ .parent = 0, .transform = scene.Transform.translate(20, 20), .bounds = .{ .x = 0, .y = 0, .width = 20, .height = 20 } },
+    };
+    const tree: Tree = .{ .nodes = &nodes };
+    const bg = solidList(.{ .x = 0, .y = 0, .w = 64, .h = 64 }, .{ .r = 220, .g = 0, .b = 0, .a = 255 });
+    const fg = solidList(.{ .x = 0, .y = 0, .w = 20, .h = 20 }, .{ .r = 0, .g = 220, .b = 0, .a = 255 });
+    const lists = [_]DisplayList{ &bg, &fg };
+
+    var layer_buf: [8]Layer = undefined;
+    var gpu = GpuDevice.init(&vk_device, testing.allocator, 64, 64, .{ 0, 0, 0, 1 }, &layer_buf);
+    defer gpu.deinit();
+    const seam: dev.Device = gpu.device(); // held and driven as the abstract device, GPU unknown to the caller
+
+    try seam.submit(.{ .tree = tree, .lists = &lists, .target = .screen });
+    try seam.present();
+
+    try testing.expectEqual(@as(u64, 1), gpu.presented);
+    try testing.expectEqual(Target.screen, gpu.last_target.?);
+    const image = gpu.image.?; // the frame the GPU drew, read back
+    const bg_pixel = image.at(4, 4);
+    try testing.expect(bg_pixel.r > 200 and bg_pixel.g < 40); // red background
+    const fg_pixel = image.at(30, 30);
+    try testing.expect(fg_pixel.g > 200 and fg_pixel.r < 40); // green node at its world offset
 }
