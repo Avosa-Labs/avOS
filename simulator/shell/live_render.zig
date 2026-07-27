@@ -34,7 +34,7 @@ pub const height: u32 = phone.window_h;
 const max_rows: usize = 6;
 
 /// The surfaces the shell can show.
-pub const Surface = enum { boot, home, activity, approval, principals, store, rest, phone, messages, camera, agents, calendar, weather, contacts };
+pub const Surface = enum { boot, home, activity, approval, principals, store, rest, phone, messages, camera, agents, calendar, weather, contacts, files, settings };
 
 /// Runs the canonical scenario into a fresh host. The caller owns it and must `deinit`.
 pub fn runScenario(host: *Host, gpa: std.mem.Allocator) !void {
@@ -72,6 +72,8 @@ pub fn renderSurface(gpa: std.mem.Allocator, target: *Framebuffer, host: *Host, 
                 .calendar => renderCalendar(&screen),
                 .weather => renderWeather(&screen),
                 .contacts => renderContacts(&screen),
+                .files => renderFiles(&screen),
+                .settings => renderSettings(&screen),
                 else => unreachable,
             }
             phone.homeIndicator(&screen);
@@ -318,6 +320,44 @@ pub fn renderPrincipals(gpa: std.mem.Allocator, screen: *Framebuffer, host: *Hos
     _ = gpa;
     _ = host;
     renderScreen(screen, principals_screen);
+}
+
+/// Files: the granted folder's contents, and the agent search confined to it.
+pub fn renderFiles(screen: *Framebuffer) void {
+    const entries = [_]Row{
+        .{ .title = "Trip-Lisbon.md", .sub = "documents \u{00B7} 4 KB", .colour = theme.human, .value = "" },
+        .{ .title = "budget.csv", .sub = "documents \u{00B7} 2 KB", .colour = theme.human, .value = "" },
+        .{ .title = "lisbon.jpg", .sub = "photos \u{00B7} 1.8 MB", .colour = theme.teal, .value = "" },
+    };
+    const sections = [_]Section{.{ .label = "Documents \u{00B7} within your grant", .rows = &entries }};
+    renderScreen(screen, .{ .title = "Files", .sub = "Search stays inside the grant", .sections = &sections });
+}
+
+/// Settings: rendered from the policy registry, each setting shown with its sensitivity — what an
+/// agent may do with it, decided by the setting, not the caller. human_only is the person's alone.
+pub fn renderSettings(screen: *Framebuffer) void {
+    const registry = applications.framework.settings.registry;
+    var rows: [max_rows]Row = undefined;
+    var count: usize = 0;
+    for (registry) |entry| {
+        if (count >= rows.len) break;
+        const badge: []const u8 = switch (entry.class) {
+            .open => "OPEN",
+            .notify => "NOTIFY",
+            .hold => "HOLD",
+            .human_only => "YOU ONLY",
+        };
+        const colour = switch (entry.class) {
+            .open => theme.teal,
+            .notify => theme.human,
+            .hold => theme.amber,
+            .human_only => theme.denied,
+        };
+        rows[count] = .{ .title = entry.key, .sub = entry.owner, .colour = colour, .value = badge };
+        count += 1;
+    }
+    const sections = [_]Section{.{ .label = "Settings are policy \u{00B7} the class is the setting's", .rows = rows[0..count] }};
+    renderScreen(screen, .{ .title = "Settings", .sub = "Every setting, and what an agent may do with it", .sections = &sections });
 }
 
 /// Calendar: the day arranged into focus blocks — committed time, in the teal of a done block, and
