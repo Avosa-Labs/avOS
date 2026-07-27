@@ -53,7 +53,7 @@ fn operationSet(operations: []const capability_model.Operation) capability_model
 
 /// Runs the scenario against an initialized host.
 pub fn run(host: *Host) !Report {
-    const human = try host.authenticateHuman("operator");
+    const human = try host.authenticateHuman("Noel");
 
     // The request becomes a root task before any agent exists, so every branch
     // has an owner and a purpose from the moment it is created.
