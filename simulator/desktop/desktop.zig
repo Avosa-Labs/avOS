@@ -100,45 +100,6 @@ fn windowScale(w: c_int, h: c_int) f32 {
     return @min(@min(by_height, by_width), 1.0);
 }
 
-/// The reference's `screenIn` entrance: composites the newly rendered frame `next` over the captured
-/// previous frame `prev` into `out`, with the new screen's content slid up from a small offset and faded
-/// in by `eased` (0→1). Only the screen region moves and blends; the device frame is identical in both,
-/// so it stays put. As `eased` reaches 1 the new surface is fully opaque and the previous one is gone —
-/// no blank flash, and no lingering trace once the entrance completes.
-fn screenIn(out: *Framebuffer, prev: *const Framebuffer, next: *const Framebuffer, eased: f32) void {
-    @memcpy(out.pixels, prev.pixels);
-    const a: u32 = @intFromFloat(std.math.clamp(eased, 0.0, 1.0) * 255.0);
-    if (a == 0) return;
-    const inv: u32 = 255 - a;
-
-    // The reference slides the screen up from 8px, taken at this screen's scale.
-    const slide = 8.0 * (@as(f32, @floatFromInt(graphics.phone.screen_w)) / 326.0);
-    const offset: i32 = @intFromFloat((1.0 - eased) * slide);
-
-    const win_w: i32 = @intCast(out.width);
-    const sx = graphics.phone.screen_x;
-    const sy = graphics.phone.screen_y;
-    const sw: i32 = @intCast(graphics.phone.screen_w);
-    const sh: i32 = @intCast(graphics.phone.screen_h);
-
-    var yy: i32 = 0;
-    while (yy < sh) : (yy += 1) {
-        const src_row = yy - offset; // the new content sits `offset` lower, rising to 0
-        if (src_row < 0 or src_row >= sh) continue;
-        const oy = sy + yy;
-        const sry = sy + src_row;
-        var xx: i32 = 0;
-        while (xx < sw) : (xx += 1) {
-            const ox = sx + xx;
-            const di: usize = @intCast((oy * win_w + ox) * 4);
-            const si: usize = @intCast((sry * win_w + ox) * 4);
-            out.pixels[di + 0] = @intCast((@as(u32, out.pixels[di + 0]) * inv + @as(u32, next.pixels[si + 0]) * a) / 255);
-            out.pixels[di + 1] = @intCast((@as(u32, out.pixels[di + 1]) * inv + @as(u32, next.pixels[si + 1]) * a) / 255);
-            out.pixels[di + 2] = @intCast((@as(u32, out.pixels[di + 2]) * inv + @as(u32, next.pixels[si + 2]) * a) / 255);
-        }
-    }
-}
-
 pub fn main(init: std.process.Init) !u8 {
     const gpa = init.gpa;
 
@@ -189,19 +150,12 @@ pub fn main(init: std.process.Init) !u8 {
 
     var fb = try Framebuffer.init(gpa, live.width, live.height, .{ .r = theme.base.red, .g = theme.base.green, .b = theme.base.blue, .a = 255 });
     defer fb.deinit();
-    // Two scratch frames for the reference's `screenIn` entrance: `prev` holds the frame on screen when a
-    // change begins, and `next` the newly rendered surface. During a change the new surface slides up
-    // from a small offset and fades in over `prev` — no blank flash and no lingering trace, because the
-    // fade resolves cleanly to the new surface and the slide reads as the new screen entering.
-    var prev = try Framebuffer.init(gpa, live.width, live.height, .{ .r = theme.base.red, .g = theme.base.green, .b = theme.base.blue, .a = 255 });
-    defer prev.deinit();
-    var incoming = try Framebuffer.init(gpa, live.width, live.height, .{ .r = theme.base.red, .g = theme.base.green, .b = theme.base.blue, .a = 255 });
-    defer incoming.deinit();
 
+    // A surface change is an instant cut: the new screen is painted straight into the framebuffer with no
+    // crossfade, slide, or veil — nothing of the previous screen is ever left on screen, so a tap can
+    // never read as a trace, a flash, or lag. Motion lives inside a surface (the boot reveal, breathing
+    // dots), not between them.
     var surface: live.Surface = .boot;
-    var displayed: live.Surface = .boot; // the surface the framebuffer currently holds
-    var transitioning = false;
-    var progress: f32 = 0.0;
     var boot_seen: u32 = 0;
     var lock_seen: u32 = 0;
     var frames: u32 = 0;
@@ -222,7 +176,6 @@ pub fn main(init: std.process.Init) !u8 {
                         (key == c.SDLK_UP or key == c.SDLK_SPACE or key == c.SDLK_RETURN))
                     {
                         surface = if (surface == .boot) .lock else .home;
-                        progress = 0.0;
                     }
                 },
                 c.SDL_MOUSEBUTTONDOWN => {
@@ -230,11 +183,7 @@ pub fn main(init: std.process.Init) !u8 {
                     // device's full-resolution coordinates the surfaces are laid out in.
                     const mx: i32 = @intFromFloat(@as(f32, @floatFromInt(event.button.x)) / fit);
                     const my: i32 = @intFromFloat(@as(f32, @floatFromInt(event.button.y)) / fit);
-                    const next = navigate(surface, mx, my);
-                    if (next != surface) {
-                        surface = next;
-                        progress = 0.0; // fade the new surface in
-                    }
+                    surface = navigate(surface, mx, my);
                 },
                 else => {},
             }
@@ -245,41 +194,18 @@ pub fn main(init: std.process.Init) !u8 {
         // home screen takes over. Either can be skipped by input, handled in `navigate`.
         if (surface == .boot) {
             boot_seen += 1;
-            if (boot_seen > 95) { // ~1.6s at 60fps: just past the quick reveal and its sheen
-                surface = .lock;
-                progress = 0.0;
-            }
+            if (boot_seen > 95) surface = .lock; // ~1.6s at 60fps: just past the quick reveal and its sheen
         } else if (surface == .lock) {
             lock_seen += 1;
-            if (lock_seen > 140) { // ~2.3s: the greeting settles, then home opens
-                surface = .home;
-                progress = 0.0;
-            }
+            if (lock_seen > 140) surface = .home; // ~2.3s: the greeting settles, then home opens
         }
 
-        // A surface change captures the on-screen frame and begins the reference's screenIn entrance.
-        if (surface != displayed) {
-            @memcpy(prev.pixels, fb.pixels);
-            transitioning = true;
-            progress = 0.0;
-        }
-
-        // Advance the entrance and the continuous-motion clock. ~0.35s at 60fps, ease-out, so the new
-        // surface resolves quickly and cleanly rather than lingering.
-        progress = @min(1.0, progress + 0.05);
+        // The continuous-motion clock, for the living detail inside a surface.
         frames += 1;
         const t = @as(f32, @floatFromInt(frames)) / 60.0;
 
-        if (transitioning) {
-            // Render the new surface off-screen, then slide it up and fade it in over the captured frame.
-            try live.renderSurface(gpa, &incoming, &host, surface, t);
-            const eased = 1.0 - (1.0 - progress) * (1.0 - progress); // ease-out, reaches 1 cleanly
-            screenIn(&fb, &prev, &incoming, eased);
-            if (progress >= 1.0) transitioning = false;
-        } else {
-            try live.renderSurface(gpa, &fb, &host, surface, t);
-        }
-        displayed = surface;
+        // Paint the current surface straight to the framebuffer — an instant cut, no transition frames.
+        try live.renderSurface(gpa, &fb, &host, surface, t);
 
         _ = c.SDL_UpdateTexture(texture, null, @ptrCast(fb.pixels.ptr), @intCast(live.width * 4));
         _ = c.SDL_RenderClear(renderer);
