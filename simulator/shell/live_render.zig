@@ -50,6 +50,8 @@ pub const Interaction = struct {
     store_state: applications.store.Store = undefined,
     /// The messages thread's real exchanges, and whether the person has sent their reply.
     msgs_state: applications.messages.Store = undefined,
+    /// The settings' real values, so a toggle actually changes one.
+    settings_state: applications.settings.Store = undefined,
     person_replied: bool = false,
     /// Which agent's detail is open (an index into the roster), and which agents the person has paused.
     open_agent: ?usize = null,
@@ -114,6 +116,7 @@ pub const Interaction = struct {
     pub fn attach(self: *Interaction, gpa: std.mem.Allocator) void {
         self.store_state = applications.store.Store.init(gpa);
         self.msgs_state = applications.messages.Store.init(gpa);
+        self.settings_state = applications.settings.Store.init(gpa);
         // Seed the two agent-to-agent exchanges the thread shows, so the a2a count is real.
         self.msgs_state.recordExchange(.agent, .agent) catch {};
         self.msgs_state.recordExchange(.agent, .agent) catch {};
@@ -124,7 +127,23 @@ pub const Interaction = struct {
         if (self.store_ready) {
             self.store_state.deinit();
             self.msgs_state.deinit();
+            self.settings_state.deinit();
         }
+    }
+
+    /// The current value of a setting from the real settings store.
+    pub fn settingValue(self: *const Interaction, setting: applications.settings.Setting) u16 {
+        if (!self.store_ready) return 0;
+        return self.settings_state.get(setting);
+    }
+
+    /// Toggles a setting through the real settings domain — refused by the domain for a sensitive one,
+    /// exactly as an agent's write would be gated by its class.
+    pub fn settingToggle(self: *Interaction, setting: applications.settings.Setting) void {
+        if (!self.store_ready) return;
+        const key = self.next_key;
+        self.next_key += 1;
+        _ = applications.settings.Store.execute(&self.settings_state, .{ .operation = "settings.toggle", .args = @tagName(setting) }, .{ .kind = .human, .principal = .{ .value = 0 } }, key);
     }
 
     /// The person sends their reply through the real messages domain — the same `message.send` an agent
@@ -217,7 +236,7 @@ pub fn renderSurface(gpa: std.mem.Allocator, target: *Framebuffer, host: *Host, 
                 .weather => renderWeather(&screen),
                 .contacts => renderContacts(&screen),
                 .files => renderFiles(&screen),
-                .settings => renderSettings(&screen),
+                .settings => renderSettings(&screen, inter),
                 else => unreachable,
             }
             phone.homeIndicator(&screen);
@@ -852,29 +871,68 @@ pub fn renderFiles(screen: *Framebuffer) void {
 
 /// Settings: rendered from the policy registry, each setting shown with its sensitivity — what an
 /// agent may do with it, decided by the setting, not the caller. human_only is the person's alone.
-pub fn renderSettings(screen: *Framebuffer) void {
-    const registry = applications.framework.settings.registry;
-    var rows: [max_rows]Row = undefined;
-    var count: usize = 0;
-    for (registry) |entry| {
-        if (count >= rows.len) break;
-        const badge: []const u8 = switch (entry.class) {
-            .open => "OPEN",
-            .notify => "NOTIFY",
-            .hold => "HOLD",
-            .human_only => "YOU ONLY",
-        };
-        const colour = switch (entry.class) {
-            .open => theme.teal,
-            .notify => theme.human,
-            .hold => theme.amber,
-            .human_only => theme.denied,
-        };
-        rows[count] = .{ .title = entry.key, .sub = entry.owner, .colour = colour, .value = badge };
-        count += 1;
+const SettingRow = struct { setting: applications.settings.Setting, label: []const u8 };
+
+/// The settings the screen shows: open toggles the person (and their agents) may flip, and a sensitive
+/// one that is the person's alone. Each reads and writes the real settings domain.
+const settings_rows = [_]SettingRow{
+    .{ .setting = .wifi_enabled, .label = "Wi-Fi" },
+    .{ .setting = .bluetooth_enabled, .label = "Bluetooth" },
+    .{ .setting = .low_power_mode, .label = "Low Power Mode" },
+    .{ .setting = .reduce_motion, .label = "Reduce Motion" },
+    .{ .setting = .do_not_disturb, .label = "Do Not Disturb" },
+    .{ .setting = .biometric_unlock, .label = "Biometric Unlock" },
+};
+
+fn settingRowRect(i: usize) graphics.paint.Rect {
+    return cardRect(172 + @as(i32, @intCast(i)) * (@as(i32, @intFromFloat(u(52))) + 8), @intFromFloat(u(52)));
+}
+
+pub fn renderSettings(screen: *Framebuffer, inter: *const Interaction) void {
+    header(screen, "Settings", "What you change, and what an agent may");
+    agentDoorChip(screen, @floatFromInt(pad), u(96), "settings.read \u{00B7} the class gates every write");
+
+    for (settings_rows, 0..) |row, i| {
+        const rect = card(screen, settingRowRect(i).y, @intFromFloat(u(52)));
+        const sensitive = row.setting.isSensitive();
+        const on = inter.settingValue(row.setting) != 0;
+        _ = text.draw(screen, @as(f32, @floatFromInt(rect.x)) + u(20), @as(f32, @floatFromInt(rect.y)) + u(24), row.label, u(13), s(theme.screen_text));
+        const class_note = if (sensitive) "You only" else "Open to agents";
+        _ = text.draw(screen, @as(f32, @floatFromInt(rect.x)) + u(20), @as(f32, @floatFromInt(rect.y)) + u(39), class_note, u(10), s(if (sensitive) theme.denied else theme.teal));
+
+        // The control on the right: a real toggle for an open setting, a lock for a sensitive one.
+        const t = settingToggleRect(i);
+        if (sensitive) {
+            _ = text.drawWeighted(screen, @as(f32, @floatFromInt(rightI(t))) - text.measureWeighted("LOCKED", u(10), .semibold), @as(f32, @floatFromInt(rect.y)) + u(30), "LOCKED", u(10), s(theme.denied), .semibold);
+        } else {
+            const track = if (on) s(theme.teal) else s(theme.screen_hairline);
+            paint.paint(screen, &.{.{ .rounded = .{ .rect = t, .radius = @intFromFloat(@as(f32, @floatFromInt(t.h)) / 2.0), .colour = track } }});
+            const knob_r = @as(f32, @floatFromInt(t.h)) / 2.0 - u(3);
+            const knob_x = if (on) @as(f32, @floatFromInt(t.x + @as(i32, @intCast(t.w)))) - knob_r - u(3) else @as(f32, @floatFromInt(t.x)) + knob_r + u(3);
+            vector.fillDisc(screen, knob_x, @as(f32, @floatFromInt(t.y)) + @as(f32, @floatFromInt(t.h)) / 2.0, knob_r, s(theme.screen_card));
+        }
     }
-    const sections = [_]Section{.{ .label = "Settings are policy \u{00B7} the class is the setting's", .rows = rows[0..count] }};
-    renderScreen(screen, .{ .title = "Settings", .sub = "Every setting, and what an agent may do with it", .sections = &sections });
+}
+
+fn settingToggleRect(i: usize) graphics.paint.Rect {
+    const rect = settingRowRect(i);
+    const w_px: i32 = @intFromFloat(u(46));
+    const h_px: i32 = @intFromFloat(u(26));
+    return .{ .x = rightI(rect) - @as(i32, @intFromFloat(u(18))) - w_px, .y = rect.y + @divTrunc(@as(i32, @intCast(rect.h)) - h_px, 2), .w = @intCast(w_px), .h = @intCast(h_px) };
+}
+
+/// Toggles the open setting a tap landed on. Returns true when one was toggled (a sensitive setting is
+/// not reachable this way — the domain refuses it, like an agent's write).
+pub fn settingsTap(inter: *Interaction, sx: i32, sy: i32) bool {
+    for (settings_rows, 0..) |row, i| {
+        const rect = settingRowRect(i);
+        if (sy >= rect.y and sy <= rect.y + @as(i32, @intCast(rect.h)) and sx >= rect.x and sx <= rightI(rect)) {
+            if (row.setting.isSensitive()) return false;
+            inter.settingToggle(row.setting);
+            return true;
+        }
+    }
+    return false;
 }
 
 /// Calendar: the day arranged into focus blocks — committed time, in the teal of a done block, and
@@ -1692,4 +1750,18 @@ test "the camera selects a mode and gates capture by the real rule" {
     // Capture proceeds only while the indicator is lit and the app is foreground — the real rule.
     try testing.expect(applications.camera.mayCapture(true, true));
     try testing.expect(!applications.camera.mayCapture(false, true));
+}
+
+test "settings toggles an open setting through the domain and refuses a sensitive one" {
+    var inter = Interaction{};
+    inter.attach(testing.allocator);
+    defer inter.release();
+    // Low Power Mode is off by default; a tap on its row flips it through the real domain.
+    const before = inter.settingValue(.low_power_mode);
+    const open_row = settingRowRect(2);
+    try testing.expect(settingsTap(&inter, open_row.x + 20, open_row.y + 10));
+    try testing.expect(inter.settingValue(.low_power_mode) != before);
+    // The sensitive Biometric Unlock is not reachable from the screen.
+    const locked_row = settingRowRect(5);
+    try testing.expect(!settingsTap(&inter, locked_row.x + 20, locked_row.y + 10));
 }
