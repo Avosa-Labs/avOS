@@ -56,6 +56,8 @@ pub const Interaction = struct {
     agent_paused: [8]bool = [_]bool{false} ** 8,
     /// The person's decision on the screened incoming call: null while it waits, then answered or not.
     call_answered: ?bool = null,
+    /// The camera mode the person has selected.
+    camera_mode: applications.camera.Mode = .lens,
     store_ready: bool = false,
     next_key: u128 = 1,
 
@@ -208,7 +210,7 @@ pub fn renderSurface(gpa: std.mem.Allocator, target: *Framebuffer, host: *Host, 
                 .store => renderStore(&screen, inter),
                 .phone => renderPhone(&screen, inter),
                 .messages => renderMessages(&screen, inter),
-                .camera => renderCamera(&screen, host, t),
+                .camera => renderCamera(&screen, inter),
                 .agents => renderAgents(&screen, host, inter),
                 .agent_detail => renderAgentDetail(&screen, host, inter),
                 .calendar => renderCalendar(&screen),
@@ -1488,10 +1490,55 @@ pub fn messagesTap(inter: *Interaction, sx: i32, sy: i32) bool {
     return false;
 }
 
-pub fn renderCamera(screen: *Framebuffer, host: *Host, t: f32) void {
-    _ = host;
-    _ = t;
-    renderScreen(screen, camera_screen);
+const CameraMode = struct { mode: applications.camera.Mode, name: []const u8, note: []const u8 };
+const camera_modes = [_]CameraMode{
+    .{ .mode = .lens, .name = "Lens", .note = "a live reading of the scene" },
+    .{ .mode = .describe, .name = "Describe", .note = "spoken narration" },
+    .{ .mode = .capture, .name = "Capture", .note = "a photo or video" },
+};
+
+fn cameraModeRect(i: usize) graphics.paint.Rect {
+    return cardRect(172 + @as(i32, @intCast(i)) * (@as(i32, @intFromFloat(u(62))) + 10), @intFromFloat(u(62)));
+}
+
+pub fn renderCamera(screen: *Framebuffer, inter: *const Interaction) void {
+    header(screen, "Camera", "One camera, three intents");
+    agentDoorChip(screen, @floatFromInt(pad), u(96), "camera.lens \u{00B7} agents may see, only you capture");
+
+    for (camera_modes, 0..) |item, i| {
+        const selected = inter.camera_mode == item.mode;
+        const rect = card(screen, cameraModeRect(i).y, @intFromFloat(u(62)));
+        if (selected) {
+            paint.paint(screen, &.{.{ .rounded = .{ .rect = rect, .radius = theme.radius_xl, .colour = sa(theme.agent, 28) } }});
+        }
+        const hue = if (selected) theme.agent else theme.screen_text_muted;
+        vector.fillDisc(screen, @as(f32, @floatFromInt(rect.x)) + u(22), @as(f32, @floatFromInt(rect.y)) + @as(f32, @floatFromInt(rect.h)) / 2.0, u(5.0), s(hue));
+        _ = text.draw(screen, @as(f32, @floatFromInt(rect.x)) + u(42), @as(f32, @floatFromInt(rect.y)) + u(24), item.name, u(13.5), s(theme.screen_text));
+        _ = text.drawClipped(screen, @as(f32, @floatFromInt(rect.x)) + u(42), @as(f32, @floatFromInt(rect.y)) + u(41), item.note, u(10.5), s(theme.screen_text_muted), rightF(rect) - u(70));
+        if (selected) {
+            const on = "ON";
+            _ = text.drawWeighted(screen, rightF(rect) - u(18) - text.measureWeighted(on, u(10), .semibold), @as(f32, @floatFromInt(rect.y)) + u(28), on, u(10), s(theme.agent), .semibold);
+        }
+    }
+
+    // Capture only proceeds while the indicator is lit and the app is foreground — the real rule.
+    if (inter.camera_mode == .capture) {
+        const ready = applications.camera.mayCapture(true, true);
+        const note = if (ready) "Indicator lit \u{00B7} ready to capture" else "Capture blocked";
+        text.drawCentred(screen, @as(f32, @floatFromInt(width_screen())) / 2.0, @as(f32, @floatFromInt(cameraModeRect(camera_modes.len).y)) + u(20), note, u(11.5), s(theme.teal));
+    }
+}
+
+/// Selects the camera mode a tap landed on. Returns true when a mode was chosen.
+pub fn cameraTap(inter: *Interaction, sx: i32, sy: i32) bool {
+    for (camera_modes, 0..) |item, i| {
+        const r = cameraModeRect(i);
+        if (sx >= r.x and sx <= rightI(r) and sy >= r.y and sy <= r.y + @as(i32, @intCast(r.h))) {
+            inter.camera_mode = item.mode;
+            return true;
+        }
+    }
+    return false;
 }
 
 // --- The per-screen pixel gate (P6.3) ---
@@ -1633,4 +1680,16 @@ test "the phone screens an unknown caller and the person decides" {
     const btns = phoneButtonRects();
     try testing.expect(phoneTap(&inter, btns[0].x + 10, btns[0].y + 10));
     try testing.expect(inter.call_answered.? == true);
+}
+
+test "the camera selects a mode and gates capture by the real rule" {
+    var inter = Interaction{};
+    try testing.expect(inter.camera_mode == .lens);
+    // A tap on the Capture card selects it.
+    const r = cameraModeRect(2);
+    try testing.expect(cameraTap(&inter, r.x + 10, r.y + 10));
+    try testing.expect(inter.camera_mode == .capture);
+    // Capture proceeds only while the indicator is lit and the app is foreground — the real rule.
+    try testing.expect(applications.camera.mayCapture(true, true));
+    try testing.expect(!applications.camera.mayCapture(false, true));
 }
