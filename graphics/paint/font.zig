@@ -35,8 +35,21 @@ const cap_ratio: f32 = 0.70;
 /// cap-height pixels.
 const semibold_from: f32 = 16.0;
 
+/// The weight a caller wants. `auto` chooses by size — headings heavier, body regular — so a caller
+/// that does not care need not ask; `regular` and `semibold` pin the weight when the design specifies
+/// one the size heuristic would get wrong (a large but light prompt, a small but bold label).
+pub const Weight = enum { auto, regular, semibold };
+
 fn faceFor(size_px: f32) truetype.Face {
-    return if (size_px >= semibold_from) semibold else regular;
+    return faceForWeight(size_px, .auto);
+}
+
+fn faceForWeight(size_px: f32, weight: Weight) truetype.Face {
+    return switch (weight) {
+        .auto => if (size_px >= semibold_from) semibold else regular,
+        .regular => regular,
+        .semibold => semibold,
+    };
 }
 
 fn emSize(size_px: f32) f32 {
@@ -45,7 +58,12 @@ fn emSize(size_px: f32) f32 {
 
 /// The width in pixels a string occupies at a given cap-height size, before drawing.
 pub fn measure(letters: []const u8, size_px: f32) f32 {
-    const face = faceFor(size_px);
+    return measureWeighted(letters, size_px, .auto);
+}
+
+/// `measure` at an explicit weight, so measurement matches a pinned-weight draw.
+pub fn measureWeighted(letters: []const u8, size_px: f32, weight: Weight) f32 {
+    const face = faceForWeight(size_px, weight);
     const scale = emSize(size_px) / @as(f32, @floatFromInt(face.units_per_em));
     var width: f32 = 0;
     var view = std.unicode.Utf8View.initUnchecked(letters);
@@ -59,7 +77,12 @@ pub fn measure(letters: []const u8, size_px: f32) f32 {
 /// Draws a left-aligned string with its baseline at (x, baseline_y), at the given
 /// cap-height size and colour. Returns the x just past the string.
 pub fn draw(target: *Framebuffer, x: f32, baseline_y: f32, letters: []const u8, size_px: f32, colour: Rgba) f32 {
-    const face = faceFor(size_px);
+    return drawWeighted(target, x, baseline_y, letters, size_px, colour, .auto);
+}
+
+/// `draw` at an explicit weight, for text whose design weight the size heuristic would get wrong.
+pub fn drawWeighted(target: *Framebuffer, x: f32, baseline_y: f32, letters: []const u8, size_px: f32, colour: Rgba, weight: Weight) f32 {
+    const face = faceForWeight(size_px, weight);
     const px = emSize(size_px);
     const scale = px / @as(f32, @floatFromInt(face.units_per_em));
 
