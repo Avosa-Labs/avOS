@@ -9,6 +9,7 @@ pub const Store = domain.Store;
 pub const App = framework.App;
 pub const Source = domain.Source;
 pub const installNeedsAcknowledgement = domain.installNeedsAcknowledgement;
+pub const updateWidensCapabilities = domain.updateWidensCapabilities;
 
 pub const tools = [_]framework.Tool{
     .{ .name = "store.browse", .required_capability = "store.browse", .effect = .read_only },
