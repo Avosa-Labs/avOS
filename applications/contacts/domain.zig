@@ -27,7 +27,25 @@ pub fn fieldVisible(granted: FieldSet, requested: Field) bool {
     return granted.contains(requested);
 }
 
-const Contact = struct { name: []const u8, email: []const u8 = "", phone: []const u8 = "" };
+/// What a contact is: a person, or one of the non-human principals a person co-inhabits their
+/// world with — the applications, services, organizations, devices, and virtual sessions that are
+/// principals too. Contacts surfaces them honestly alongside people, so co-habitation is literal in
+/// the address book rather than hidden: the "also in your world" section is Contacts reading the
+/// principal service.
+pub const Kind = enum {
+    person,
+    application,
+    service,
+    organization,
+    device,
+    session,
+
+    pub fn isHuman(kind: Kind) bool {
+        return kind == .person;
+    }
+};
+
+const Contact = struct { name: []const u8, kind: Kind = .person, email: []const u8 = "", phone: []const u8 = "" };
 const Applied = struct { key: u128, result: []const u8 };
 
 /// The Contacts store: the real records and the record of applied keyed changes.
@@ -48,6 +66,26 @@ pub const Store = struct {
 
     pub fn count(store: Store) usize {
         return store.contacts.items.len;
+    }
+
+    /// Seeds a contact of a given kind — how the surface adds the non-human principals it reads from
+    /// the principal service, alongside the people it holds.
+    pub fn addPrincipal(store: *Store, name: []const u8, kind: Kind) !void {
+        try store.contacts.append(store.gpa, .{ .name = name, .kind = kind });
+    }
+
+    /// The "also in your world": the names of the non-human principals in Contacts — the apps,
+    /// services, devices, and sessions a person shares their world with, surfaced alongside people.
+    pub fn alsoInYourWorld(store: Store, out: [][]const u8) []const []const u8 {
+        var n: usize = 0;
+        for (store.contacts.items) |contact| {
+            if (n >= out.len) break;
+            if (!contact.kind.isHuman()) {
+                out[n] = contact.name;
+                n += 1;
+            }
+        }
+        return out[0..n];
     }
 
     fn find(store: *Store, name: []const u8) ?usize {
@@ -122,4 +160,20 @@ test "adding and deleting change the real book, exactly once by key" {
     try testing.expectEqual(@as(usize, 1), store.count());
     _ = Store.execute(&store, .{ .operation = "contact.delete", .args = "Ada" }, agent(), 2);
     try testing.expectEqual(@as(usize, 0), store.count());
+}
+
+test "the non-human principals surface alongside people, honestly separated" {
+    const gpa = testing.allocator;
+    var store = Store.init(gpa);
+    defer store.deinit();
+    _ = Store.execute(&store, .{ .operation = "contact.add", .args = "Ana" }, agent(), 1); // a person
+    try store.addPrincipal("Weather", .service);
+    try store.addPrincipal("Living Room Display", .device);
+    try store.addPrincipal("Kitchen Session", .session);
+
+    var buffer: [8][]const u8 = undefined;
+    const world = store.alsoInYourWorld(&buffer);
+    try testing.expectEqual(@as(usize, 3), world.len); // the three non-human principals, not Ana
+    try testing.expect(Kind.person.isHuman());
+    try testing.expect(!Kind.device.isHuman());
 }

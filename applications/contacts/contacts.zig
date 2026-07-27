@@ -15,6 +15,7 @@ pub const App = framework.App;
 pub const Field = domain.Field;
 pub const FieldSet = domain.FieldSet;
 pub const fieldVisible = domain.fieldVisible;
+pub const Kind = domain.Kind;
 
 pub const tools = [_]framework.Tool{
     .{ .name = "contact.read", .required_capability = "contacts.read", .effect = .read_only },
