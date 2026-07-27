@@ -32,6 +32,9 @@ pub const SDL_MOUSEBUTTONDOWN: u32 = 0x401;
 pub const SDLK_ESCAPE: i32 = 27;
 pub const SDLK_RETURN: i32 = 13;
 pub const SDLK_SPACE: i32 = 32;
+// Letter keys are their lowercase ASCII codes.
+pub const SDLK_r: i32 = 114;
+pub const SDLK_s: i32 = 115;
 // Arrow keys carry the scancode mask (0x40000000) over their scancode; Up is scancode 82.
 pub const SDLK_UP: i32 = 0x40000000 | 82;
 
