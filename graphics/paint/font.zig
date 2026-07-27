@@ -110,6 +110,35 @@ pub fn drawWeighted(target: *Framebuffer, x: f32, baseline_y: f32, letters: []co
     return pen;
 }
 
+/// Draws a string but stops before any glyph would cross `max_x`, so a long label is cut at its column
+/// edge rather than spilling across the screen or into an adjacent element — the renderer's stand-in for
+/// the reference's `overflow:hidden`. Returns the x just past the last glyph drawn.
+pub fn drawClipped(target: *Framebuffer, x: f32, baseline_y: f32, letters: []const u8, size_px: f32, colour: Rgba, max_x: f32) f32 {
+    const face = faceFor(size_px);
+    const px = emSize(size_px);
+    const scale = px / @as(f32, @floatFromInt(face.units_per_em));
+
+    var scratch: [192 * 1024]u8 = undefined;
+    var pen = x;
+    var view = std.unicode.Utf8View.initUnchecked(letters);
+    var it = view.iterator();
+    while (it.nextCodepoint()) |cp| {
+        const glyph = face.glyphIndex(cp);
+        const advance = @as(f32, @floatFromInt(face.advance(glyph))) * scale;
+        if (pen + advance > max_x) break; // the next glyph would cross the edge; stop cleanly
+        if (glyph != 0) {
+            var fba = std.heap.FixedBufferAllocator.init(&scratch);
+            if (truetype.rasterize(face, glyph, px, fba.allocator())) |bitmap| {
+                var bmp = bitmap;
+                blit(target, bmp, pen, baseline_y, colour);
+                bmp.deinit(fba.allocator());
+            } else |_| {}
+        }
+        pen += advance;
+    }
+    return pen;
+}
+
 /// Draws a string centred horizontally on `centre_x`, baseline at `baseline_y`.
 pub fn drawCentred(target: *Framebuffer, centre_x: f32, baseline_y: f32, letters: []const u8, size_px: f32, colour: Rgba) void {
     const width = measure(letters, size_px);
