@@ -100,6 +100,18 @@ fn windowScale(w: c_int, h: c_int) f32 {
     return @min(@min(by_height, by_width), 1.0);
 }
 
+/// Blends `src` over `dst` at `alpha` (0..255) across the whole framebuffer — the per-pixel dissolve
+/// that carries a surface change from the old frame to the new one. Both frames are opaque, so alpha
+/// stays 255 and only the colour channels mix.
+fn crossfade(dst: *Framebuffer, src: *const Framebuffer, alpha: u8) void {
+    const a: u32 = alpha;
+    const inv: u32 = 255 - a;
+    var i: usize = 0;
+    while (i < dst.pixels.len) : (i += 1) {
+        dst.pixels[i] = @intCast((@as(u32, dst.pixels[i]) * inv + @as(u32, src.pixels[i]) * a) / 255);
+    }
+}
+
 pub fn main(init: std.process.Init) !u8 {
     const gpa = init.gpa;
 
@@ -150,8 +162,14 @@ pub fn main(init: std.process.Init) !u8 {
 
     var fb = try Framebuffer.init(gpa, live.width, live.height, .{ .r = theme.base.red, .g = theme.base.green, .b = theme.base.blue, .a = 255 });
     defer fb.deinit();
+    // A snapshot of the frame on screen when a surface change begins, so the change crossfades from the
+    // old surface to the new one instead of flashing through the dark desktop colour.
+    var prev = try Framebuffer.init(gpa, live.width, live.height, .{ .r = theme.base.red, .g = theme.base.green, .b = theme.base.blue, .a = 255 });
+    defer prev.deinit();
 
     var surface: live.Surface = .boot;
+    var displayed: live.Surface = .boot; // the surface the framebuffer currently holds
+    var transitioning = false;
     var progress: f32 = 0.0;
     var boot_seen: u32 = 0;
     var lock_seen: u32 = 0;
@@ -208,22 +226,32 @@ pub fn main(init: std.process.Init) !u8 {
             }
         }
 
+        // A surface change captures the frame currently on screen, so the new surface can crossfade over
+        // it. The capture happens before the framebuffer is repainted, while it still holds the old view.
+        if (surface != displayed) {
+            @memcpy(prev.pixels, fb.pixels);
+            transitioning = true;
+            progress = 0.0;
+        }
+
         // Advance the entrance animation and the continuous-motion clock.
-        progress = @min(1.0, progress + 0.05);
+        progress = @min(1.0, progress + 0.06);
         frames += 1;
         const t = @as(f32, @floatFromInt(frames)) / 60.0;
 
-        // Paint the current surface, then fade it in with the spring easing by overlaying the desktop
-        // colour at a falling alpha.
+        // Paint the current surface, then, mid-transition, crossfade the captured previous frame out over
+        // it with the spring easing — a seamless dissolve, never a flash to the desktop colour.
         try live.renderSurface(gpa, &fb, &host, surface, t);
-        const eased = std.math.clamp(anim.springEase(progress), 0.0, 1.0);
-        const overlay: u8 = @intFromFloat((1.0 - eased) * 255.0);
-        if (overlay > 0) {
-            graphics.paint.paint(&fb, &.{.{ .solid = .{
-                .rect = .{ .x = 0, .y = 0, .w = live.width, .h = live.height },
-                .colour = .{ .r = theme.desktop_bottom.red, .g = theme.desktop_bottom.green, .b = theme.desktop_bottom.blue, .a = overlay },
-            } }});
+        if (transitioning) {
+            const eased = std.math.clamp(anim.springEase(progress), 0.0, 1.0);
+            const carry: u8 = @intFromFloat((1.0 - eased) * 255.0); // how much of the previous frame remains
+            if (carry == 0) {
+                transitioning = false;
+            } else {
+                crossfade(&fb, &prev, carry);
+            }
         }
+        displayed = surface;
 
         _ = c.SDL_UpdateTexture(texture, null, @ptrCast(fb.pixels.ptr), @intCast(live.width * 4));
         _ = c.SDL_RenderClear(renderer);
