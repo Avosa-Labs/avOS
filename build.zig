@@ -362,6 +362,10 @@ pub fn build(b: *std.Build) void {
     });
     addModuleTests(b, test_step, "sdk", sdk_module);
 
+    // The simulator's device profile drives a simulated embodied device through the SDK's agent
+    // contract, so the embodied path is exercised for real.
+    simulator_module.addImport("sdk", sdk_module);
+
     const applications_module = b.createModule(.{
         .root_source_file = b.path("applications/applications.zig"),
         .target = target,
