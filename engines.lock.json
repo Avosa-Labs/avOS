@@ -27,6 +27,19 @@
       "license": "FTL",
       "adapter": "graphics/text/freetype",
       "adr": "docs/decisions/0005-freetype-glyph-rasterizer.md"
+    },
+    {
+      "name": "harfbuzz",
+      "role": "text-shaper",
+      "purpose": "Text shaping: HarfBuzz turns a run of Unicode text and a font into positioned glyph ids — the kerning, ligatures, and script handling the layout needs before FreeType rasterises each glyph. It is compiled from its single-file amalgamation behind a Zig adapter that confines its C types.",
+      "upstream": "https://github.com/harfbuzz/harfbuzz",
+      "version": "14.2.1",
+      "commit": "77a832110d40b0179636f5be8f8781f8299d7e50",
+      "source": "https://github.com/harfbuzz/harfbuzz/archive/refs/tags/14.2.1.tar.gz",
+      "sha256": "3c2a9006a7e1bf58737e557014d7882c554c628fb379a9f00008f5ea53dbbdfb",
+      "license": "MIT",
+      "adapter": "graphics/text/harfbuzz",
+      "adr": "docs/decisions/0006-harfbuzz-text-shaping.md"
     }
   ]
 }

@@ -28,6 +28,7 @@ const skipped_prefixes = [_][]const u8{
     ".git/",
     ".tools/",
     ".zig-cache/",
+    ".engines/", // vendored third-party engine source, rebuilt from the pin, not authored here
     "out/",
     "zig-out/",
 };
