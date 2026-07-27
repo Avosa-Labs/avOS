@@ -109,6 +109,32 @@ pub fn fillDisc(target: *Framebuffer, cx: f32, cy: f32, r: f32, colour: Rgba) vo
     }
 }
 
+/// Fills a soft radial glow: `colour` at `peak_alpha` in the centre, falling smoothly to nothing at
+/// `radius`. Unlike stacking translucent discs, the alpha is computed per pixel, so the glow has no
+/// concentric banding — the boot field's halo and the lock screen's corner washes.
+pub fn fillGlow(target: *Framebuffer, cx: f32, cy: f32, radius: f32, colour: Rgba, peak_alpha: u8) void {
+    if (radius <= 0) return;
+    const peak: f32 = @floatFromInt(peak_alpha);
+    const x0: u32 = @intFromFloat(@max(0.0, @floor(cx - radius)));
+    const y0: u32 = @intFromFloat(@max(0.0, @floor(cy - radius)));
+    const x1: u32 = @intFromFloat(@max(0.0, @ceil(cx + radius)));
+    const y1: u32 = @intFromFloat(@max(0.0, @ceil(cy + radius)));
+    var y = y0;
+    while (y <= y1 and y < target.height) : (y += 1) {
+        var x = x0;
+        while (x <= x1 and x < target.width) : (x += 1) {
+            const dx = @as(f32, @floatFromInt(x)) + 0.5 - cx;
+            const dy = @as(f32, @floatFromInt(y)) + 0.5 - cy;
+            const dist = @sqrt(dx * dx + dy * dy);
+            if (dist >= radius) continue;
+            // A smooth falloff (1 - d/r)^2 reads as a gradient rather than a hard-edged disc.
+            const f = 1.0 - dist / radius;
+            const a: u8 = @intFromFloat(peak * f * f);
+            if (a != 0) target.blend(x, y, colour, a);
+        }
+    }
+}
+
 /// Fills a disc with a diagonal gradient, `top_left` at the upper-left of the disc
 /// grading to `bottom_right` at the lower-right — the brand mark's fill.
 pub fn fillDiscGradient(target: *Framebuffer, cx: f32, cy: f32, r: f32, top_left: Rgba, bottom_right: Rgba) void {

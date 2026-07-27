@@ -243,15 +243,11 @@ pub fn renderBoot(screen: *Framebuffer, t: f32) void {
     const cx: f32 = @floatFromInt(phone.screen_w / 2);
     const cy: f32 = @floatFromInt(phone.screen_h / 2);
 
-    // The 300px blue glow disc, pulsing on the reference's 4.5s cycle: opacity .5 → 1 → .5.
-    // `0.75 - 0.25*cos` lands exactly on .5 at the cycle ends and 1.0 at the half, like the keyframe.
+    // The 300px blue glow disc, a smooth radial wash pulsing on the reference's 4.5s cycle:
+    // opacity .5 → 1 → .5. `0.75 - 0.25*cos` lands on .5 at the cycle ends and 1.0 at the half.
     const glow = 0.75 - 0.25 * @cos(t * (2.0 * std.math.pi / 4.5));
-    var g: u8 = 0;
-    while (g < 10) : (g += 1) {
-        const r = 150.0 - @as(f32, @floatFromInt(g)) * 14.0;
-        const a: u8 = @intFromFloat(4.0 + glow * 7.0);
-        vector.fillDisc(screen, cx, cy, r, .{ .r = theme.human.red, .g = theme.human.green, .b = theme.human.blue, .a = a });
-    }
+    const glow_peak: u8 = @intFromFloat(20.0 + glow * 26.0);
+    vector.fillGlow(screen, cx, cy, 150.0, s(theme.human), glow_peak);
 
     // The mark's motion, exactly the reference's layering:
     //   reveal  1.6s cubic-bezier(.16,.9,.24,1): scale .8 → 1, opacity 0 → 1
@@ -355,14 +351,9 @@ pub fn renderLock(screen: *Framebuffer, t: f32) void {
     text.drawCentred(screen, cx, by + 42.0, "Swipe up to open", 12, s(theme.screen_text_muted));
 }
 
-/// A soft radial glow disc, built from concentric translucent fills so it fades to nothing at its edge.
+/// A soft radial glow disc — a smooth wash that fades to nothing at its edge, no concentric banding.
 fn softGlow(screen: *Framebuffer, cx: f32, cy: f32, radius: f32, hue: theme.Colour) void {
-    var i: u8 = 0;
-    while (i < 12) : (i += 1) {
-        const f: f32 = @floatFromInt(i);
-        const r = radius * (1.0 - f / 12.0);
-        vector.fillDisc(screen, cx, cy, r, .{ .r = hue.red, .g = hue.green, .b = hue.blue, .a = 12 });
-    }
+    vector.fillGlow(screen, cx, cy, radius, s(hue), 60);
 }
 
 /// A small shield with a check inside — the face-recognition confirmation mark.
