@@ -24,6 +24,21 @@ pub fn installNeedsAcknowledgement(source: Source) bool {
     return source == .sideload;
 }
 
+/// Whether an app update requests a capability the installed version was not already granted — the
+/// capability diff. An update that stays within the granted set may apply with a notice; one that
+/// asks for a new capability is held for the person, because granting new authority is a decision,
+/// not an automatic update.
+pub fn updateWidensCapabilities(granted: []const []const u8, requested: []const []const u8) bool {
+    for (requested) |capability| {
+        var already = false;
+        for (granted) |have| {
+            if (std.mem.eql(u8, capability, have)) already = true;
+        }
+        if (!already) return true; // a capability outside what the person already granted
+    }
+    return false;
+}
+
 const Applied = struct { key: u128, result: []const u8 };
 
 pub const Store = struct {
@@ -86,4 +101,14 @@ test "installing adds to the real installed set, exactly-once by key" {
     _ = Store.execute(&store, .{ .operation = "store.install", .args = "Itinerary" }, agent(), 1);
     _ = Store.execute(&store, .{ .operation = "store.install", .args = "Itinerary" }, agent(), 1);
     try testing.expectEqual(@as(usize, 1), store.installedCount());
+}
+
+test "an update within the granted capabilities is fine; one asking for a new capability is held" {
+    const granted = [_][]const u8{ "files.read", "files.write" };
+    // An update that reuses only granted capabilities requests nothing new.
+    try testing.expect(!updateWidensCapabilities(&granted, &.{"files.read"}));
+    try testing.expect(!updateWidensCapabilities(&granted, &.{ "files.read", "files.write" }));
+    // An update that adds a capability outside the granted set does — it is held for the person.
+    try testing.expect(updateWidensCapabilities(&granted, &.{ "files.read", "files.share" }));
+    try testing.expect(updateWidensCapabilities(&granted, &.{"network.connect"}));
 }
