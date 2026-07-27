@@ -52,10 +52,13 @@ pub fn main(init: std.process.Init) !u8 {
         return 2;
     };
     const output = if (args.len > 2) args[2] else "shell.png";
+    // An optional time (seconds) lets a caller sample an animated surface at a chosen instant —
+    // the boot reveal, the lock ring — rather than only the t=0 frame.
+    const t: f32 = if (args.len > 3) (std.fmt.parseFloat(f32, args[3]) catch 0.0) else 0.0;
 
     var target = try Framebuffer.init(gpa, live.width, live.height, baseFill());
     defer target.deinit();
-    try live.renderSurface(gpa, &target, &host, surface, 0.0);
+    try live.renderSurface(gpa, &target, &host, surface, t);
 
     const png = try target.encodePng(gpa);
     defer gpa.free(png);
@@ -72,12 +75,13 @@ pub fn main(init: std.process.Init) !u8 {
 fn renderSession(gpa: std.mem.Allocator, io: anytype, err: anytype, host: *live.Host, prefix: []const u8) !u8 {
     const sequence = [_]struct { name: []const u8, surface: live.Surface }{
         .{ .name = "00_boot", .surface = .boot },
-        .{ .name = "01_home", .surface = .home },
-        .{ .name = "02_activity", .surface = .activity },
-        .{ .name = "03_approval", .surface = .approval },
-        .{ .name = "04_principals", .surface = .principals },
-        .{ .name = "05_store", .surface = .store },
-        .{ .name = "06_rest", .surface = .rest },
+        .{ .name = "01_lock", .surface = .lock },
+        .{ .name = "02_home", .surface = .home },
+        .{ .name = "03_activity", .surface = .activity },
+        .{ .name = "04_approval", .surface = .approval },
+        .{ .name = "05_principals", .surface = .principals },
+        .{ .name = "06_store", .surface = .store },
+        .{ .name = "07_rest", .surface = .rest },
     };
     for (sequence) |frame| {
         var target = try Framebuffer.init(gpa, live.width, live.height, baseFill());

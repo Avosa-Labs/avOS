@@ -35,7 +35,7 @@ pub const height: u32 = phone.window_h;
 const max_rows: usize = 6;
 
 /// The surfaces the shell can show.
-pub const Surface = enum { boot, home, activity, approval, principals, store, rest, phone, messages, camera, agents, calendar, weather, contacts, files, settings };
+pub const Surface = enum { boot, lock, home, activity, approval, principals, store, rest, phone, messages, camera, agents, calendar, weather, contacts, files, settings };
 
 /// Runs the canonical scenario into a fresh host. The caller owns it and must `deinit`.
 pub fn runScenario(host: *Host, gpa: std.mem.Allocator) !void {
@@ -57,6 +57,13 @@ pub fn renderSurface(gpa: std.mem.Allocator, target: *Framebuffer, host: *Host, 
     switch (surface) {
         .boot => renderBoot(&screen, t),
         .rest => renderRest(&screen),
+        .lock => {
+            // The lock screen is a light field with the status bar but its own swipe-up affordance,
+            // so it takes the wash and status bar but not the standard home indicator.
+            phone.screenWash(&screen);
+            phone.statusBar(&screen);
+            renderLock(&screen, t);
+        },
         else => {
             phone.screenWash(&screen);
             phone.statusBar(&screen);
@@ -213,30 +220,155 @@ fn rightI(rect: graphics.paint.Rect) i32 {
 /// Boot, matching the design: a near-black screen, a large soft-blue radial glow that breathes, and
 /// the round mark revealing — scaling up from 0.8 with the design's ease over 1.6s, then breathing.
 /// No caption; the mark alone, over the top.
+// The boot mark is 116px in the reference — radius 58 — on a near-black field, over a 300px blue glow.
+const boot_logo_r: f32 = 58.0;
+
 pub fn renderBoot(screen: *Framebuffer, t: f32) void {
+    // The near-black boot field.
     paint.paint(screen, &.{.{ .solid = .{ .rect = .{ .x = 0, .y = 0, .w = phone.screen_w, .h = phone.screen_h }, .colour = s(theme.base) } }});
     const cx: f32 = @floatFromInt(phone.screen_w / 2);
     const cy: f32 = @floatFromInt(phone.screen_h / 2);
 
-    // A large soft blue radial glow behind the mark, breathing on a slow cycle.
-    const glow_pulse = 0.5 + 0.5 * @sin(t * 1.4);
+    // The 300px blue glow disc, pulsing on the reference's 4.5s cycle: opacity .5 → 1 → .5.
+    // `0.75 - 0.25*cos` lands exactly on .5 at the cycle ends and 1.0 at the half, like the keyframe.
+    const glow = 0.75 - 0.25 * @cos(t * (2.0 * std.math.pi / 4.5));
     var g: u8 = 0;
-    while (g < 8) : (g += 1) {
-        const r = 150.0 - @as(f32, @floatFromInt(g)) * 18.0;
-        const a: u8 = @intFromFloat(5.0 + glow_pulse * 6.0);
+    while (g < 10) : (g += 1) {
+        const r = 150.0 - @as(f32, @floatFromInt(g)) * 14.0;
+        const a: u8 = @intFromFloat(4.0 + glow * 7.0);
         vector.fillDisc(screen, cx, cy, r, .{ .r = theme.human.red, .g = theme.human.green, .b = theme.human.blue, .a = a });
     }
 
-    // The mark reveals: scaling up from 0.8 with the design's ease over 1.6s, then a gentle breathe.
+    // The mark's motion, exactly the reference's layering:
+    //   reveal  1.6s cubic-bezier(.16,.9,.24,1): scale .8 → 1, opacity 0 → 1
+    //   breathe 6s from 1.7s: scale 1 → 1.05 → 1
     const reveal_dur: f32 = 1.6;
     var scale: f32 = 1.0;
+    var opacity: f32 = 1.0;
     if (t < reveal_dur) {
-        const p = t / reveal_dur;
-        scale = 0.8 + 0.2 * anim.ease(p, 0.16, 0.9, 0.24, 1.0);
-    } else {
-        scale = 1.0 + 0.02 * @sin((t - reveal_dur) * 1.05);
+        const p = anim.ease(t / reveal_dur, 0.16, 0.9, 0.24, 1.0);
+        scale = 0.8 + 0.2 * p;
+        opacity = p;
+    } else if (t >= 1.7) {
+        scale = 1.025 - 0.025 * @cos((t - 1.7) * (2.0 * std.math.pi / 6.0));
     }
-    logo.draw(screen, cx, cy, 58.0 * scale);
+    const r = boot_logo_r * scale;
+    logo.draw(screen, cx, cy, r);
+
+    // The reveal's fade-in, done by veiling the mark with the field colour at the inverse of its opacity.
+    if (opacity < 1.0) {
+        const veil: u8 = @intFromFloat((1.0 - opacity) * 255.0);
+        vector.fillDisc(screen, cx, cy, r + 2.0, .{ .r = theme.base.red, .g = theme.base.green, .b = theme.base.blue, .a = veil });
+    }
+
+    // The sheen: a white diagonal band sweeps across the mark once, 1.35s → 2.55s.
+    if (t >= 1.35 and t < 2.55) bootSheen(screen, cx, cy, r, (t - 1.35) / 1.2);
+}
+
+/// The reference's `sheen` sweep: a soft white band, skewed ~14°, travelling left→right across the mark
+/// and clipped to its disc. `p` runs 0→1 over the sweep. Peak brightness eases in and out at the ends.
+fn bootSheen(screen: *Framebuffer, cx: f32, cy: f32, r: f32, p: f32) void {
+    const skew: f32 = 0.249; // tan(14°)
+    const band_x = cx + (-1.6 + p * 4.0) * r; // translateX(-160% → 240%) of the logo width
+    const half = 0.55 * r; // the band is ~55% of the logo wide
+    const envelope = @sin(p * std.math.pi); // fade the highlight in and out over the sweep
+    const peak: f32 = 90.0 * envelope;
+    if (peak < 1.0) return;
+    const white: graphics.framebuffer.Rgba = .{ .r = 255, .g = 255, .b = 255, .a = 255 };
+    var y: i32 = @intFromFloat(cy - r);
+    const y1: i32 = @intFromFloat(cy + r);
+    while (y <= y1) : (y += 1) {
+        const fy: f32 = @floatFromInt(y);
+        const dy = fy - cy;
+        var x: i32 = @intFromFloat(cx - r);
+        const x1: i32 = @intFromFloat(cx + r);
+        while (x <= x1) : (x += 1) {
+            const fx: f32 = @floatFromInt(x);
+            const dx = fx - cx;
+            if (dx * dx + dy * dy > r * r) continue;
+            const d = @abs((fx + dy * skew) - band_x); // distance to the skewed band centre
+            if (d >= half) continue;
+            const a: u8 = @intFromFloat(peak * (1.0 - d / half));
+            if (a == 0) continue;
+            screen.blend(@intCast(x), @intCast(y), white, a);
+        }
+    }
+}
+
+/// The lock screen — the reference's "Hello, world." moment between boot and home. A light field
+/// carrying two soft corner glows, the brand mark on a dark disc pulsing inside an expanding ring,
+/// a "Face recognized" confirmation, the greeting, and the swipe-up affordance. `t` drives the ring
+/// and breathe; the caller has already washed the screen light and drawn the status bar.
+pub fn renderLock(screen: *Framebuffer, t: f32) void {
+    const cw: f32 = @floatFromInt(phone.screen_w);
+    const cx = cw / 2.0;
+
+    // Two blurred corner glows: coral off the top-left, blue off the bottom-right.
+    softGlow(screen, cw * 0.08, 120.0, 150.0, theme.coral);
+    softGlow(screen, cw * 0.92, @floatFromInt(phone.screen_h - 220), 165.0, theme.human);
+
+    // The mark on a dark disc, centred high, inside a ring that expands and fades on the 3.6s cycle.
+    const disc_cy: f32 = 300.0;
+    const disc_r: f32 = 66.0;
+    const ring_p = @mod(t, 3.6) / 3.6;
+    const ring_r = disc_r * (1.08 + 0.62 * ring_p); // scale .7 → 1.5 relative to the 150px ring
+    const ring_a: u8 = @intFromFloat(140.0 * (1.0 - ring_p));
+    vector.strokeCircle(screen, cx, disc_cy, ring_r, 2.0, .{ .r = theme.agent.red, .g = theme.agent.green, .b = theme.agent.blue, .a = ring_a });
+    const breathe = 1.0 + 0.025 - 0.025 * @cos(t * (2.0 * std.math.pi / 5.0));
+    vector.fillDisc(screen, cx, disc_cy, disc_r * breathe, s(theme.base));
+    logo.draw(screen, cx, disc_cy, 44.0 * breathe);
+
+    // The "Face recognized" pill: a light chip with a shield-check, in the success accent.
+    const pill_w: f32 = 156.0;
+    const pill_y: i32 = 408;
+    const pill: paint.Rect = .{ .x = @intFromFloat(cx - pill_w / 2.0), .y = pill_y, .w = @intFromFloat(pill_w), .h = 30 };
+    paint.paint(screen, &.{.{ .rounded = .{ .rect = pill, .radius = 15, .colour = s(theme.screen_card) } }});
+    lockShieldCheck(screen, cx - pill_w / 2.0 + 20.0, @floatFromInt(pill_y + 15), theme.teal);
+    _ = text.draw(screen, cx - pill_w / 2.0 + 34.0, @floatFromInt(pill_y + 20), "Face recognized", 12.5, s(theme.teal));
+
+    // The greeting and the reassurance line.
+    text.drawCentred(screen, cx, 476, "Hello, world.", 27, s(theme.screen_text));
+    text.drawCentred(screen, cx, 502, "3 agents resting \u{00B7} everything's handled", 13, s(theme.screen_text_muted));
+
+    // The swipe-up affordance: a home bar, an up chevron, and the prompt, all near the bottom.
+    const by: f32 = @floatFromInt(phone.screen_h - 60);
+    paint.paint(screen, &.{.{ .rounded = .{ .rect = .{ .x = @intFromFloat(cx - 20.0), .y = @intFromFloat(by), .w = 40, .h = 5 }, .radius = 3, .colour = s(theme.screen_line) } }});
+    vector.strokePolyline(screen, &.{
+        .{ .x = cx - 9.0, .y = by + 20.0 },
+        .{ .x = cx, .y = by + 11.0 },
+        .{ .x = cx + 9.0, .y = by + 20.0 },
+    }, 2.4, s(theme.screen_text_muted), false);
+    text.drawCentred(screen, cx, by + 42.0, "Swipe up to open", 12, s(theme.screen_text_muted));
+}
+
+/// A soft radial glow disc, built from concentric translucent fills so it fades to nothing at its edge.
+fn softGlow(screen: *Framebuffer, cx: f32, cy: f32, radius: f32, hue: theme.Colour) void {
+    var i: u8 = 0;
+    while (i < 12) : (i += 1) {
+        const f: f32 = @floatFromInt(i);
+        const r = radius * (1.0 - f / 12.0);
+        vector.fillDisc(screen, cx, cy, r, .{ .r = hue.red, .g = hue.green, .b = hue.blue, .a = 12 });
+    }
+}
+
+/// A small shield with a check inside — the face-recognition confirmation mark.
+fn lockShieldCheck(screen: *Framebuffer, cx: f32, cy: f32, hue: theme.Colour) void {
+    const col = s(hue);
+    // The shield outline: shoulders, sides tapering to a point.
+    vector.strokePolyline(screen, &.{
+        .{ .x = cx, .y = cy - 7.0 },
+        .{ .x = cx + 6.0, .y = cy - 4.5 },
+        .{ .x = cx + 6.0, .y = cy + 1.0 },
+        .{ .x = cx, .y = cy + 7.0 },
+        .{ .x = cx - 6.0, .y = cy + 1.0 },
+        .{ .x = cx - 6.0, .y = cy - 4.5 },
+    }, 1.6, col, true);
+    // The check.
+    vector.strokePolyline(screen, &.{
+        .{ .x = cx - 3.0, .y = cy },
+        .{ .x = cx - 0.8, .y = cy + 2.4 },
+        .{ .x = cx + 3.2, .y = cy - 2.2 },
+    }, 1.6, col, false);
 }
 
 pub fn renderRest(screen: *Framebuffer) void {
