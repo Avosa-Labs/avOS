@@ -22,10 +22,18 @@ pub const Actor = framework.Actor;
 pub const DomainResult = framework.DomainResult;
 pub const Input = framework.Input;
 
+/// Who a party to a message is — the person, or an agent. An agent-to-agent exchange is one where
+/// both ends are agents; the app renders it as a visible thread with both principals' chips, so
+/// co-habitation is watchable rather than hidden.
+pub const Party = enum { human, agent };
+
 const Message = struct {
     from: u128,
     body: []const u8,
     sent: bool,
+    /// Who the message is from and to. An agent-to-agent message has both as `agent`.
+    from_party: Party = .human,
+    to_party: Party = .human,
 };
 
 const Applied = struct {
@@ -71,6 +79,23 @@ pub const Store = struct {
         return count;
     }
 
+    /// Records an exchange between two identified parties into the thread — how the surface adds an
+    /// agent-to-agent negotiation it derives from the ledger, both principals shown. The domain
+    /// stores the exchange; it never invents one, so the thread is always ground truth.
+    pub fn recordExchange(store: *Store, from_party: Party, to_party: Party) !void {
+        try store.messages.append(store.gpa, .{ .from = 0, .body = "exchange", .sent = true, .from_party = from_party, .to_party = to_party });
+    }
+
+    /// How many messages in the thread are agent-to-agent — both ends an agent. These are the
+    /// exchanges the app renders with both agents' chips.
+    pub fn agentToAgentCount(store: Store) usize {
+        var count: usize = 0;
+        for (store.messages.items) |message| {
+            if (message.from_party == .agent and message.to_party == .agent) count += 1;
+        }
+        return count;
+    }
+
     /// The one entry point both doors reach. Dispatches an operation to its logic; the
     /// framework has already gated and will record it.
     pub fn execute(context: *anyopaque, input: Input, actor: Actor, key: u128) DomainResult {
@@ -90,7 +115,8 @@ pub const Store = struct {
             // Exactly-once: an already-applied send returns its first result and does
             // not send again, so approval after a restart or a double tap is safe.
             if (priorResult(store.applied.items, key)) |result| return .{ .ok = result };
-            store.messages.append(store.gpa, .{ .from = actor.principal.value, .body = "message", .sent = true }) catch return .failed;
+            const from_party: Party = if (actor.kind == .agent) .agent else .human;
+            store.messages.append(store.gpa, .{ .from = actor.principal.value, .body = "message", .sent = true, .from_party = from_party }) catch return .failed;
             store.applied.append(store.gpa, .{ .key = key, .result = "sent" }) catch {
                 _ = store.messages.pop();
                 return .failed;
@@ -131,4 +157,28 @@ test "drafting is idempotent by key and search changes nothing" {
     try testing.expectEqual(@as(usize, 1), store.drafts.items.len);
     _ = Store.execute(&store, .{ .operation = "message.search" }, agent, 0);
     try testing.expectEqual(@as(usize, 0), store.sent());
+}
+
+test "an agent-to-agent exchange is a visible thread with both parties identified" {
+    const gpa = testing.allocator;
+    var store = Store.init(gpa);
+    defer store.deinit();
+    // A person messaging an agent, and two agents negotiating with each other.
+    try store.recordExchange(.human, .agent);
+    try store.recordExchange(.agent, .agent);
+    try store.recordExchange(.agent, .agent);
+    // Only the two agent-to-agent exchanges are rendered with both agents' chips.
+    try testing.expectEqual(@as(usize, 2), store.agentToAgentCount());
+}
+
+test "an agent's send is recorded as from an agent, a person's as from the person" {
+    const gpa = testing.allocator;
+    var store = Store.init(gpa);
+    defer store.deinit();
+    const agent: Actor = .{ .kind = .agent, .principal = .{ .value = 0xA } };
+    const human: Actor = .{ .kind = .human, .principal = .{ .value = 0x1 } };
+    _ = Store.execute(&store, .{ .operation = "message.send" }, agent, 1);
+    _ = Store.execute(&store, .{ .operation = "message.send" }, human, 2);
+    try testing.expectEqual(Party.agent, store.messages.items[0].from_party);
+    try testing.expectEqual(Party.human, store.messages.items[1].from_party);
 }
