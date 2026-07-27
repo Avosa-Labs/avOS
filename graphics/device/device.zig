@@ -66,6 +66,9 @@ pub const Error = error{
     NothingToPresent,
     /// The device could not allocate the memory to compose the frame.
     OutOfMemory,
+    /// The device failed to draw the frame — a GPU call failed or no suitable memory
+    /// was available. The software device never returns this; a GPU device may.
+    RenderFailed,
 };
 
 /// A frame handed to a device: the retained scene to draw — the tree and its per-node
