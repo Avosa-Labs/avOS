@@ -224,6 +224,8 @@ pub fn main(init: std.process.Init) !u8 {
                         // handled by a mode selection
                     } else if (surface == .settings and live.settingsTap(&interaction, sx, sy)) {
                         // handled by a settings toggle
+                    } else if (surface == .weather and live.weatherTap(&interaction, sx, sy)) {
+                        // handled by adding a place or arming its alert
                     } else if (surface == .agents) {
                         // A tap on an agent opens its detail; anything else navigates as usual.
                         if (live.agentRowAt(&host, sx, sy)) |index| {

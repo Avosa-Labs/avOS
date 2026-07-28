@@ -15,6 +15,8 @@ pub const Store = domain.Store;
 pub const App = framework.App;
 pub const Connector = domain.Connector;
 pub const Deterministic = domain.Deterministic;
+pub const Reading = domain.Reading;
+pub const Condition = domain.Condition;
 
 pub const tools = [_]framework.Tool{
     .{ .name = "weather.current", .required_capability = "weather.current", .effect = .read_only },
