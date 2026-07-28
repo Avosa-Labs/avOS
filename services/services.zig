@@ -53,6 +53,7 @@ pub const backup_schedule = @import("backup/schedule.zig");
 pub const restore_eligibility = @import("restore/eligibility.zig");
 pub const principal_enrollment = @import("principal/enrollment.zig");
 pub const principal_service = @import("principal/service.zig");
+pub const principal_provisioning = @import("principal/provisioning.zig");
 pub const capability_delegation = @import("capability/delegation.zig");
 pub const capability_service = @import("capability/service.zig");
 pub const task_admission = @import("task/admission.zig");
@@ -113,6 +114,7 @@ test {
     _ = restore_eligibility;
     _ = principal_enrollment;
     _ = principal_service;
+    _ = principal_provisioning;
     _ = capability_delegation;
     _ = capability_service;
     _ = task_admission;
