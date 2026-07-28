@@ -1,0 +1,9 @@
+.{
+    // The package identity and declared capabilities for the Tasks app. Reading is silent, adding and
+    // completing are local changes, and clearing a task is held for the person.
+    .name = "Tasks",
+    .package = "default.tasks",
+    .kind = .default_app,
+    .capabilities = .{ "task.list", "task.add", "task.complete", "task.clear" },
+    .signing = .system_image,
+}
