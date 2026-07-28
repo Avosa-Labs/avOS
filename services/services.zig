@@ -29,6 +29,7 @@ pub const sensor = @import("sensor/sensor.zig");
 pub const diagnostics = @import("diagnostics/diagnostics.zig");
 pub const account = @import("account/account.zig");
 pub const connectivity = @import("connectivity/connectivity.zig");
+pub const connector = @import("connectivity/connector.zig");
 pub const device_posture = @import("device/posture.zig");
 pub const session_lock = @import("session/lock.zig");
 pub const session_service = @import("session/service.zig");
