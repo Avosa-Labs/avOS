@@ -39,9 +39,13 @@ pub fn withinGrant(path: []const u8) bool {
 }
 
 /// The Files store: the real entries in the tree and the record of applied keyed changes.
+/// A label attached to a file: the file's path and the tag it was given. A file may carry several.
+const Tag = struct { path: []const u8, label: []const u8 };
+
 pub const Store = struct {
     gpa: std.mem.Allocator,
     entries: std.ArrayListUnmanaged(Entry) = .empty,
+    tags: std.ArrayListUnmanaged(Tag) = .empty,
     applied: std.ArrayListUnmanaged(Applied) = .empty,
     reply: [8]u8 = undefined,
 
@@ -51,6 +55,7 @@ pub const Store = struct {
 
     pub fn deinit(store: *Store) void {
         store.entries.deinit(store.gpa);
+        store.tags.deinit(store.gpa);
         store.applied.deinit(store.gpa);
         store.* = undefined;
     }
@@ -58,6 +63,43 @@ pub const Store = struct {
     /// Seeds the tree with an entry, for the surface and tests to populate it.
     pub fn add(store: *Store, path: []const u8, is_dir: bool) !void {
         try store.entries.append(store.gpa, .{ .path = path, .is_dir = is_dir });
+    }
+
+    fn hasEntry(store: Store, path: []const u8) bool {
+        for (store.entries.items) |entry| {
+            if (std.mem.eql(u8, entry.path, path)) return true;
+        }
+        return false;
+    }
+
+    fn isTagged(store: Store, path: []const u8, label: []const u8) bool {
+        for (store.tags.items) |t| {
+            if (std.mem.eql(u8, t.path, path) and std.mem.eql(u8, t.label, label)) return true;
+        }
+        return false;
+    }
+
+    /// Tags a file with a label. Confined to the grant and to real files: an out-of-grant or unknown
+    /// path is refused. Tagging the same file with the same label twice is idempotent. Returns whether
+    /// a tag was applied (false if the file already had it).
+    pub fn tagFile(store: *Store, path: []const u8, label: []const u8) !bool {
+        if (!withinGrant(path) or !store.hasEntry(path) or label.len == 0) return false;
+        if (store.isTagged(path, label)) return false;
+        try store.tags.append(store.gpa, .{ .path = path, .label = label });
+        return true;
+    }
+
+    /// The paths tagged with a label, in tree order — confined to the grant like every read.
+    pub fn taggedWith(store: Store, label: []const u8, out: [][]const u8) []const []const u8 {
+        var n: usize = 0;
+        for (store.tags.items) |t| {
+            if (n >= out.len) break;
+            if (std.mem.eql(u8, t.label, label) and withinGrant(t.path)) {
+                out[n] = t.path;
+                n += 1;
+            }
+        }
+        return out[0..n];
     }
 
     pub fn count(store: Store) usize {
@@ -127,9 +169,26 @@ pub const Store = struct {
             const text = std.fmt.bufPrint(&store.reply, "{d}", .{matches.len}) catch return .failed;
             return .{ .ok = text };
         }
+        if (std.mem.eql(u8, op, "file.tagged")) {
+            // A silent read: how many files carry the given tag, the paths the surface's to read.
+            var buffer: [64][]const u8 = undefined;
+            const matches = store.taggedWith(input.args, &buffer);
+            const text = std.fmt.bufPrint(&store.reply, "{d}", .{matches.len}) catch return .failed;
+            return .{ .ok = text };
+        }
 
         // Mutations: confined to the grant and exactly-once by key.
         if (store.priorResult(key)) |prior| return .{ .ok = prior };
+
+        if (std.mem.eql(u8, op, "file.tag")) {
+            // `args` is "path|label". Tagging is a local change, confined to the grant.
+            const sep = std.mem.indexOfScalar(u8, input.args, '|') orelse return .failed;
+            const path = input.args[0..sep];
+            const label = input.args[sep + 1 ..];
+            if (!withinGrant(path) or store.find(path) == null) return .failed;
+            _ = store.tagFile(path, label) catch return .failed;
+            return store.commit(key, "tagged");
+        }
 
         if (std.mem.eql(u8, op, "file.edit")) {
             if (!withinGrant(input.args) or store.find(input.args) == null) return .failed;
@@ -166,6 +225,26 @@ pub const Store = struct {
 const testing = std.testing;
 fn agent() Actor {
     return .{ .kind = .agent, .principal = .{ .value = 0xA } };
+}
+
+test "tagging a real in-grant file works, is idempotent, and lists back by tag" {
+    const gpa = testing.allocator;
+    var store = Store.init(gpa);
+    defer store.deinit();
+    try store.add("documents/report.txt", false);
+    try store.add("documents/notes.txt", false);
+
+    // Tag two files "work"; tagging the same file+label twice does not double it.
+    _ = Store.execute(&store, .{ .operation = "file.tag", .args = "documents/report.txt|work" }, agent(), 1);
+    _ = Store.execute(&store, .{ .operation = "file.tag", .args = "documents/report.txt|work" }, agent(), 2);
+    _ = Store.execute(&store, .{ .operation = "file.tag", .args = "documents/notes.txt|work" }, agent(), 3);
+    var buf: [8][]const u8 = undefined;
+    try testing.expectEqual(@as(usize, 2), store.taggedWith("work", &buf).len);
+    // The count comes back through the door as a silent read.
+    try testing.expectEqualStrings("2", Store.execute(&store, .{ .operation = "file.tagged", .args = "work" }, agent(), 0).ok);
+    // A tag on an out-of-grant or unknown path is refused.
+    try testing.expectEqual(DomainResult.failed, Store.execute(&store, .{ .operation = "file.tag", .args = "../escape|work" }, agent(), 4));
+    try testing.expectEqual(DomainResult.failed, Store.execute(&store, .{ .operation = "file.tag", .args = "documents/ghost.txt|work" }, agent(), 5));
 }
 
 test "a path that escapes the granted folder is outside the grant" {
