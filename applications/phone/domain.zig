@@ -23,6 +23,14 @@ pub fn ringsThrough(caller: Caller) bool {
     return caller.known or caller.verified;
 }
 
+/// Whether a number reaches emergency services. An emergency call is the person's alone — it
+/// is outside agent routing entirely, so no agent may place one, held or otherwise.
+pub fn isEmergency(number: []const u8) bool {
+    const numbers = [_][]const u8{ "911", "112", "999", "000", "119" };
+    for (numbers) |n| if (std.mem.eql(u8, number, n)) return true;
+    return false;
+}
+
 /// The result of an agent screening a call it answered: the caller, and a short summary the agent
 /// gathered. The summary is untrusted content — it originates with the caller, so it is only shown
 /// to the person to decide on, never treated as trusted input — and a screened call the person can
@@ -88,7 +96,6 @@ pub const Store = struct {
     }
     /// The one entry point both doors reach. `args` is a phone number.
     pub fn execute(context: *anyopaque, input: Input, actor: Actor, key: u128) DomainResult {
-        _ = actor;
         const store: *Store = @ptrCast(@alignCast(context));
         const op = input.operation;
         if (std.mem.eql(u8, op, "call.history")) {
@@ -99,6 +106,9 @@ pub const Store = struct {
         if (store.priorResult(key)) |prior| return .{ .ok = prior };
         if (std.mem.eql(u8, op, "call.dial")) {
             if (input.args.len == 0) return .failed;
+            // Emergency numbers are outside agent routing entirely: an agent may never place
+            // one, even holding phone.dial. This is the person's alone.
+            if (isEmergency(input.args) and actor.isAgent()) return .failed;
             store.log.append(store.gpa, .{ .number = input.args, .outgoing = true }) catch return .failed;
             return store.commit(key, "dialled");
         }
@@ -123,6 +133,19 @@ test "dialling appends to the real log exactly-once by key" {
     defer store.deinit();
     _ = Store.execute(&store, .{ .operation = "call.dial", .args = "5551234" }, agent(), 1);
     _ = Store.execute(&store, .{ .operation = "call.dial", .args = "5551234" }, agent(), 1);
+    try testing.expectEqual(@as(usize, 1), store.calls());
+}
+
+test "an agent may not place an emergency call; the person may" {
+    const gpa = testing.allocator;
+    var store = Store.init(gpa);
+    defer store.deinit();
+    const human: Actor = .{ .kind = .human, .principal = .{ .value = 0 } };
+    // An agent holding phone.dial is still refused an emergency number — it is outside routing.
+    try testing.expectEqual(DomainResult.failed, Store.execute(&store, .{ .operation = "call.dial", .args = "112" }, agent(), 1));
+    try testing.expectEqual(@as(usize, 0), store.calls());
+    // The person places it directly.
+    _ = Store.execute(&store, .{ .operation = "call.dial", .args = "112" }, human, 2);
     try testing.expectEqual(@as(usize, 1), store.calls());
 }
 
