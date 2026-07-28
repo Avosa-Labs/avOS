@@ -17,6 +17,7 @@ pub const tools = [_]framework.Tool{
     .{ .name = "note.read", .required_capability = "notes.read", .effect = .read_only },
     .{ .name = "note.create", .required_capability = "notes.write", .effect = .local_mutation },
     .{ .name = "note.edit", .required_capability = "notes.write", .effect = .local_mutation },
+    .{ .name = "note.pin", .required_capability = "notes.write", .effect = .local_mutation },
     .{ .name = "note.delete", .required_capability = "notes.write", .effect = .external },
 };
 
