@@ -10,10 +10,16 @@ const std = @import("std");
 const framework = @import("../framework/agent_app.zig");
 const domain = @import("domain.zig");
 
+const recurrence_mod = @import("recurrence.zig");
+
 pub const Store = domain.Store;
 pub const App = framework.App;
 pub const Availability = domain.Availability;
 pub const FocusBlock = domain.FocusBlock;
+pub const Recurrence = recurrence_mod.Recurrence;
+pub const Frequency = recurrence_mod.Frequency;
+pub const occurrences = recurrence_mod.occurrences;
+pub const occupies = recurrence_mod.occupies;
 
 pub const tools = [_]framework.Tool{
     .{ .name = "calendar.read", .required_capability = "calendar.read", .effect = .read_only },
