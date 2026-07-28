@@ -5,6 +5,6 @@
     .name = "Notes",
     .package = "default.notes",
     .kind = .default_app,
-    .capabilities = .{ "note.list", "note.read", "note.create", "note.edit", "note.delete" },
+    .capabilities = .{ "note.list", "note.read", "note.create", "note.edit", "note.pin", "note.delete" },
     .signing = .system_image,
 }
