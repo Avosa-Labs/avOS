@@ -6,6 +6,6 @@
     .name = "Messages",
     .package = "default.messages",
     .kind = .default_app,
-    .capabilities = .{ "message.search", "message.draft", "message.send" },
+    .capabilities = .{ "message.search", "message.read", "message.draft", "message.send" },
     .signing = .system_image,
 }

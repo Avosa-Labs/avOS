@@ -51,6 +51,7 @@ pub const Store = struct {
     /// Keys whose consequential effect (a send) has already been applied, with the
     /// result returned the first time — so a re-drive returns it rather than re-sending.
     applied: std.ArrayListUnmanaged(Applied) = .empty,
+    reply: [8]u8 = undefined,
 
     pub fn init(gpa: std.mem.Allocator) Store {
         return .{ .gpa = gpa };
@@ -77,6 +78,17 @@ pub const Store = struct {
             if (message.sent) count += 1;
         }
         return count;
+    }
+
+    /// The total number of messages in the thread — everything sent or exchanged.
+    pub fn messageCount(store: Store) usize {
+        return store.messages.items.len;
+    }
+
+    /// The body of the i-th message in the thread, or null if there are fewer than i+1.
+    pub fn bodyAt(store: Store, i: usize) ?[]const u8 {
+        if (i >= store.messages.items.len) return null;
+        return store.messages.items[i].body;
     }
 
     /// Records an exchange between two identified parties into the thread — how the surface adds an
@@ -106,6 +118,11 @@ pub const Store = struct {
             // A read: return a small result. No state changes, no key needed.
             return .{ .ok = "matched" };
         }
+        if (std.mem.eql(u8, operation, "message.read")) {
+            // A read of the thread: how many messages it holds. Silent, repeatable.
+            const text = std.fmt.bufPrint(&store.reply, "{d}", .{store.messageCount()}) catch return .failed;
+            return .{ .ok = text };
+        }
         if (std.mem.eql(u8, operation, "message.draft")) {
             if (priorResult(store.drafts.items, key)) |result| return .{ .ok = result };
             store.drafts.append(store.gpa, .{ .key = key, .result = "drafted" }) catch return .failed;
@@ -116,7 +133,8 @@ pub const Store = struct {
             // not send again, so approval after a restart or a double tap is safe.
             if (priorResult(store.applied.items, key)) |result| return .{ .ok = result };
             const from_party: Party = if (actor.kind == .agent) .agent else .human;
-            store.messages.append(store.gpa, .{ .from = actor.principal.value, .body = "message", .sent = true, .from_party = from_party }) catch return .failed;
+            const message_body = if (input.args.len > 0) input.args else "message";
+            store.messages.append(store.gpa, .{ .from = actor.principal.value, .body = message_body, .sent = true, .from_party = from_party }) catch return .failed;
             store.applied.append(store.gpa, .{ .key = key, .result = "sent" }) catch {
                 _ = store.messages.pop();
                 return .failed;
@@ -145,6 +163,21 @@ test "sending twice with the same key sends once" {
     _ = Store.execute(&store, .{ .operation = "message.send" }, agent, 0x7);
     _ = Store.execute(&store, .{ .operation = "message.send" }, agent, 0x7); // same key: exactly once
     try testing.expectEqual(@as(usize, 1), store.sent());
+}
+
+test "a sent message keeps its real body, and the thread reads it back" {
+    const gpa = testing.allocator;
+    var store = Store.init(gpa);
+    defer store.deinit();
+    const agent: Actor = .{ .kind = .agent, .principal = .{ .value = 0xA } };
+    _ = Store.execute(&store, .{ .operation = "message.send", .args = "On my way" }, agent, 0x1);
+    _ = Store.execute(&store, .{ .operation = "message.send", .args = "Running late" }, agent, 0x2);
+    try testing.expectEqual(@as(usize, 2), store.messageCount());
+    try testing.expectEqualStrings("On my way", store.bodyAt(0).?);
+    try testing.expectEqualStrings("Running late", store.bodyAt(1).?);
+    // Reading the thread returns its length as a silent read.
+    try testing.expectEqualStrings("2", Store.execute(&store, .{ .operation = "message.read" }, agent, 0).ok);
+    try testing.expect(store.bodyAt(2) == null);
 }
 
 test "drafting is idempotent by key and search changes nothing" {
