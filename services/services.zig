@@ -28,6 +28,7 @@ pub const location = @import("location/location.zig");
 pub const sensor = @import("sensor/sensor.zig");
 pub const diagnostics = @import("diagnostics/diagnostics.zig");
 pub const account = @import("account/account.zig");
+pub const account_creation = @import("account/creation.zig");
 pub const connectivity = @import("connectivity/connectivity.zig");
 pub const device_posture = @import("device/posture.zig");
 pub const session_lock = @import("session/lock.zig");
@@ -87,6 +88,7 @@ test {
     _ = sensor;
     _ = diagnostics;
     _ = account;
+    _ = account_creation;
     _ = connectivity;
     _ = device_posture;
     _ = session_lock;
