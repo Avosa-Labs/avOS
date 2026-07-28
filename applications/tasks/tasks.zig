@@ -14,6 +14,7 @@ pub const App = framework.App;
 pub const tools = [_]framework.Tool{
     .{ .name = "task.list", .required_capability = "tasks.read", .effect = .read_only },
     .{ .name = "task.add", .required_capability = "tasks.write", .effect = .local_mutation },
+    .{ .name = "task.due", .required_capability = "tasks.write", .effect = .local_mutation },
     .{ .name = "task.complete", .required_capability = "tasks.write", .effect = .local_mutation },
     .{ .name = "task.clear", .required_capability = "tasks.write", .effect = .external },
 };

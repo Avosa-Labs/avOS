@@ -4,6 +4,6 @@
     .name = "Tasks",
     .package = "default.tasks",
     .kind = .default_app,
-    .capabilities = .{ "task.list", "task.add", "task.complete", "task.clear" },
+    .capabilities = .{ "task.list", "task.add", "task.due", "task.complete", "task.clear" },
     .signing = .system_image,
 }
