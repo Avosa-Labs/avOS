@@ -6,6 +6,6 @@
     .name = "Phone",
     .package = "default.phone",
     .kind = .default_app,
-    .capabilities = .{ "call.history", "call.screen", "call.dial" },
+    .capabilities = .{ "call.history", "call.screen", "call.block", "call.dial" },
     .signing = .system_image,
 }
