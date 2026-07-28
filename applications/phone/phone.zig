@@ -17,6 +17,7 @@ pub const tools = [_]framework.Tool{
     // Screening an unknown caller produces a transcript the person sees — a local change that
     // notifies, not a silent read.
     .{ .name = "call.screen", .required_capability = "phone.screen", .effect = .local_mutation },
+    .{ .name = "call.block", .required_capability = "phone.screen", .effect = .local_mutation },
     .{ .name = "call.dial", .required_capability = "phone.dial", .effect = .external },
 };
 
@@ -29,10 +30,11 @@ test "an unknown, unverified caller is screened rather than ringing through" {
     try testing.expect(ringsThrough(.{ .known = true, .verified = false }));
     try testing.expect(!ringsThrough(.{ .known = false, .verified = false }));
 }
-test "screening notifies, dialling is held, history is a silent read" {
+test "screening and blocking notify, dialling is held, history is a silent read" {
     try testing.expect(!tools[0].effect.needsApproval()); // call.history, silent read
     try testing.expectEqual(framework.Effect.local_mutation, tools[1].effect); // call.screen notifies
-    try testing.expect(tools[2].effect.needsApproval()); // call.dial held
+    try testing.expectEqual(framework.Effect.local_mutation, tools[2].effect); // call.block, a local change
+    try testing.expect(tools[3].effect.needsApproval()); // call.dial held
 }
 
 test "an emergency number is outside agent routing" {
