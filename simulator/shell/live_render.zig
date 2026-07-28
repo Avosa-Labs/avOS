@@ -54,6 +54,10 @@ pub const Interaction = struct {
     settings_state: applications.settings.Store = undefined,
     /// The weather app's real saved places, readings, and alerts.
     weather_state: applications.weather.Store = undefined,
+    /// The contacts book — real people and the non-human principals co-inhabiting the person's world.
+    contacts_state: applications.contacts.Store = undefined,
+    /// Which contact fields the person has granted their agents to read (a field-scoped grant).
+    agent_grant: applications.contacts.FieldSet = .initEmpty(),
     person_replied: bool = false,
     /// Which agent's detail is open (an index into the roster), and which agents the person has paused.
     open_agent: ?usize = null,
@@ -120,11 +124,17 @@ pub const Interaction = struct {
         self.msgs_state = applications.messages.Store.init(gpa);
         self.settings_state = applications.settings.Store.init(gpa);
         self.weather_state = applications.weather.Store.init(gpa, applications.weather.Deterministic.connector());
+        self.contacts_state = applications.contacts.Store.init(gpa);
         // Seed the two agent-to-agent exchanges the thread shows, so the a2a count is real.
         self.msgs_state.recordExchange(.agent, .agent) catch {};
         self.msgs_state.recordExchange(.agent, .agent) catch {};
         // Seed the places the person already saved, and read each so the screen shows a real reading.
         for (weather_places[0..weather_seeded]) |place| self.weatherAdd(place);
+        // Seed the address book: people, and the non-human principals a person co-inhabits with.
+        self.contactsSeed();
+        // The person starts by letting agents read a contact's name and phone, not their private fields.
+        self.agent_grant.insert(.name);
+        self.agent_grant.insert(.phone);
         self.store_ready = true;
     }
 
@@ -134,7 +144,42 @@ pub const Interaction = struct {
             self.msgs_state.deinit();
             self.settings_state.deinit();
             self.weather_state.deinit();
+            self.contacts_state.deinit();
         }
+    }
+
+    /// Seeds the address book through the real contacts store: two people via `contact.add`, and the
+    /// non-human principals via `addPrincipal`, so the "also in your world" section is the store read.
+    fn contactsSeed(self: *Interaction) void {
+        for ([_][]const u8{ "Ana Silva", "Marco Dias" }, 1..) |name, key| {
+            _ = applications.contacts.Store.execute(&self.contacts_state, .{ .operation = "contact.add", .args = name }, .{ .kind = .human, .principal = .{ .value = 0 } }, key);
+        }
+        for (world_principals) |p| self.contacts_state.addPrincipal(p.name, p.kind) catch {};
+    }
+
+    /// The people in the book, read from the real store.
+    pub fn contactPeople(self: *const Interaction, out: [][]const u8) []const []const u8 {
+        if (!self.store_ready) return out[0..0];
+        return self.contacts_state.people(out);
+    }
+
+    /// The non-human principals in the book, read from the real store.
+    pub fn contactWorld(self: *const Interaction, out: [][]const u8) []const []const u8 {
+        if (!self.store_ready) return out[0..0];
+        return self.contacts_state.alsoInYourWorld(out);
+    }
+
+    /// Whether an agent may currently read a contact field, decided by the person's field-scoped grant
+    /// through the domain's own `fieldVisible`.
+    pub fn agentMayRead(self: *const Interaction, field: applications.contacts.Field) bool {
+        return applications.contacts.fieldVisible(self.agent_grant, field);
+    }
+
+    /// Grants or revokes an agent's read of a contact field. A contact's name always stays visible —
+    /// an agent that cannot see who a contact is could not act on it at all.
+    pub fn toggleGrant(self: *Interaction, field: applications.contacts.Field) void {
+        if (field == .name) return;
+        if (self.agent_grant.contains(field)) self.agent_grant.remove(field) else self.agent_grant.insert(field);
     }
 
     /// The cached reading for a saved place, or null if it is not saved yet.
@@ -276,7 +321,7 @@ pub fn renderSurface(gpa: std.mem.Allocator, target: *Framebuffer, host: *Host, 
                 .agent_detail => renderAgentDetail(&screen, host, inter),
                 .calendar => renderCalendar(&screen),
                 .weather => renderWeather(&screen, inter),
-                .contacts => renderContacts(&screen),
+                .contacts => renderContacts(&screen, inter),
                 .files => renderFiles(&screen),
                 .settings => renderSettings(&screen, inter),
                 else => unreachable,
@@ -1077,23 +1122,126 @@ pub fn weatherTap(inter: *Interaction, sx: i32, sy: i32) bool {
     return false;
 }
 
+/// The non-human principals the address book holds — the single source both the seed and the render
+/// read, so the "also in your world" section names exactly what was seeded, with its kind.
+const WorldPrincipal = struct { name: []const u8, kind: applications.contacts.Kind, label: []const u8 };
+const world_principals = [_]WorldPrincipal{
+    .{ .name = "Weather", .kind = .service, .label = "service" },
+    .{ .name = "Living-room display", .kind = .device, .label = "device" },
+    .{ .name = "Kitchen session", .kind = .session, .label = "session" },
+};
+
+/// The contact fields the grant card shows: an agent reads a contact field only if the person has
+/// granted it. Name stays granted always — an agent that cannot see who a contact is cannot act.
+const GrantField = struct { field: applications.contacts.Field, label: []const u8 };
+const grant_fields = [_]GrantField{
+    .{ .field = .name, .label = "Name" },
+    .{ .field = .phone, .label = "Phone" },
+    .{ .field = .email, .label = "Email" },
+    .{ .field = .address, .label = "Address" },
+};
+
+fn contactPersonRect(i: usize) graphics.paint.Rect {
+    return cardRect(150 + @as(i32, @intCast(i)) * (@as(i32, @intFromFloat(u(44))) + 8), @intFromFloat(u(44)));
+}
+
+fn contactGrantRect() graphics.paint.Rect {
+    return cardRect(296, @intFromFloat(u(92)));
+}
+
+fn contactWorldRect(i: usize) graphics.paint.Rect {
+    return cardRect(466 + @as(i32, @intCast(i)) * (@as(i32, @intFromFloat(u(40))) + 8), @intFromFloat(u(40)));
+}
+
+/// The rectangle of the i-th field chip inside the grant card: a 2×2 grid below the card's label.
+fn grantChipRect(i: usize) graphics.paint.Rect {
+    const c = contactGrantRect();
+    const inset = u(14);
+    const gap = u(9);
+    const usable = @as(f32, @floatFromInt(c.w)) - 2 * inset;
+    const chip_w = (usable - gap) / 2;
+    const chip_h = u(24);
+    const col: f32 = @floatFromInt(i % 2);
+    const row: f32 = @floatFromInt(i / 2);
+    return .{
+        .x = c.x + @as(i32, @intFromFloat(inset + col * (chip_w + gap))),
+        .y = c.y + @as(i32, @intFromFloat(u(32) + row * (chip_h + gap))),
+        .w = @intFromFloat(chip_w),
+        .h = @intFromFloat(chip_h),
+    };
+}
+
+fn worldColour(kind: applications.contacts.Kind) design.theme.Colour {
+    return switch (kind) {
+        .service => theme.amber,
+        .device => theme.teal,
+        .session => theme.agent,
+        else => theme.human,
+    };
+}
+
 /// Contacts: people, and — surfaced honestly alongside them — the non-human principals a person
-/// shares their world with.
-pub fn renderContacts(screen: *Framebuffer) void {
-    const people = [_]Row{
-        .{ .title = "Ana Silva", .sub = "mobile \u{00B7} email", .colour = theme.human, .value = "" },
-        .{ .title = "Marco Dias", .sub = "work", .colour = theme.human, .value = "" },
-    };
-    const world = [_]Row{
-        .{ .title = "Weather", .sub = "service", .colour = theme.amber, .value = "" },
-        .{ .title = "Living-room display", .sub = "device", .colour = theme.human, .value = "" },
-        .{ .title = "Kitchen session", .sub = "session", .colour = theme.agent_soft, .value = "" },
-    };
-    const sections = [_]Section{
-        .{ .label = "People", .rows = &people },
-        .{ .label = "Also in your world", .rows = &world },
-    };
-    renderScreen(screen, .{ .title = "Contacts", .sub = "People and principals", .sections = &sections, .agent_tool = "contacts.lookup \u{00B7} agents & principals" });
+/// co-inhabits their world with. The grant card makes field-scoped reads literal: the person grants,
+/// field by field, what their agents may read across the book.
+pub fn renderContacts(screen: *Framebuffer, inter: *const Interaction) void {
+    header(screen, "Contacts", "People, and your world");
+    agentDoorChip(screen, @floatFromInt(pad), u(96), "contact.read \u{00B7} granted fields");
+
+    var name_buf: [8][]const u8 = undefined;
+    const people = inter.contactPeople(&name_buf);
+    for (people, 0..) |name, i| {
+        const rect = card(screen, contactPersonRect(i).y, @intFromFloat(u(44)));
+        _ = text.drawWeighted(screen, @as(f32, @floatFromInt(rect.x)) + u(20), @as(f32, @floatFromInt(rect.y)) + u(28), name, u(14), s(theme.screen_text), .semibold);
+    }
+
+    // The grant card: the fields an agent may read, each a chip the person taps to grant or revoke.
+    const grant = card(screen, contactGrantRect().y, @intFromFloat(u(88)));
+    _ = text.draw(screen, @as(f32, @floatFromInt(grant.x)) + u(14), @as(f32, @floatFromInt(grant.y)) + u(20), "What agents may read", u(11), s(theme.screen_text_muted));
+    for (grant_fields, 0..) |gf, i| {
+        const chip = grantChipRect(i);
+        const granted = inter.agentMayRead(gf.field);
+        const locked = gf.field == .name;
+        const fill = if (granted) s(theme.teal) else s(theme.screen_hairline);
+        paint.paint(screen, &.{.{ .rounded = .{ .rect = chip, .radius = @intFromFloat(u(13)), .colour = fill } }});
+        const label_colour = if (granted) theme.base else theme.screen_text_muted;
+        _ = text.drawWeighted(screen, @as(f32, @floatFromInt(chip.x)) + u(12), @as(f32, @floatFromInt(chip.y)) + u(17), gf.label, u(11), s(label_colour), .semibold);
+        if (locked) {
+            const dot = "\u{00B7} always";
+            _ = text.draw(screen, @as(f32, @floatFromInt(chip.x + @as(i32, @intCast(chip.w)))) - u(8) - text.measure(dot, u(9)), @as(f32, @floatFromInt(chip.y)) + u(17), dot, u(9), s(theme.base));
+        }
+    }
+
+    // Also in your world: the non-human principals, read from the same book, each in its kind's accent.
+    _ = text.draw(screen, @floatFromInt(pad), @as(f32, @floatFromInt(contactWorldRect(0).y)) - u(10), "ALSO IN YOUR WORLD", u(10), s(theme.screen_text_muted));
+    var world_buf: [8][]const u8 = undefined;
+    const world = inter.contactWorld(&world_buf);
+    for (world, 0..) |name, i| {
+        const rect = card(screen, contactWorldRect(i).y, @intFromFloat(u(40)));
+        const label = worldLabel(name);
+        _ = text.drawWeighted(screen, @as(f32, @floatFromInt(rect.x)) + u(20), @as(f32, @floatFromInt(rect.y)) + u(25), name, u(13), s(theme.screen_text), .semibold);
+        _ = text.draw(screen, rightF(rect) - u(16) - text.measure(label.text, u(10)), @as(f32, @floatFromInt(rect.y)) + u(25), label.text, u(10), s(label.colour));
+    }
+}
+
+const WorldLabel = struct { text: []const u8, colour: design.theme.Colour };
+fn worldLabel(name: []const u8) WorldLabel {
+    for (world_principals) |p| {
+        if (std.mem.eql(u8, p.name, name)) return .{ .text = p.label, .colour = worldColour(p.kind) };
+    }
+    return .{ .text = "principal", .colour = theme.human };
+}
+
+/// Grants or revokes an agent's read of the contact field a tap landed on. Returns true when a chip
+/// was hit (the name chip is always granted and does not toggle).
+pub fn contactsTap(inter: *Interaction, sx: i32, sy: i32) bool {
+    for (grant_fields, 0..) |gf, i| {
+        const chip = grantChipRect(i);
+        if (sx >= chip.x and sx <= chip.x + @as(i32, @intCast(chip.w)) and sy >= chip.y and sy <= chip.y + @as(i32, @intCast(chip.h))) {
+            inter.toggleGrant(gf.field);
+            return gf.field != .name;
+        }
+    }
+    return false;
 }
 
 /// The Agents flagship: the roster of agents acting in the person's world, read from the real run —
@@ -1869,6 +2017,26 @@ test "the camera selects a mode and gates capture by the real rule" {
     // Capture proceeds only while the indicator is lit and the app is foreground — the real rule.
     try testing.expect(applications.camera.mayCapture(true, true));
     try testing.expect(!applications.camera.mayCapture(false, true));
+}
+
+test "contacts reads people and principals from the book and grants fields per the domain" {
+    var inter = Interaction{};
+    inter.attach(testing.allocator);
+    defer inter.release();
+    // The book, read live: two people and three non-human co-inhabitants.
+    var buf: [8][]const u8 = undefined;
+    try testing.expectEqual(@as(usize, 2), inter.contactPeople(&buf).len);
+    try testing.expectEqual(@as(usize, 3), inter.contactWorld(&buf).len);
+    // Name and phone start granted; email does not. A tap on the email chip grants it.
+    try testing.expect(inter.agentMayRead(.name));
+    try testing.expect(!inter.agentMayRead(.email));
+    const email_chip = grantChipRect(2);
+    try testing.expect(contactsTap(&inter, email_chip.x + 4, email_chip.y + 4));
+    try testing.expect(inter.agentMayRead(.email));
+    // The name chip never revokes — a contact an agent cannot name it cannot act on.
+    const name_chip = grantChipRect(0);
+    try testing.expect(!contactsTap(&inter, name_chip.x + 4, name_chip.y + 4));
+    try testing.expect(inter.agentMayRead(.name));
 }
 
 test "weather adds an unsaved place and arms an alert, through the real domain" {
