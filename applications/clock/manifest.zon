@@ -1,0 +1,10 @@
+.{
+    // The package identity and declared capabilities for the Clock app. What an agent can discover in
+    // it is exactly what is declared here and verified against its tools. Listing and reading a local
+    // time are silent; adding and removing a world clock are local changes. Nothing is consequential.
+    .name = "Clock",
+    .package = "default.clock",
+    .kind = .default_app,
+    .capabilities = .{ "clock.list", "clock.time", "clock.add", "clock.remove" },
+    .signing = .system_image,
+}
