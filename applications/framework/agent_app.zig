@@ -58,6 +58,24 @@ pub const DataPrivacy = enum {
     }
 };
 
+/// Whether an app's domain needs an external provider to do real work. This is the static
+/// half of the connector story: a local-real app is genuinely on-device and is never
+/// simulated, while a needs-provider app reaches an external service and so runs
+/// connector-pending — a labeled simulator answering — until a real provider is linked, at
+/// which point the same capabilities operate on live data with no code change.
+pub const ConnectorNeed = enum {
+    /// The domain is genuinely local; no external provider, no simulation, ever.
+    local_real,
+    /// The domain reaches an external service; connector-pending until a real provider is
+    /// linked in Settings, then live.
+    needs_provider,
+
+    /// Whether a real provider must be linked before this app can leave connector-pending.
+    pub fn awaitsProvider(need: ConnectorNeed) bool {
+        return need == .needs_provider;
+    }
+};
+
 /// Who is acting through the app: the person, or a specific agent.
 pub const Actor = struct {
     kind: enum { human, agent },
