@@ -5,10 +5,10 @@
 //! This is the "one domain" both doors reach. It holds the real roster and the record of applied
 //! keyed changes. Observing lists the roster and is silent; intervening in an agent's work is
 //! consequential and, for an agent asking, held for the person. The kill switch — ending an agent's
-//! authority at once — is the person's alone: it is not an agent-reachable capability, so no
-//! capability an agent holds can ever reach it, the same way the camera's capture is out of reach.
-//! An agent's kind is neutral to which vendor built it: a cloud model, a local model, and a device
-//! agent are the same kind of participant, governed the same way.
+//! authority at once — is the person's alone: it is structurally ungrantable, named by no agent
+//! capability, so unlike a held operation an agent may request, no capability an agent holds can ever
+//! reach it. An agent's kind is neutral to which vendor built it: a cloud model, a local model, and a
+//! device agent are the same kind of participant, governed the same way.
 //!
 //! This module is the app's real logic and storage; the gating and recording are the framework's.
 
