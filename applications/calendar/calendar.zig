@@ -20,6 +20,7 @@ pub const Recurrence = recurrence_mod.Recurrence;
 pub const Frequency = recurrence_mod.Frequency;
 pub const occurrences = recurrence_mod.occurrences;
 pub const occupies = recurrence_mod.occupies;
+pub const Event = @import("schedule.zig").Event;
 
 pub const tools = [_]framework.Tool{
     .{ .name = "calendar.read", .required_capability = "calendar.read", .effect = .read_only },

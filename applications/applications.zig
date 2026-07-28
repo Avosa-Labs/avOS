@@ -27,6 +27,7 @@ pub const calendar_domain = @import("calendar/domain.zig");
 pub const calendar = @import("calendar/calendar.zig");
 pub const calendar_surface = @import("calendar/surface.zig");
 pub const calendar_recurrence = @import("calendar/recurrence.zig");
+pub const calendar_schedule = @import("calendar/schedule.zig");
 pub const files_domain = @import("files/domain.zig");
 pub const files = @import("files/files.zig");
 pub const files_surface = @import("files/surface.zig");
