@@ -53,6 +53,7 @@ pub const Store = struct {
     gpa: std.mem.Allocator,
     contacts: std.ArrayListUnmanaged(Contact) = .empty,
     applied: std.ArrayListUnmanaged(Applied) = .empty,
+    reply: [16]u8 = undefined,
 
     pub fn init(gpa: std.mem.Allocator) Store {
         return .{ .gpa = gpa };
@@ -102,6 +103,21 @@ pub const Store = struct {
         return out[0..n];
     }
 
+    /// Searches the book for contacts whose name contains `query`, case-insensitively, across both
+    /// people and non-human principals. Matches are written into `out` in book order; an empty query
+    /// matches everything. A search is a silent read — it names contacts, never their private fields.
+    pub fn search(store: Store, query: []const u8, out: [][]const u8) []const []const u8 {
+        var n: usize = 0;
+        for (store.contacts.items) |contact| {
+            if (n >= out.len) break;
+            if (query.len == 0 or std.ascii.indexOfIgnoreCase(contact.name, query) != null) {
+                out[n] = contact.name;
+                n += 1;
+            }
+        }
+        return out[0..n];
+    }
+
     fn find(store: *Store, name: []const u8) ?usize {
         for (store.contacts.items, 0..) |contact, index| {
             if (std.mem.eql(u8, contact.name, name)) return index;
@@ -129,6 +145,14 @@ pub const Store = struct {
 
         if (std.mem.eql(u8, op, "contact.read")) {
             return if (store.find(input.args) != null) .{ .ok = "read" } else .failed;
+        }
+        if (std.mem.eql(u8, op, "contact.search")) {
+            // A silent read: the count of contacts whose name matches, the names themselves read
+            // through `search`.
+            var buffer: [64][]const u8 = undefined;
+            const matches = store.search(input.args, &buffer);
+            const text = std.fmt.bufPrint(&store.reply, "{d}", .{matches.len}) catch return .failed;
+            return .{ .ok = text };
         }
         if (store.priorResult(key)) |prior| return .{ .ok = prior };
         if (std.mem.eql(u8, op, "contact.add")) {
@@ -179,6 +203,29 @@ test "adding and deleting change the real book, exactly once by key" {
     try testing.expectEqual(@as(usize, 1), store.count());
     _ = Store.execute(&store, .{ .operation = "contact.delete", .args = "Ada" }, agent(), 2);
     try testing.expectEqual(@as(usize, 0), store.count());
+}
+
+test "search matches names case-insensitively across people and principals" {
+    const gpa = testing.allocator;
+    var store = Store.init(gpa);
+    defer store.deinit();
+    _ = Store.execute(&store, .{ .operation = "contact.add", .args = "Ana Silva" }, agent(), 1);
+    _ = Store.execute(&store, .{ .operation = "contact.add", .args = "Marco Dias" }, agent(), 2);
+    try store.addPrincipal("Living Room Display", .device);
+
+    var buf: [8][]const u8 = undefined;
+    // Case-insensitive substring, across people and non-human principals.
+    try testing.expectEqual(@as(usize, 1), store.search("silva", &buf).len);
+    try testing.expectEqual(@as(usize, 1), store.search("room", &buf).len);
+    // A shared substring matches more than one — here a person and a non-human principal, both of
+    // whose names contain an "o" that "Ana Silva" does not.
+    try testing.expectEqual(@as(usize, 2), store.search("o", &buf).len);
+    // An empty query matches everything; a miss matches nothing.
+    try testing.expectEqual(@as(usize, 3), store.search("", &buf).len);
+    try testing.expectEqual(@as(usize, 0), store.search("zzz", &buf).len);
+    // The count comes back through the door as a silent read.
+    const result = Store.execute(&store, .{ .operation = "contact.search", .args = "dias" }, agent(), 0);
+    try testing.expectEqualStrings("1", result.ok);
 }
 
 test "sharing a known contact commits once; sharing an unknown one fails" {
