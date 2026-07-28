@@ -6,6 +6,6 @@
     .name = "Camera",
     .package = "default.camera",
     .kind = .default_app,
-    .capabilities = .{ "camera.preview", "camera.review", "camera.share" },
+    .capabilities = .{ "camera.preview", "camera.review", "camera.capture", "camera.share" },
     .signing = .system_image,
 }

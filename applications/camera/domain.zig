@@ -1,10 +1,15 @@
-//! The Camera domain: real shots a person captures and a person or agent reviews and
-//! shares — with capture the person's own act, never an agent's.
+//! The Camera domain: real shots a person or an agent captures, reviews, and shares —
+//! with capture governed, not walled off, so an agent may reach it only under a hold.
 //!
 //! This is the "one domain" both doors reach. It holds the real shots. Previewing and
-//! reviewing are reads; capture appends a shot and is reachable only through the human
-//! door (no agent capability names it); sharing sends a shot outside the device and is
-//! held for the person, exactly-once by key.
+//! reviewing are reads. Capture is a consequential, privacy-sensitive act: an agent may
+//! request it, but every capture is held for the person to approve, and the approval
+//! carries a live preview of the frame so the person blesses an actual image, not an
+//! abstract "camera access." That the camera is reachable under governance rather than
+//! banned is the point — a held, per-use, indicator-lit, ledgered capture is safe by
+//! construction. A person who wants it stricter revokes camera capabilities from their
+//! agents in Settings; the class sets the floor, the person raises it. Sharing sends a
+//! shot outside the device and is likewise held, exactly-once by key.
 //!
 //! This module is the app's real logic and storage; the gating and recording are the
 //! framework's.
@@ -49,6 +54,16 @@ pub fn processingIsLocal(mode: Mode, off_device_grant: bool) bool {
     };
 }
 
+/// What a pending capture would take, surfaced in the approval sheet so a person approves
+/// a real frame rather than an abstract permission. The shell renders the live frame from
+/// this; the domain states that a capture approval must carry it.
+pub const Preview = struct {
+    /// The frame a capture-now would take — its identity, so the sheet shows the actual image.
+    frame_id: u64,
+    width: u16,
+    height: u16,
+};
+
 const Applied = struct { key: u128, result: []const u8 };
 
 pub const Store = struct {
@@ -72,12 +87,19 @@ pub const Store = struct {
         store.applied.append(store.gpa, .{ .key = key, .result = result }) catch return .failed;
         return .{ .ok = result };
     }
-    /// The human door's capture, keyed so a held shutter fires once. Not an agent
-    /// capability; only the person's surface calls this.
+    /// The capture both doors reach, keyed so an approved shutter fires once. The person's
+    /// surface calls it directly; an agent reaches it through `camera.capture`, held for the
+    /// person, so a captured shot is always one the person approved.
     pub fn capture(store: *Store, key: u128) DomainResult {
         if (store.priorResult(key)) |prior| return .{ .ok = prior };
         store.shots += 1;
         return store.commit(key, "captured");
+    }
+
+    /// The preview a pending capture would take, for the approval sheet.
+    pub fn previewOf(store: Store, frame_id: u64) Preview {
+        _ = store;
+        return .{ .frame_id = frame_id, .width = 1440, .height = 1440 };
     }
     /// The one entry point the framework doors reach.
     pub fn execute(context: *anyopaque, input: Input, actor: Actor, key: u128) DomainResult {
@@ -89,6 +111,9 @@ pub const Store = struct {
             const text = std.fmt.bufPrint(&store.reply, "{d}", .{store.shots}) catch return .failed;
             return .{ .ok = text };
         }
+        // Capture: an agent requesting it is held by the framework (external effect); on the
+        // person's approval this runs and appends the shot the person blessed.
+        if (std.mem.eql(u8, op, "camera.capture")) return store.capture(key);
         if (store.priorResult(key)) |prior| return .{ .ok = prior };
         if (std.mem.eql(u8, op, "camera.share")) {
             if (store.shots == 0) return .failed;
@@ -131,4 +156,26 @@ test "Lens and Describe process on the device by default; only a per-use grant l
 test "a Lens or Describe reading is untrusted content" {
     const reading = Understanding{ .text = "A street sign that appears to read Rua Augusta" };
     try testing.expect(reading.untrusted());
+}
+
+test "an agent's capture runs the same domain path as the person's, and once per key" {
+    const gpa = testing.allocator;
+    var store = Store.init(gpa);
+    defer store.deinit();
+    // An approved agent capture goes through the same execute path and appends a real shot.
+    const captured = Store.execute(&store, .{ .operation = "camera.capture", .args = "" }, agent(), 4);
+    try testing.expectEqualStrings("captured", captured.ok);
+    try testing.expectEqual(@as(usize, 1), store.shots);
+    // Exactly-once by key: re-running the approved capture does not double-fire.
+    _ = Store.execute(&store, .{ .operation = "camera.capture", .args = "" }, agent(), 4);
+    try testing.expectEqual(@as(usize, 1), store.shots);
+}
+
+test "a pending capture carries a frame preview for the approval sheet" {
+    const gpa = testing.allocator;
+    var store = Store.init(gpa);
+    defer store.deinit();
+    const preview = store.previewOf(99);
+    try testing.expectEqual(@as(u64, 99), preview.frame_id);
+    try testing.expect(preview.width > 0 and preview.height > 0);
 }

@@ -46,12 +46,18 @@ test "attack: have an agent send a message without the person" {
     }
 }
 
-test "attack: have an agent capture from the camera" {
-    // Capture is the person's alone: it is not among the camera capabilities an agent
-    // can discover or invoke at all, so no capability reaches it.
+test "attack: have an agent capture from the camera silently" {
+    // Capture is governed, not walled off: an agent may request camera.capture, but it is
+    // declared external, so the framework holds it for the person to approve rather than
+    // letting an agent fire the shutter on its own authority.
+    var found = false;
     for (applications.camera.tools) |tool| {
-        try std.testing.expect(!std.mem.eql(u8, tool.name, "camera.capture"));
+        if (std.mem.eql(u8, tool.name, "camera.capture")) {
+            found = true;
+            try std.testing.expect(tool.effect.needsApproval());
+        }
     }
+    try std.testing.expect(found);
 }
 
 test "attack: install an unreviewed package without acknowledgement" {
