@@ -88,6 +88,20 @@ pub const Store = struct {
         return out[0..n];
     }
 
+    /// The people in the book — the human contacts, separated from the non-human principals that
+    /// `alsoInYourWorld` surfaces.
+    pub fn people(store: Store, out: [][]const u8) []const []const u8 {
+        var n: usize = 0;
+        for (store.contacts.items) |contact| {
+            if (n >= out.len) break;
+            if (contact.kind.isHuman()) {
+                out[n] = contact.name;
+                n += 1;
+            }
+        }
+        return out[0..n];
+    }
+
     fn find(store: *Store, name: []const u8) ?usize {
         for (store.contacts.items, 0..) |contact, index| {
             if (std.mem.eql(u8, contact.name, name)) return index;
@@ -176,4 +190,10 @@ test "the non-human principals surface alongside people, honestly separated" {
     try testing.expectEqual(@as(usize, 3), world.len); // the three non-human principals, not Ana
     try testing.expect(Kind.person.isHuman());
     try testing.expect(!Kind.device.isHuman());
+
+    // People reads the other side of the same book: the humans, not the principals.
+    var people_buf: [8][]const u8 = undefined;
+    const humans = store.people(&people_buf);
+    try testing.expectEqual(@as(usize, 1), humans.len);
+    try testing.expectEqualStrings("Ana", humans[0]);
 }
