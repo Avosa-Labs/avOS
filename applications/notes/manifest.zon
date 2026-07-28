@@ -1,0 +1,10 @@
+.{
+    // The package identity and declared capabilities for the Notes app. What an agent can discover in
+    // it is exactly what is declared here and verified against its tools. Reading is silent, creating
+    // and editing are local changes, and deleting a note is held for the person.
+    .name = "Notes",
+    .package = "default.notes",
+    .kind = .default_app,
+    .capabilities = .{ "note.list", "note.read", "note.create", "note.edit", "note.delete" },
+    .signing = .system_image,
+}
