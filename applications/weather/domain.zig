@@ -103,6 +103,20 @@ pub const Store = struct {
         return null;
     }
 
+    /// A short forecast for a location: a series of hourly readings, derived deterministically from
+    /// the current reading through the connector, so the same place forecasts the same. Written into
+    /// `out`, one reading per hour ahead; the sky follows the current one and the temperature drifts
+    /// on a small daily swing.
+    pub fn forecast(store: Store, location: []const u8, out: []Reading) []const Reading {
+        const base = store.connector.current(location);
+        for (out, 0..) |*slot, hour| {
+            // A gentle deterministic swing over the hours: cooler overnight, warmer by afternoon.
+            const swing: i16 = @intCast(@as(i32, @intCast(hour % 8)) - 4);
+            slot.* = .{ .temp_c = base.temp_c + swing, .condition = base.condition };
+        }
+        return out;
+    }
+
     fn recordReading(store: *Store, location: []const u8, reading: Reading) void {
         for (store.cache.items) |*entry| {
             if (std.mem.eql(u8, entry.location, location)) {
@@ -228,4 +242,22 @@ test "a change is exactly-once by key" {
     _ = Store.execute(&store, .{ .operation = "weather.add_location", .args = "Lisbon" }, agent(), 7);
     _ = Store.execute(&store, .{ .operation = "weather.add_location", .args = "Lisbon" }, agent(), 7); // same key: no second effect
     try testing.expectEqual(@as(usize, 1), store.savedCount());
+}
+
+test "a forecast returns a deterministic hourly series for a location" {
+    var store = fixture();
+    defer store.deinit();
+    var out: [12]Reading = undefined;
+    const series = store.forecast("Lisbon", &out);
+    try testing.expectEqual(@as(usize, 12), series.len);
+    // Deterministic: the same place forecasts the same series.
+    var out2: [12]Reading = undefined;
+    const again = store.forecast("Lisbon", &out2);
+    for (series, again) |a, b| try testing.expectEqual(a.temp_c, b.temp_c);
+    // Every reading shares the current sky and stays within the swing of the base.
+    const base = store.connector.current("Lisbon");
+    for (series) |r| {
+        try testing.expectEqual(base.condition, r.condition);
+        try testing.expect(r.temp_c >= base.temp_c - 4 and r.temp_c <= base.temp_c + 4);
+    }
 }
