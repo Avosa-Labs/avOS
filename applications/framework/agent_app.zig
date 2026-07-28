@@ -41,6 +41,16 @@ pub const Effect = registry.Effect;
 /// without importing the system directly.
 pub const settings = core.policy.settings;
 
+/// The slice of the platform an app is allowed to use — calendar dates, time zones, and instants —
+/// re-exported so an app reaches them through the frame rather than importing the core plane
+/// directly. The boundary check forbids an app file its own `@import("core")`; this is how an app
+/// that needs real date-and-time arithmetic gets it without crossing that boundary.
+pub const platform = struct {
+    pub const time = core.time;
+    pub const civil = core.civil;
+    pub const zone = core.zone;
+};
+
 /// How the data an app handles is classified for the model router: whether it may ever leave the
 /// device. An app declares this so the router can honour "this data class never leaves the device"
 /// — the same classification a connector carries, stated at the app so it is discoverable per app.
