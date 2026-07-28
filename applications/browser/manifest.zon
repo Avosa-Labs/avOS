@@ -1,0 +1,11 @@
+.{
+    // The package identity and declared capabilities for the Browser app. What an agent can discover
+    // in it is exactly what is declared here and verified against its tools. Opening, reading, and
+    // bookmarking are a local change or a silent read; granting a site a sensitive permission is the
+    // one consequential capability, held for the person.
+    .name = "Browser",
+    .package = "default.browser",
+    .kind = .default_app,
+    .capabilities = .{ "browser.open", "browser.read_page", "browser.bookmark", "browser.grant_site" },
+    .signing = .system_image,
+}
