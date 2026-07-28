@@ -39,8 +39,8 @@ pub const BindingRegistry = struct {
 
     /// Whether a real provider is linked for an app.
     pub fn isLinked(registry: BindingRegistry, app: []const u8) bool {
-        for (registry.links.items) |link| {
-            if (std.mem.eql(u8, link.app, app)) return true;
+        for (registry.links.items) |entry| {
+            if (std.mem.eql(u8, entry.app, app)) return true;
         }
         return false;
     }
@@ -105,7 +105,7 @@ test "linking an app is exactly-once; re-linking is idempotent" {
 test "a local-real connector is unaffected by binding" {
     var registry = BindingRegistry.init(testing.allocator);
     defer registry.deinit();
-    const local = connector.Connector{ .maturity = .local_real, .data_class = .on_device };
+    const local = connector.Connector{ .maturity = .local_real, .data_class = .on_device_only };
     // Even with a stray link recorded, a local-real app is never flipped or simulated.
     _ = try registry.link("Files", "irrelevant");
     try testing.expectEqual(local, registry.resolve("Files", local));
