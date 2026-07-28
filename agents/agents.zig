@@ -25,6 +25,7 @@ pub const retrieval = @import("retrieval/retrieval.zig");
 pub const knowledge = @import("knowledge/knowledge.zig");
 pub const model_interface = @import("model/interface/interface.zig");
 pub const model_local = @import("model/local/local.zig");
+pub const model_local_gguf = @import("model/local/gguf.zig");
 pub const model_remote = @import("model/remote/remote.zig");
 pub const model_mind = @import("model/mind.zig");
 pub const messaging = @import("messaging/messaging.zig");
@@ -52,6 +53,7 @@ test {
     _ = knowledge;
     _ = model_interface;
     _ = model_local;
+    _ = model_local_gguf;
     _ = model_remote;
     _ = model_mind;
     _ = messaging;
