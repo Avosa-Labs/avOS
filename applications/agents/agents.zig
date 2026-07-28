@@ -27,6 +27,7 @@ pub const TakeoverContext = console.TakeoverContext;
 pub const tools = [_]framework.Tool{
     .{ .name = "agents.observe", .required_capability = "agents.observe", .effect = .read_only },
     .{ .name = "agents.intervene", .required_capability = "agents.intervene", .effect = .external },
+    .{ .name = "agents.request_task", .required_capability = "agents.request_task", .effect = .external },
 };
 
 pub fn open(store: *Store, ledger: *framework.Ledger) App {
@@ -35,10 +36,12 @@ pub fn open(store: *Store, ledger: *framework.Ledger) App {
 
 const testing = std.testing;
 
-test "observing is silent; intervening is consequential and held for an agent" {
+test "observing is silent; reaching into or tasking another agent is held" {
     for (tools) |tool| {
         const held = tool.effect.needsApproval();
-        // Only intervening reaches into an agent's work; observing is a silent read.
-        try testing.expectEqual(std.mem.eql(u8, tool.name, "agents.intervene"), held);
+        // Observing is a silent read; intervening and requesting a task both reach another
+        // agent, so both are held for the person.
+        const reaches = std.mem.eql(u8, tool.name, "agents.intervene") or std.mem.eql(u8, tool.name, "agents.request_task");
+        try testing.expectEqual(reaches, held);
     }
 }

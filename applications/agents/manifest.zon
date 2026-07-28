@@ -8,7 +8,7 @@
     .kind = .default_app,
     // The capabilities this package registers on install. Must match the app's
     // declared tools; a mismatch is a build error via the manifest conformance test.
-    .capabilities = .{ "agents.observe", "agents.intervene" },
+    .capabilities = .{ "agents.observe", "agents.intervene", "agents.request_task" },
     // A default app ships in the signed system image; a Store app additionally carries
     // its own package signature. Present here so the field exists uniformly.
     .signing = .system_image,
