@@ -18,7 +18,7 @@ pub const Actor = framework.Actor;
 pub const DomainResult = framework.DomainResult;
 pub const Input = framework.Input;
 
-const Note = struct { title: []const u8, body: []const u8 };
+const Note = struct { title: []const u8, body: []const u8, pinned: bool = false };
 const Applied = struct { key: u128, result: []const u8 };
 
 /// The part of an argument before the "|": a note's title. Arguments are "title" or "title|body".
@@ -66,6 +66,21 @@ pub const Store = struct {
         return store.notes.items[idx].body;
     }
 
+    /// Whether a note is pinned, or null if there is no such note.
+    pub fn isPinned(store: *Store, title: []const u8) ?bool {
+        const idx = store.find(title) orelse return null;
+        return store.notes.items[idx].pinned;
+    }
+
+    /// How many notes are pinned — the count the notebook surfaces at the top.
+    pub fn pinnedCount(store: Store) usize {
+        var n: usize = 0;
+        for (store.notes.items) |note| {
+            if (note.pinned) n += 1;
+        }
+        return n;
+    }
+
     fn priorResult(store: *Store, key: u128) ?[]const u8 {
         for (store.applied.items) |entry| {
             if (entry.key == key) return entry.result;
@@ -103,6 +118,12 @@ pub const Store = struct {
             const idx = store.find(title) orelse return .failed;
             store.notes.items[idx].body = bodyPart(input.args);
             return store.commit(key, "edited");
+        }
+        if (std.mem.eql(u8, op, "note.pin")) {
+            // Pinning keeps a note at the top — a local change; pinning an already-pinned note is a no-op.
+            const idx = store.find(input.args) orelse return .failed;
+            store.notes.items[idx].pinned = true;
+            return store.commit(key, "pinned");
         }
         if (std.mem.eql(u8, op, "note.delete")) {
             // Deleting a note is irreversible — an agent's delete is held for the person.
@@ -146,4 +167,23 @@ test "creating, reading, editing, and deleting a note change the real notebook, 
     // Reading or editing a missing note fails.
     try testing.expectEqual(DomainResult.failed, Store.execute(&store, .{ .operation = "note.read", .args = "Trip" }, agent(), 0));
     try testing.expectEqual(DomainResult.failed, Store.execute(&store, .{ .operation = "note.edit", .args = "Trip|x" }, agent(), 5));
+}
+
+test "pinning keeps a note marked, and the pinned count reflects it" {
+    const gpa = testing.allocator;
+    var store = Store.init(gpa);
+    defer store.deinit();
+    _ = Store.execute(&store, .{ .operation = "note.create", .args = "Groceries|milk, eggs" }, agent(), 1);
+    _ = Store.execute(&store, .{ .operation = "note.create", .args = "Ideas|a notebook OS" }, agent(), 2);
+    try testing.expectEqual(@as(usize, 0), store.pinnedCount());
+    try testing.expect(!store.isPinned("Ideas").?);
+
+    _ = Store.execute(&store, .{ .operation = "note.pin", .args = "Ideas" }, agent(), 3);
+    try testing.expect(store.isPinned("Ideas").?);
+    try testing.expectEqual(@as(usize, 1), store.pinnedCount());
+    // Pinning again under a new key is a harmless no-op — still one pinned note.
+    _ = Store.execute(&store, .{ .operation = "note.pin", .args = "Ideas" }, agent(), 4);
+    try testing.expectEqual(@as(usize, 1), store.pinnedCount());
+    // Pinning a missing note fails.
+    try testing.expectEqual(DomainResult.failed, Store.execute(&store, .{ .operation = "note.pin", .args = "Ghost" }, agent(), 5));
 }
