@@ -59,6 +59,7 @@ pub const Store = struct {
     gpa: std.mem.Allocator,
     log: std.ArrayListUnmanaged(Call) = .empty,
     screenings: std.ArrayListUnmanaged(Screening) = .empty,
+    blocked: std.ArrayListUnmanaged([]const u8) = .empty,
     applied: std.ArrayListUnmanaged(Applied) = .empty,
     reply: [8]u8 = undefined,
 
@@ -68,11 +69,30 @@ pub const Store = struct {
     pub fn deinit(store: *Store) void {
         store.log.deinit(store.gpa);
         store.screenings.deinit(store.gpa);
+        store.blocked.deinit(store.gpa);
         store.applied.deinit(store.gpa);
         store.* = undefined;
     }
     pub fn calls(store: Store) usize {
         return store.log.items.len;
+    }
+
+    /// Whether a number is on the block list — its calls never reach the person.
+    pub fn isBlocked(store: Store, number: []const u8) bool {
+        for (store.blocked.items) |b| if (std.mem.eql(u8, b, number)) return true;
+        return false;
+    }
+
+    pub fn blockedCount(store: Store) usize {
+        return store.blocked.items.len;
+    }
+
+    /// Whether an incoming call is admitted to the person: a blocked number never is, and otherwise
+    /// the ordinary screening rule decides — a known or verified caller rings through, an unknown one
+    /// is screened. Blocking overrides being known, so a known nuisance number is silenced.
+    pub fn admitsIncoming(store: Store, number: []const u8, caller: Caller) bool {
+        if (store.isBlocked(number)) return false;
+        return ringsThrough(caller);
     }
 
     /// Records the result of an agent screening a screened call, for the person to see live and take
@@ -104,6 +124,13 @@ pub const Store = struct {
         }
         if (std.mem.eql(u8, op, "call.screen")) return .{ .ok = "screened" };
         if (store.priorResult(key)) |prior| return .{ .ok = prior };
+        if (std.mem.eql(u8, op, "call.block")) {
+            // Blocking a number is a local change: its future calls are silenced, never reaching the
+            // person. Blocking an already-blocked number is a harmless no-op.
+            if (input.args.len == 0) return .failed;
+            if (!store.isBlocked(input.args)) store.blocked.append(store.gpa, input.args) catch return .failed;
+            return store.commit(key, "blocked");
+        }
         if (std.mem.eql(u8, op, "call.dial")) {
             if (input.args.len == 0) return .failed;
             // Emergency numbers are outside agent routing entirely: an agent may never place
@@ -147,6 +174,22 @@ test "an agent may not place an emergency call; the person may" {
     // The person places it directly.
     _ = Store.execute(&store, .{ .operation = "call.dial", .args = "112" }, human, 2);
     try testing.expectEqual(@as(usize, 1), store.calls());
+}
+
+test "a blocked number never reaches the person, even a known one" {
+    const gpa = testing.allocator;
+    var store = Store.init(gpa);
+    defer store.deinit();
+    const known: Caller = .{ .known = true, .verified = false }; // would ring through
+    // Before blocking, a known caller from this number is admitted.
+    try testing.expect(store.admitsIncoming("5550101", known));
+    _ = Store.execute(&store, .{ .operation = "call.block", .args = "5550101" }, agent(), 1);
+    _ = Store.execute(&store, .{ .operation = "call.block", .args = "5550101" }, agent(), 1); // same key: no double
+    try testing.expectEqual(@as(usize, 1), store.blockedCount());
+    // After blocking, the same known caller is silenced.
+    try testing.expect(!store.admitsIncoming("5550101", known));
+    // A different number is unaffected and still rings through.
+    try testing.expect(store.admitsIncoming("5550202", known));
 }
 
 test "an agent's screening is untrusted and takeoverable; a call that rings through is not screened" {
