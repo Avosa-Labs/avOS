@@ -12,13 +12,27 @@
 
 const std = @import("std");
 const framework = @import("../framework/agent_app.zig");
+// The platform slice (calendar dates) reached through the frame — an app file may not import the
+// core plane directly, so the framework re-exports what due dates need.
+const core = framework.platform;
 
 pub const Actor = framework.Actor;
 pub const DomainResult = framework.DomainResult;
 pub const Input = framework.Input;
 
-const Task = struct { title: []const u8, done: bool = false };
+const Task = struct { title: []const u8, done: bool = false, due: ?core.civil.Date = null };
 const Applied = struct { key: u128, result: []const u8 };
+
+/// Parses a "YYYY-MM-DD" date, the form a due date is given in. Null on any malformed field.
+fn parseDate(text: []const u8) ?core.civil.Date {
+    var it = std.mem.splitScalar(u8, text, '-');
+    const y = std.fmt.parseInt(i32, it.next() orelse return null, 10) catch return null;
+    const m = std.fmt.parseInt(u8, it.next() orelse return null, 10) catch return null;
+    const d = std.fmt.parseInt(u8, it.next() orelse return null, 10) catch return null;
+    if (it.next() != null) return null;
+    if (m < 1 or m > 12 or d < 1 or d > core.civil.daysInMonth(y, m)) return null;
+    return .{ .year = y, .month = m, .day = d };
+}
 
 pub const Store = struct {
     gpa: std.mem.Allocator,
@@ -45,6 +59,26 @@ pub const Store = struct {
         var n: usize = 0;
         for (store.tasks.items) |task| {
             if (!task.done) n += 1;
+        }
+        return n;
+    }
+
+    /// The due date set on a task, or null if the task has none (or does not exist).
+    pub fn dueOf(store: *Store, title: []const u8) ?core.civil.Date {
+        const idx = store.find(title) orelse return null;
+        return store.tasks.items[idx].due;
+    }
+
+    /// How many open tasks are overdue as of a given day: not done, with a due date strictly before it.
+    /// A task due on the day itself is not yet overdue.
+    pub fn overdueCount(store: Store, as_of: core.civil.Date) usize {
+        const today = core.civil.toDays(as_of);
+        var n: usize = 0;
+        for (store.tasks.items) |task| {
+            if (task.done) continue;
+            if (task.due) |due| {
+                if (core.civil.toDays(due) < today) n += 1;
+            }
         }
         return n;
     }
@@ -89,6 +123,14 @@ pub const Store = struct {
             if (input.args.len == 0 or store.find(input.args) != null) return .failed;
             store.tasks.append(store.gpa, .{ .title = input.args }) catch return .failed;
             return store.commit(key, "added");
+        }
+        if (std.mem.eql(u8, op, "task.due")) {
+            // Setting a due date is a local change. `args` is "title@YYYY-MM-DD".
+            const at = std.mem.indexOfScalar(u8, input.args, '@') orelse return .failed;
+            const idx = store.find(input.args[0..at]) orelse return .failed;
+            const due = parseDate(input.args[at + 1 ..]) orelse return .failed;
+            store.tasks.items[idx].due = due;
+            return store.commit(key, "scheduled");
         }
         if (std.mem.eql(u8, op, "task.complete")) {
             const idx = store.find(input.args) orelse return .failed;
@@ -138,4 +180,27 @@ test "adding, completing, and clearing tasks change the real list, once by key" 
     try testing.expectEqual(@as(usize, 1), store.count());
     // Completing or clearing a missing task fails.
     try testing.expectEqual(DomainResult.failed, Store.execute(&store, .{ .operation = "task.complete", .args = "Ghost" }, agent(), 6));
+}
+
+test "a due date makes a task overdue once the day has passed, and completing clears it" {
+    const gpa = testing.allocator;
+    var store = Store.init(gpa);
+    defer store.deinit();
+    _ = Store.execute(&store, .{ .operation = "task.add", .args = "File taxes" }, agent(), 1);
+    _ = Store.execute(&store, .{ .operation = "task.add", .args = "Renew visa" }, agent(), 2);
+    _ = Store.execute(&store, .{ .operation = "task.due", .args = "File taxes@2026-04-15" }, agent(), 3);
+    _ = Store.execute(&store, .{ .operation = "task.due", .args = "Renew visa@2026-09-01" }, agent(), 4);
+    try testing.expectEqual(core.civil.Date{ .year = 2026, .month = 4, .day = 15 }, store.dueOf("File taxes").?);
+
+    // As of May 1st, taxes are overdue; the visa (September) is not.
+    try testing.expectEqual(@as(usize, 1), store.overdueCount(.{ .year = 2026, .month = 5, .day = 1 }));
+    // On the due day itself a task is not yet overdue.
+    try testing.expectEqual(@as(usize, 0), store.overdueCount(.{ .year = 2026, .month = 4, .day = 15 }));
+    // Completing the overdue task takes it out of the overdue count.
+    _ = Store.execute(&store, .{ .operation = "task.complete", .args = "File taxes" }, agent(), 5);
+    try testing.expectEqual(@as(usize, 0), store.overdueCount(.{ .year = 2026, .month = 5, .day = 1 }));
+
+    // A malformed date is refused, leaving the task's due date unchanged.
+    try testing.expectEqual(DomainResult.failed, Store.execute(&store, .{ .operation = "task.due", .args = "Renew visa@2026-13-40" }, agent(), 6));
+    try testing.expectEqual(core.civil.Date{ .year = 2026, .month = 9, .day = 1 }, store.dueOf("Renew visa").?);
 }
