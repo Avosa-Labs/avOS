@@ -51,6 +51,7 @@ zig-out/
 # Local-only engineering instruction — reference, never commit
 /docs/APPLICATION_LAYER.md
 /docs/Agent-integration.md
+/docs/No-Gated-On-You.md
 
 # Rendered frames written to the repo root by the render steps are build output
 /home.png
