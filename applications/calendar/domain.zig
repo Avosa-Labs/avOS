@@ -12,6 +12,10 @@
 
 const std = @import("std");
 const framework = @import("../framework/agent_app.zig");
+// The platform slice (instants) reached through the frame — an app file may not import the core
+// plane directly, so the framework re-exports what free/busy over real events needs.
+const core = framework.platform;
+const schedule = @import("schedule.zig");
 
 pub const Actor = framework.Actor;
 pub const DomainResult = framework.DomainResult;
@@ -30,6 +34,9 @@ const Applied = struct { key: u128, result: []const u8 };
 pub const Store = struct {
     gpa: std.mem.Allocator,
     events: std.ArrayListUnmanaged(Event) = .empty,
+    /// Real date-and-time events, including recurring ones, resolved through the schedule so free/busy
+    /// is answered over their actual occurrences rather than an abstract slot.
+    scheduled: std.ArrayListUnmanaged(schedule.Event) = .empty,
     applied: std.ArrayListUnmanaged(Applied) = .empty,
 
     pub fn init(gpa: std.mem.Allocator) Store {
@@ -38,12 +45,31 @@ pub const Store = struct {
 
     pub fn deinit(store: *Store) void {
         store.events.deinit(store.gpa);
+        store.scheduled.deinit(store.gpa);
         store.applied.deinit(store.gpa);
         store.* = undefined;
     }
 
     pub fn count(store: Store) usize {
         return store.events.items.len;
+    }
+
+    /// Adds a real date-and-time event (one-off or recurring) to the calendar.
+    pub fn addScheduled(store: *Store, event: schedule.Event) !void {
+        try store.scheduled.append(store.gpa, event);
+    }
+
+    pub fn scheduledCount(store: Store) usize {
+        return store.scheduled.items.len;
+    }
+
+    /// Whether any scheduled event is occupying a real instant — free/busy answered over every event's
+    /// actual occurrences, recurrence and daylight saving already resolved by the schedule.
+    pub fn busyAtInstant(store: Store, at: core.time.Timestamp) bool {
+        for (store.scheduled.items) |event| {
+            if (event.occupies(at)) return true;
+        }
+        return false;
     }
 
     /// The real availability of a slot: busy if any event occupies it.
@@ -176,4 +202,26 @@ test "an empty calendar has no focus blocks" {
     defer store.deinit();
     var buffer: [8]FocusBlock = undefined;
     try testing.expectEqual(@as(usize, 0), store.focusBlocks(&buffer).len);
+}
+
+test "a real datetime event makes the calendar busy at its occurrences" {
+    const gpa = testing.allocator;
+    var store = Store.init(gpa);
+    defer store.deinit();
+    // A daily 09:00 eastern meeting, one hour, for three days.
+    const event = schedule.Event{
+        .start = .{ .date = .{ .year = 2026, .month = 7, .day = 1 }, .hour = 9 },
+        .zone = core.zone.us_eastern,
+        .duration_seconds = 3600,
+        .repeat = .{ .frequency = .daily, .count = 3 },
+    };
+    try store.addScheduled(event);
+    try testing.expectEqual(@as(usize, 1), store.scheduledCount());
+    // Busy at the first occurrence's start; free two hours after it ends.
+    const start = event.occurrenceStart(0).?;
+    try testing.expect(store.busyAtInstant(start));
+    try testing.expect(!store.busyAtInstant(core.time.Timestamp.fromSeconds(start.seconds() + 2 * 3600)));
+    // Busy at the third day's occurrence too — the recurrence is resolved.
+    const third = event.occurrenceStart(2).?;
+    try testing.expect(store.busyAtInstant(third));
 }
