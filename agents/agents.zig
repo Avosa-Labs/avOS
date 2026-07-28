@@ -26,6 +26,7 @@ pub const knowledge = @import("knowledge/knowledge.zig");
 pub const model_interface = @import("model/interface/interface.zig");
 pub const model_local = @import("model/local/local.zig");
 pub const model_remote = @import("model/remote/remote.zig");
+pub const model_mind = @import("model/mind.zig");
 pub const messaging = @import("messaging/messaging.zig");
 pub const conversation = @import("conversation/conversation.zig");
 pub const observation = @import("observation/observation.zig");
@@ -52,6 +53,7 @@ test {
     _ = model_interface;
     _ = model_local;
     _ = model_remote;
+    _ = model_mind;
     _ = messaging;
     _ = conversation;
     _ = observation;
