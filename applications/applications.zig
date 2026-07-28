@@ -61,6 +61,7 @@ pub const agents = @import("agents/agents.zig");
 pub const agents_surface = @import("agents/surface.zig");
 pub const acceptance_tests = @import("tests/acceptance.zig");
 pub const manifest_conformance = @import("tests/manifest_conformance.zig");
+pub const data_privacy = @import("tests/data_privacy.zig");
 pub const agent_classes = @import("tests/agent_classes.zig");
 
 test {
@@ -109,4 +110,5 @@ test {
     _ = acceptance_tests;
     _ = manifest_conformance;
     _ = agent_classes;
+    _ = data_privacy;
 }

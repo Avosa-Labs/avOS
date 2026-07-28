@@ -41,6 +41,23 @@ pub const Effect = registry.Effect;
 /// without importing the system directly.
 pub const settings = core.policy.settings;
 
+/// How the data an app handles is classified for the model router: whether it may ever leave the
+/// device. An app declares this so the router can honour "this data class never leaves the device"
+/// — the same classification a connector carries, stated at the app so it is discoverable per app.
+pub const DataPrivacy = enum {
+    /// The app's data is the person's private world (messages, contacts, files, calendar frames,
+    /// call history): it never leaves the device without a separate, explicit per-use grant.
+    on_device,
+    /// The app's data is inherently public or external (a weather forecast, a web page, a store
+    /// catalogue): it may leave the device under the ordinary authority its operations carry.
+    shareable,
+
+    /// Whether this class may be routed to an off-device model without a per-use grant.
+    pub fn mayLeaveDevice(privacy: DataPrivacy) bool {
+        return privacy == .shareable;
+    }
+};
+
 /// Who is acting through the app: the person, or a specific agent.
 pub const Actor = struct {
     kind: enum { human, agent },
