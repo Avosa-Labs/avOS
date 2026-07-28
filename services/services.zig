@@ -47,6 +47,7 @@ pub const scene_capture = @import("scene/capture.zig");
 pub const file_access = @import("file/access.zig");
 pub const index = @import("index/index.zig");
 pub const media_focus = @import("media/focus.zig");
+pub const media_audio = @import("media/audio.zig");
 pub const locale = @import("localization/locale.zig");
 pub const package_verify = @import("package/verify.zig");
 pub const package_service = @import("package/service.zig");
@@ -111,6 +112,7 @@ test {
     _ = file_access;
     _ = index;
     _ = media_focus;
+    _ = media_audio;
     _ = locale;
     _ = package_verify;
     _ = package_service;
