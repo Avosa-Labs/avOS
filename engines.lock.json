@@ -40,6 +40,19 @@
       "license": "MIT",
       "adapter": "graphics/text/harfbuzz",
       "adr": "docs/decisions/0006-harfbuzz-text-shaping.md"
+    },
+    {
+      "name": "llama-cpp",
+      "role": "local-model",
+      "purpose": "The on-device language-model runtime: llama.cpp loads quantized GGUF weights and generates tokens within a bounded context on commodity CPUs and the device's GPUs. It is the engine below the mind seam — the default agent's mind runs here, on the device, so a person's private world is answered without a request leaving it. Compiled from source behind a Zig adapter that confines its C types.",
+      "upstream": "https://github.com/ggml-org/llama.cpp",
+      "version": "b10173",
+      "commit": "e9fa0781f1c25fc4fe8c86be1edc6970661ad6f0",
+      "source": "https://github.com/ggml-org/llama.cpp/archive/refs/tags/b10173.tar.gz",
+      "sha256": "306867fcb72ab2e5791333d9df5d1170228d44143c34ce272a0c15967b3959a8",
+      "license": "MIT",
+      "adapter": "agents/model/local/llama",
+      "adr": "docs/decisions/0008-llama-cpp-local-model.md"
     }
   ]
 }
