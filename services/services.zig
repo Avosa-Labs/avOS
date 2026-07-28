@@ -31,6 +31,7 @@ pub const account = @import("account/account.zig");
 pub const account_creation = @import("account/creation.zig");
 pub const connectivity = @import("connectivity/connectivity.zig");
 pub const connector = @import("connectivity/connector.zig");
+pub const connector_binding = @import("connectivity/binding.zig");
 pub const device_posture = @import("device/posture.zig");
 pub const session_lock = @import("session/lock.zig");
 pub const session_service = @import("session/service.zig");
@@ -93,6 +94,8 @@ test {
     _ = account;
     _ = account_creation;
     _ = connectivity;
+    _ = connector;
+    _ = connector_binding;
     _ = device_posture;
     _ = session_lock;
     _ = session_service;
