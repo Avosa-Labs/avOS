@@ -1,0 +1,10 @@
+.{
+    // The package identity and declared capabilities for the Health app. What an agent can discover in
+    // it is exactly what is declared here and verified against its tools. Reading the log and a summary
+    // are silent, recording a reading is a local change, and sharing a summary is held for the person.
+    .name = "Health",
+    .package = "default.health",
+    .kind = .default_app,
+    .capabilities = .{ "health.log", "health.summary", "health.record", "health.share" },
+    .signing = .system_image,
+}
