@@ -144,6 +144,11 @@ pub const Store = struct {
             _ = store.contacts.orderedRemove(index);
             return store.commit(key, "deleted");
         }
+        if (std.mem.eql(u8, op, "contact.share")) {
+            // Sharing a contact sends their record outside the device — a consequential
+            // act held for the person, exactly-once by key.
+            return if (store.find(input.args) != null) store.commit(key, "shared") else .failed;
+        }
         return .failed;
     }
 
@@ -174,6 +179,20 @@ test "adding and deleting change the real book, exactly once by key" {
     try testing.expectEqual(@as(usize, 1), store.count());
     _ = Store.execute(&store, .{ .operation = "contact.delete", .args = "Ada" }, agent(), 2);
     try testing.expectEqual(@as(usize, 0), store.count());
+}
+
+test "sharing a known contact commits once; sharing an unknown one fails" {
+    const gpa = testing.allocator;
+    var store = Store.init(gpa);
+    defer store.deinit();
+    _ = Store.execute(&store, .{ .operation = "contact.add", .args = "Ada" }, agent(), 1);
+    const shared = Store.execute(&store, .{ .operation = "contact.share", .args = "Ada" }, agent(), 2);
+    try testing.expectEqualStrings("shared", shared.ok);
+    // Exactly-once by key: the same key does not re-share.
+    const again = Store.execute(&store, .{ .operation = "contact.share", .args = "Ada" }, agent(), 2);
+    try testing.expectEqualStrings("shared", again.ok);
+    // An unknown contact cannot be shared.
+    try testing.expectEqual(DomainResult.failed, Store.execute(&store, .{ .operation = "contact.share", .args = "Nobody" }, agent(), 3));
 }
 
 test "the non-human principals surface alongside people, honestly separated" {
