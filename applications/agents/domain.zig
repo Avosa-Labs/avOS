@@ -118,6 +118,13 @@ pub const Store = struct {
             if (!store.roster.items[index].live) return .failed;
             return store.commit(key, "intervened");
         }
+        if (std.mem.eql(u8, op, "agents.request_task")) {
+            // One agent proposing work to another: held for the person, exactly-once, and
+            // only ever addressed to a live agent on the roster.
+            const index = store.find(input.args) orelse return .failed;
+            if (!store.roster.items[index].live) return .failed;
+            return store.commit(key, "requested");
+        }
         return .failed;
     }
 
@@ -166,4 +173,18 @@ test "observing is silent; intervening is exactly-once by key" {
     _ = Store.execute(&store, .{ .operation = "agents.intervene", .args = "Planner" }, agent(), 5);
     const again = Store.execute(&store, .{ .operation = "agents.intervene", .args = "Planner" }, agent(), 5);
     try testing.expectEqualStrings("intervened", again.ok); // same key, same one result
+}
+
+test "requesting a task addresses only a live agent, exactly-once" {
+    const gpa = testing.allocator;
+    var store = Store.init(gpa);
+    defer store.deinit();
+    try store.enroll("Planner", .cloud_model, .running);
+    const requested = Store.execute(&store, .{ .operation = "agents.request_task", .args = "Planner" }, agent(), 3);
+    try testing.expectEqualStrings("requested", requested.ok);
+    // Exactly-once by key.
+    const again = Store.execute(&store, .{ .operation = "agents.request_task", .args = "Planner" }, agent(), 3);
+    try testing.expectEqualStrings("requested", again.ok);
+    // No such agent, or one that is not live, cannot be tasked.
+    try testing.expectEqual(DomainResult.failed, Store.execute(&store, .{ .operation = "agents.request_task", .args = "Ghost" }, agent(), 4));
 }
