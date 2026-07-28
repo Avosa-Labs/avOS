@@ -62,6 +62,8 @@ pub const Interaction = struct {
     files_state: applications.files.Store = undefined,
     file_opened: ?usize = null,
     file_open_ok: bool = false,
+    /// The calendar's real events, from which each hour's free/busy is computed.
+    calendar_state: applications.calendar.Store = undefined,
     person_replied: bool = false,
     /// Which agent's detail is open (an index into the roster), and which agents the person has paused.
     open_agent: ?usize = null,
@@ -135,6 +137,11 @@ pub const Interaction = struct {
         for (file_entries) |entry| {
             if (applications.files.withinGrant(entry.path)) self.files_state.add(entry.path, entry.is_dir) catch {};
         }
+        self.calendar_state = applications.calendar.Store.init(gpa);
+        // Seed the day: a two-hour block and a meeting, so the day already reads as committed time.
+        for ([_][]const u8{ "Design review@9", "Design review@10", "Team sync@14" }, 1..) |ev, key| {
+            _ = applications.calendar.Store.execute(&self.calendar_state, .{ .operation = "calendar.add", .args = ev }, .{ .kind = .human, .principal = .{ .value = 0 } }, key);
+        }
         // Seed the two agent-to-agent exchanges the thread shows, so the a2a count is real.
         self.msgs_state.recordExchange(.agent, .agent) catch {};
         self.msgs_state.recordExchange(.agent, .agent) catch {};
@@ -156,7 +163,33 @@ pub const Interaction = struct {
             self.weather_state.deinit();
             self.contacts_state.deinit();
             self.files_state.deinit();
+            self.calendar_state.deinit();
         }
+    }
+
+    /// Whether an hour is committed time, computed from the real events by the calendar domain.
+    pub fn slotBusy(self: *const Interaction, slot: u32) bool {
+        if (!self.store_ready) return false;
+        return self.calendar_state.availabilityOf(slot) == .busy;
+    }
+
+    /// The number of focus blocks the day holds — the maximal runs of consecutive busy hours, derived
+    /// from the events, never stored.
+    pub fn focusBlockCount(self: *const Interaction) usize {
+        if (!self.store_ready) return 0;
+        var buffer: [24]applications.calendar.FocusBlock = undefined;
+        return self.calendar_state.focusBlocks(&buffer).len;
+    }
+
+    /// Books focus time on a free hour through the real calendar domain — the same `calendar.add` an
+    /// agent would reach. A busy hour is left as it is. The add arg is a static string, since the
+    /// domain keeps the title by reference; a stack buffer would dangle in the stored event.
+    pub fn bookFocus(self: *Interaction, slot: u32) void {
+        if (!self.store_ready or self.slotBusy(slot)) return;
+        const args = focusArg(slot) orelse return;
+        const key = self.next_key;
+        self.next_key += 1;
+        _ = applications.calendar.Store.execute(&self.calendar_state, .{ .operation = "calendar.add", .args = args }, .{ .kind = .human, .principal = .{ .value = 0 } }, key);
     }
 
     /// Opens the i-th file entry through the real files domain. A path within the grant opens; one that
@@ -352,7 +385,7 @@ pub fn renderSurface(gpa: std.mem.Allocator, target: *Framebuffer, host: *Host, 
                 .camera => renderCamera(&screen, inter),
                 .agents => renderAgents(&screen, host, inter),
                 .agent_detail => renderAgentDetail(&screen, host, inter),
-                .calendar => renderCalendar(&screen),
+                .calendar => renderCalendar(&screen, inter),
                 .weather => renderWeather(&screen, inter),
                 .contacts => renderContacts(&screen, inter),
                 .files => renderFiles(&screen, inter),
@@ -1090,16 +1123,79 @@ pub fn settingsTap(inter: *Interaction, sx: i32, sy: i32) bool {
     return false;
 }
 
-/// Calendar: the day arranged into focus blocks — committed time, in the teal of a done block, and
-/// the one held for the person in the awaiting amber.
-pub fn renderCalendar(screen: *Framebuffer) void {
-    const blocks = [_]Row{
-        .{ .title = "Design review", .sub = "09:00 – 10:30 \u{00B7} focus", .colour = theme.teal, .value = "" },
-        .{ .title = "Lisbon trip planning", .sub = "11:00 – 12:00 \u{00B7} with your agents", .colour = theme.agent, .value = "LIVE" },
-        .{ .title = "Hotel deposit", .sub = "held for you to approve", .colour = theme.amber, .value = "HOLD" },
+/// The working hours the Calendar day shows, and the static `calendar.add` arg for booking focus on
+/// each (the domain keeps a title by reference, so the arg must be a static string, not a buffer).
+const cal_first_hour: u32 = 9;
+const cal_hours: usize = 9; // 09:00 through 17:00
+
+fn focusArg(slot: u32) ?[]const u8 {
+    return switch (slot) {
+        9 => "Focus@9",
+        10 => "Focus@10",
+        11 => "Focus@11",
+        12 => "Focus@12",
+        13 => "Focus@13",
+        14 => "Focus@14",
+        15 => "Focus@15",
+        16 => "Focus@16",
+        17 => "Focus@17",
+        else => null,
     };
-    const sections = [_]Section{.{ .label = "Today \u{00B7} focus blocks", .rows = &blocks }};
-    renderScreen(screen, .{ .title = "Calendar", .sub = "Your day, in blocks", .sections = &sections, .agent_tool = "calendar.read \u{00B7} agents plan here" });
+}
+
+fn calHourRect(i: usize) graphics.paint.Rect {
+    return cardRect(150 + @as(i32, @intCast(i)) * (@as(i32, @intFromFloat(u(32))) + 6), @intFromFloat(u(32)));
+}
+
+/// Calendar: the working day, hour by hour, each free or busy — computed from the real events by the
+/// domain. Committed hours read as focus blocks; a free hour is tappable to book focus, which schedules
+/// it for real and the day recomputes.
+pub fn renderCalendar(screen: *Framebuffer, inter: *const Interaction) void {
+    header(screen, "Calendar", "Your day, in free and busy hours");
+    agentDoorChip(screen, @floatFromInt(pad), u(96), "calendar.freebusy \u{00B7} free or busy");
+
+    var i: usize = 0;
+    while (i < cal_hours) : (i += 1) {
+        const hour: u32 = cal_first_hour + @as(u32, @intCast(i));
+        const rect = card(screen, calHourRect(i).y, @intFromFloat(u(32)));
+        const busy = inter.slotBusy(hour);
+
+        // The hour label on the left.
+        var label_buf: [8]u8 = undefined;
+        const hour_label = std.fmt.bufPrint(&label_buf, "{d:0>2}:00", .{hour}) catch "--:--";
+        _ = text.drawWeighted(screen, @as(f32, @floatFromInt(rect.x)) + u(16), @as(f32, @floatFromInt(rect.y)) + u(21), hour_label, u(12), s(theme.screen_text_muted), .semibold);
+
+        // The slot bar: filled for committed time, an outline the person can tap when free.
+        const bar = graphics.paint.Rect{
+            .x = rect.x + @as(i32, @intFromFloat(u(66))),
+            .y = rect.y + @as(i32, @intFromFloat(u(6))),
+            .w = @intCast(rect.w - @as(u32, @intFromFloat(u(82)))),
+            .h = @intFromFloat(u(20)),
+        };
+        if (busy) {
+            paint.paint(screen, &.{.{ .rounded = .{ .rect = bar, .radius = @intFromFloat(u(7)), .colour = s(theme.agent) } }});
+            _ = text.drawWeighted(screen, @as(f32, @floatFromInt(bar.x)) + u(12), @as(f32, @floatFromInt(bar.y)) + u(15), "Focus block", u(11), s(theme.base), .semibold);
+        } else {
+            paint.paint(screen, &.{.{ .rounded = .{ .rect = bar, .radius = @intFromFloat(u(7)), .colour = s(theme.screen_hairline) } }});
+            _ = text.draw(screen, @as(f32, @floatFromInt(bar.x)) + u(12), @as(f32, @floatFromInt(bar.y)) + u(15), "Free \u{00B7} tap to focus", u(11), s(theme.screen_text_muted));
+        }
+    }
+}
+
+/// Books focus on the free hour a tap landed on, through the real domain. Returns true when a free
+/// hour was hit (a busy one absorbs the tap without change).
+pub fn calendarTap(inter: *Interaction, sx: i32, sy: i32) bool {
+    var i: usize = 0;
+    while (i < cal_hours) : (i += 1) {
+        const rect = calHourRect(i);
+        if (sy >= rect.y and sy <= rect.y + @as(i32, @intCast(rect.h)) and sx >= rect.x and sx <= rightI(rect)) {
+            const hour: u32 = cal_first_hour + @as(u32, @intCast(i));
+            if (inter.slotBusy(hour)) return false;
+            inter.bookFocus(hour);
+            return true;
+        }
+    }
+    return false;
 }
 
 /// The places the Weather app knows: the first `weather_seeded` are saved from the start (read live on
@@ -2085,6 +2181,24 @@ test "the camera selects a mode and gates capture by the real rule" {
     // Capture proceeds only while the indicator is lit and the app is foreground — the real rule.
     try testing.expect(applications.camera.mayCapture(true, true));
     try testing.expect(!applications.camera.mayCapture(false, true));
+}
+
+test "calendar books focus on a free hour and the day recomputes its blocks" {
+    var inter = Interaction{};
+    inter.attach(testing.allocator);
+    defer inter.release();
+    // Seeded: 9 and 10 busy (one block), 14 busy (another) — two focus blocks to start.
+    try testing.expect(inter.slotBusy(9));
+    try testing.expect(!inter.slotBusy(11));
+    try testing.expectEqual(@as(usize, 2), inter.focusBlockCount());
+    // Booking 11 (free) fills it; a tap on a busy hour changes nothing.
+    const free_row = calHourRect(11 - cal_first_hour);
+    try testing.expect(calendarTap(&inter, free_row.x + 80, free_row.y + 8));
+    try testing.expect(inter.slotBusy(11));
+    const busy_row = calHourRect(9 - cal_first_hour);
+    try testing.expect(!calendarTap(&inter, busy_row.x + 80, busy_row.y + 8));
+    // 11 now bridges nothing new (10 was busy, 11 now busy) so 9-11 is one block, 14 another: still 2.
+    try testing.expectEqual(@as(usize, 2), inter.focusBlockCount());
 }
 
 test "files opens an in-grant entry and the grant refuses one that escapes it" {
