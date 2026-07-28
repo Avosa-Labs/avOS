@@ -36,7 +36,7 @@ pub const height: u32 = phone.window_h;
 const max_rows: usize = 6;
 
 /// The surfaces the shell can show.
-pub const Surface = enum { boot, lock, home, library, calculator, activity, approval, principals, store, rest, shutdown, phone, messages, camera, agents, agent_detail, calendar, weather, contacts, files, settings };
+pub const Surface = enum { boot, lock, home, library, calculator, activity, approval, principals, store, rest, shutdown, phone, messages, camera, agents, agent_detail, calendar, weather, contacts, files, settings, browser };
 
 /// The interactive state the shell carries between frames — what a tap has changed on a live surface.
 /// The headless renderer passes a default; the windowed shell owns one and mutates it on input, so a
@@ -64,6 +64,8 @@ pub const Interaction = struct {
     file_open_ok: bool = false,
     /// The calendar's real events, from which each hour's free/busy is computed.
     calendar_state: applications.calendar.Store = undefined,
+    /// The browser's real history, current page, bookmarks, and per-site permissions.
+    browser_state: applications.browser.Store = undefined,
     person_replied: bool = false,
     /// Which agent's detail is open (an index into the roster), and which agents the person has paused.
     open_agent: ?usize = null,
@@ -152,6 +154,9 @@ pub const Interaction = struct {
         // The person starts by letting agents read a contact's name and phone, not their private fields.
         self.agent_grant.insert(.name);
         self.agent_grant.insert(.phone);
+        self.browser_state = applications.browser.Store.init(gpa, applications.browser.Deterministic.engine());
+        // Land on a starting page so the address bar and its projection read live.
+        self.browserOpen(browser_home);
         self.store_ready = true;
     }
 
@@ -164,7 +169,48 @@ pub const Interaction = struct {
             self.contacts_state.deinit();
             self.files_state.deinit();
             self.calendar_state.deinit();
+            self.browser_state.deinit();
         }
+    }
+
+    /// The page the browser is currently on, read from the real browser store.
+    pub fn browserCurrent(self: *const Interaction) ?applications.browser.Page {
+        if (!self.store_ready) return null;
+        return self.browser_state.current;
+    }
+
+    /// Opens a URL through the real browser domain — the same `browser.open` an agent reaches.
+    pub fn browserOpen(self: *Interaction, url: []const u8) void {
+        const key = self.next_key;
+        self.next_key += 1;
+        _ = applications.browser.Store.execute(&self.browser_state, .{ .operation = "browser.open", .args = url }, .{ .kind = .human, .principal = .{ .value = 0 } }, key);
+    }
+
+    pub fn browserBookmarked(self: *const Interaction, url: []const u8) bool {
+        if (!self.store_ready) return false;
+        return self.browser_state.isBookmarked(url);
+    }
+
+    /// Bookmarks the current page through the real domain (add-only, as the domain models it).
+    pub fn browserBookmark(self: *Interaction, url: []const u8) void {
+        if (!self.store_ready or self.browserBookmarked(url)) return;
+        const key = self.next_key;
+        self.next_key += 1;
+        _ = applications.browser.Store.execute(&self.browser_state, .{ .operation = "browser.bookmark", .args = url }, .{ .kind = .human, .principal = .{ .value = 0 } }, key);
+    }
+
+    pub fn siteHas(self: *const Interaction, url: []const u8, permission: applications.browser.Permission) bool {
+        if (!self.store_ready) return false;
+        return self.browser_state.hasPermission(url, permission);
+    }
+
+    /// Grants the current site a sensitive permission through the real domain. This is the person's own
+    /// grant, immediate; the same act proposed by an agent is held for the person by the frame.
+    pub fn grantSite(self: *Interaction, url_perm: []const u8) void {
+        if (!self.store_ready) return;
+        const key = self.next_key;
+        self.next_key += 1;
+        _ = applications.browser.Store.execute(&self.browser_state, .{ .operation = "browser.grant_site", .args = url_perm }, .{ .kind = .human, .principal = .{ .value = 0 } }, key);
     }
 
     /// Whether an hour is committed time, computed from the real events by the calendar domain.
@@ -390,6 +436,7 @@ pub fn renderSurface(gpa: std.mem.Allocator, target: *Framebuffer, host: *Host, 
                 .contacts => renderContacts(&screen, inter),
                 .files => renderFiles(&screen, inter),
                 .settings => renderSettings(&screen, inter),
+                .browser => renderBrowser(&screen, inter),
                 else => unreachable,
             }
             phone.homeIndicator(&screen);
@@ -787,7 +834,8 @@ pub fn appSurface(app: iconography.App) ?Surface {
         .weather => .weather,
         .store => .store,
         .calculator => .calculator,
-        .browser, .health, .mail, .notes, .maps => null,
+        .browser => .browser,
+        .health, .mail, .notes, .maps => null,
     };
 }
 
@@ -1192,6 +1240,150 @@ pub fn calendarTap(inter: *Interaction, sx: i32, sy: i32) bool {
             const hour: u32 = cal_first_hour + @as(u32, @intCast(i));
             if (inter.slotBusy(hour)) return false;
             inter.bookFocus(hour);
+            return true;
+        }
+    }
+    return false;
+}
+
+/// The pages the Browser knows: a small set the person can open, each carrying the static grant args
+/// for its origin (the domain keeps an origin by reference, so the arg must be a static string). The
+/// grants are ordered to match the Permission enum — location, camera, notifications.
+const browser_home = "https://lisbon.example/guide";
+const BrowserLink = struct { url: []const u8, label: []const u8, host: []const u8, grants: [3][]const u8 };
+const browser_links = [_]BrowserLink{
+    .{ .url = "https://lisbon.example/guide", .label = "Lisbon travel guide", .host = "lisbon.example", .grants = .{ "https://lisbon.example/guide|location", "https://lisbon.example/guide|camera", "https://lisbon.example/guide|notifications" } },
+    .{ .url = "https://trains.example/pt", .label = "Portugal rail times", .host = "trains.example", .grants = .{ "https://trains.example/pt|location", "https://trains.example/pt|camera", "https://trains.example/pt|notifications" } },
+    .{ .url = "https://weather.example/lisbon", .label = "Lisbon weather", .host = "weather.example", .grants = .{ "https://weather.example/lisbon|location", "https://weather.example/lisbon|camera", "https://weather.example/lisbon|notifications" } },
+};
+
+const BrowserPerm = struct { perm: applications.browser.Permission, label: []const u8 };
+const browser_perms = [_]BrowserPerm{
+    .{ .perm = .location, .label = "Location" },
+    .{ .perm = .camera, .label = "Camera" },
+    .{ .perm = .notifications, .label = "Alerts" },
+};
+
+fn browserLinkIndex(inter: *const Interaction) usize {
+    const page = inter.browserCurrent() orelse return 0;
+    for (browser_links, 0..) |link, i| {
+        if (std.mem.eql(u8, link.url, page.url)) return i;
+    }
+    return 0;
+}
+
+fn browserPageLabel(kind: applications.browser.PageKind) []const u8 {
+    return switch (kind) {
+        .article => "Article",
+        .search => "Search",
+        .video => "Video",
+        .shop => "Shop",
+        .docs => "Docs",
+    };
+}
+
+fn browserAddrRect() graphics.paint.Rect {
+    return cardRect(148, @intFromFloat(u(62)));
+}
+
+fn browserBookmarkRect() graphics.paint.Rect {
+    const addr = browserAddrRect();
+    const w_px: i32 = @intFromFloat(u(60));
+    const h_px: i32 = @intFromFloat(u(28));
+    return .{ .x = rightI(addr) - @as(i32, @intFromFloat(u(14))) - w_px, .y = addr.y + @divTrunc(@as(i32, @intCast(addr.h)) - h_px, 2), .w = @intCast(w_px), .h = @intCast(h_px) };
+}
+
+fn browserLinkRect(i: usize) graphics.paint.Rect {
+    return cardRect(244 + @as(i32, @intCast(i)) * (@as(i32, @intFromFloat(u(46))) + 8), @intFromFloat(u(46)));
+}
+
+fn browserPermCardRect() graphics.paint.Rect {
+    return cardRect(462, @intFromFloat(u(70)));
+}
+
+fn browserPermRect(i: usize) graphics.paint.Rect {
+    const c = browserPermCardRect();
+    const inset = u(12);
+    const gap = u(8);
+    const usable = @as(f32, @floatFromInt(c.w)) - 2 * inset;
+    const chip_w = (usable - 2 * gap) / 3;
+    const chip_h = u(26);
+    const col: f32 = @floatFromInt(i);
+    return .{
+        .x = c.x + @as(i32, @intFromFloat(inset + col * (chip_w + gap))),
+        .y = c.y + @as(i32, @intFromFloat(u(32))),
+        .w = @intFromFloat(chip_w),
+        .h = @intFromFloat(chip_h),
+    };
+}
+
+/// Browser: the address the person is on read as a projection, the pages they can open, and what the
+/// current site has been granted. Every read and change goes through the app's real browser domain.
+pub fn renderBrowser(screen: *Framebuffer, inter: *const Interaction) void {
+    header(screen, "Browser", "The web, read as a projection");
+    agentDoorChip(screen, @floatFromInt(pad), u(96), "browser.read_page \u{00B7} projected");
+
+    const cur = browserLinkIndex(inter);
+    const link = browser_links[cur];
+
+    // The address card: the current host, the page projection, and a bookmark control.
+    const addr = card(screen, browserAddrRect().y, @intFromFloat(u(62)));
+    _ = text.drawWeighted(screen, @as(f32, @floatFromInt(addr.x)) + u(16), @as(f32, @floatFromInt(addr.y)) + u(24), link.host, u(13), s(theme.screen_text), .semibold);
+    if (inter.browserCurrent()) |page| {
+        var proj_buf: [40]u8 = undefined;
+        const proj = std.fmt.bufPrint(&proj_buf, "{s} \u{00B7} {d} words", .{ browserPageLabel(page.kind), page.words }) catch browserPageLabel(page.kind);
+        _ = text.draw(screen, @as(f32, @floatFromInt(addr.x)) + u(16), @as(f32, @floatFromInt(addr.y)) + u(42), proj, u(10.5), s(theme.screen_text_muted));
+    }
+    const bm = browserBookmarkRect();
+    const saved = inter.browserBookmarked(link.url);
+    paint.paint(screen, &.{.{ .rounded = .{ .rect = bm, .radius = @intFromFloat(u(14)), .colour = if (saved) s(theme.agent) else s(theme.screen_hairline) } }});
+    const bm_label = if (saved) "Saved" else "Save";
+    _ = text.drawWeighted(screen, @as(f32, @floatFromInt(bm.x)) + (@as(f32, @floatFromInt(bm.w)) - text.measureWeighted(bm_label, u(11), .semibold)) / 2.0, @as(f32, @floatFromInt(bm.y)) + u(19), bm_label, u(11), s(if (saved) theme.base else theme.screen_text_muted), .semibold);
+
+    // The pages the person can open; the current one is marked.
+    for (browser_links, 0..) |l, i| {
+        const rect = card(screen, browserLinkRect(i).y, @intFromFloat(u(46)));
+        _ = text.drawWeighted(screen, @as(f32, @floatFromInt(rect.x)) + u(18), @as(f32, @floatFromInt(rect.y)) + u(28), l.label, u(13), s(theme.screen_text), if (i == cur) .semibold else .regular);
+        const marker = if (i == cur) "Open" else "\u{203A}";
+        const marker_colour = if (i == cur) theme.teal else theme.screen_text_muted;
+        _ = text.drawWeighted(screen, rightF(rect) - u(18) - text.measureWeighted(marker, u(11), .semibold), @as(f32, @floatFromInt(rect.y)) + u(28), marker, u(11), s(marker_colour), .semibold);
+    }
+
+    // What the current site has been granted — each a chip the person taps to grant.
+    const perm_card = card(screen, browserPermCardRect().y, @intFromFloat(u(70)));
+    _ = text.draw(screen, @as(f32, @floatFromInt(perm_card.x)) + u(14), @as(f32, @floatFromInt(perm_card.y)) + u(20), "This site can", u(11), s(theme.screen_text_muted));
+    for (browser_perms, 0..) |bp, i| {
+        const chip = browserPermRect(i);
+        const granted = inter.siteHas(link.url, bp.perm);
+        paint.paint(screen, &.{.{ .rounded = .{ .rect = chip, .radius = @intFromFloat(u(13)), .colour = if (granted) s(theme.teal) else s(theme.screen_hairline) } }});
+        _ = text.drawWeighted(screen, @as(f32, @floatFromInt(chip.x)) + (@as(f32, @floatFromInt(chip.w)) - text.measureWeighted(bp.label, u(10.5), .semibold)) / 2.0, @as(f32, @floatFromInt(chip.y)) + u(17), bp.label, u(10.5), s(if (granted) theme.base else theme.screen_text_muted), .semibold);
+    }
+}
+
+/// Opens a page, bookmarks the current one, or grants the current site a permission — whichever the
+/// tap landed on. Returns true when a browser control was hit.
+pub fn browserTap(inter: *Interaction, sx: i32, sy: i32) bool {
+    const cur = browserLinkIndex(inter);
+    const link = browser_links[cur];
+    // The bookmark control.
+    const bm = browserBookmarkRect();
+    if (sx >= bm.x and sx <= bm.x + @as(i32, @intCast(bm.w)) and sy >= bm.y and sy <= bm.y + @as(i32, @intCast(bm.h))) {
+        inter.browserBookmark(link.url);
+        return true;
+    }
+    // A page to open.
+    for (browser_links, 0..) |l, i| {
+        const rect = browserLinkRect(i);
+        if (sy >= rect.y and sy <= rect.y + @as(i32, @intCast(rect.h)) and sx >= rect.x and sx <= rightI(rect)) {
+            inter.browserOpen(l.url);
+            return true;
+        }
+    }
+    // A permission to grant the current site.
+    for (browser_perms, 0..) |bp, i| {
+        const chip = browserPermRect(i);
+        if (sx >= chip.x and sx <= chip.x + @as(i32, @intCast(chip.w)) and sy >= chip.y and sy <= chip.y + @as(i32, @intCast(chip.h))) {
+            if (!inter.siteHas(link.url, bp.perm)) inter.grantSite(link.grants[@intFromEnum(bp.perm)]);
             return true;
         }
     }
@@ -2181,6 +2373,28 @@ test "the camera selects a mode and gates capture by the real rule" {
     // Capture proceeds only while the indicator is lit and the app is foreground — the real rule.
     try testing.expect(applications.camera.mayCapture(true, true));
     try testing.expect(!applications.camera.mayCapture(false, true));
+}
+
+test "browser opens a page, bookmarks it, and grants the site a permission through the domain" {
+    var inter = Interaction{};
+    inter.attach(testing.allocator);
+    defer inter.release();
+    // It lands on the home page; opening another page changes the current link.
+    try testing.expectEqual(@as(usize, 0), browserLinkIndex(&inter));
+    const second = browserLinkRect(1);
+    try testing.expect(browserTap(&inter, second.x + 20, second.y + 10));
+    try testing.expectEqual(@as(usize, 1), browserLinkIndex(&inter));
+    // Bookmarking the current page marks it through the real domain.
+    const link = browser_links[1];
+    try testing.expect(!inter.browserBookmarked(link.url));
+    const bm = browserBookmarkRect();
+    try testing.expect(browserTap(&inter, bm.x + 5, bm.y + 5));
+    try testing.expect(inter.browserBookmarked(link.url));
+    // Granting the current site a permission marks its whole origin.
+    try testing.expect(!inter.siteHas(link.url, .location));
+    const loc_chip = browserPermRect(0);
+    try testing.expect(browserTap(&inter, loc_chip.x + 5, loc_chip.y + 5));
+    try testing.expect(inter.siteHas(link.url, .location));
 }
 
 test "calendar books focus on a free hour and the day recomputes its blocks" {
