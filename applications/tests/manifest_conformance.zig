@@ -52,4 +52,5 @@ test "each default app's manifest declares exactly its exported capabilities" {
     try expectConforms(@import("../notes/manifest.zon"), apps.notes.tools);
     try expectConforms(@import("../tasks/manifest.zon"), apps.tasks.tools);
     try expectConforms(@import("../browser/manifest.zon"), apps.browser.tools);
+    try expectConforms(@import("../photos/manifest.zon"), apps.photos.tools);
 }
