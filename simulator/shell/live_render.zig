@@ -52,6 +52,8 @@ pub const Interaction = struct {
     msgs_state: applications.messages.Store = undefined,
     /// The settings' real values, so a toggle actually changes one.
     settings_state: applications.settings.Store = undefined,
+    /// The weather app's real saved places, readings, and alerts.
+    weather_state: applications.weather.Store = undefined,
     person_replied: bool = false,
     /// Which agent's detail is open (an index into the roster), and which agents the person has paused.
     open_agent: ?usize = null,
@@ -117,9 +119,12 @@ pub const Interaction = struct {
         self.store_state = applications.store.Store.init(gpa);
         self.msgs_state = applications.messages.Store.init(gpa);
         self.settings_state = applications.settings.Store.init(gpa);
+        self.weather_state = applications.weather.Store.init(gpa, applications.weather.Deterministic.connector());
         // Seed the two agent-to-agent exchanges the thread shows, so the a2a count is real.
         self.msgs_state.recordExchange(.agent, .agent) catch {};
         self.msgs_state.recordExchange(.agent, .agent) catch {};
+        // Seed the places the person already saved, and read each so the screen shows a real reading.
+        for (weather_places[0..weather_seeded]) |place| self.weatherAdd(place);
         self.store_ready = true;
     }
 
@@ -128,7 +133,44 @@ pub const Interaction = struct {
             self.store_state.deinit();
             self.msgs_state.deinit();
             self.settings_state.deinit();
+            self.weather_state.deinit();
         }
+    }
+
+    /// The cached reading for a saved place, or null if it is not saved yet.
+    pub fn weatherReading(self: *const Interaction, location: []const u8) ?applications.weather.Reading {
+        if (!self.store_ready) return null;
+        const c = self.weather_state.cached(location) orelse return null;
+        return c.reading;
+    }
+
+    pub fn weatherSaved(self: *const Interaction, location: []const u8) bool {
+        return self.weatherReading(location) != null;
+    }
+
+    pub fn weatherHasAlert(self: *const Interaction, location: []const u8) bool {
+        if (!self.store_ready) return false;
+        return self.weather_state.hasAlert(location);
+    }
+
+    /// Saves a place through the real weather domain and reads its current sky, so the screen shows a
+    /// live reading — the same `weather.add_location` and `weather.current` an agent would reach.
+    pub fn weatherAdd(self: *Interaction, location: []const u8) void {
+        var key = self.next_key;
+        self.next_key += 1;
+        _ = applications.weather.Store.execute(&self.weather_state, .{ .operation = "weather.add_location", .args = location }, .{ .kind = .human, .principal = .{ .value = 0 } }, key);
+        key = self.next_key;
+        self.next_key += 1;
+        _ = applications.weather.Store.execute(&self.weather_state, .{ .operation = "weather.current", .args = location }, .{ .kind = .human, .principal = .{ .value = 0 } }, key);
+    }
+
+    /// Turns on severe-weather alerts for a saved place through the real domain (enable-only, as the
+    /// domain models it — an alert is armed, not toggled off from here).
+    pub fn weatherAlert(self: *Interaction, location: []const u8) void {
+        if (!self.store_ready) return;
+        const key = self.next_key;
+        self.next_key += 1;
+        _ = applications.weather.Store.execute(&self.weather_state, .{ .operation = "weather.enable_alert", .args = location }, .{ .kind = .human, .principal = .{ .value = 0 } }, key);
     }
 
     /// The current value of a setting from the real settings store.
@@ -233,7 +275,7 @@ pub fn renderSurface(gpa: std.mem.Allocator, target: *Framebuffer, host: *Host, 
                 .agents => renderAgents(&screen, host, inter),
                 .agent_detail => renderAgentDetail(&screen, host, inter),
                 .calendar => renderCalendar(&screen),
-                .weather => renderWeather(&screen),
+                .weather => renderWeather(&screen, inter),
                 .contacts => renderContacts(&screen),
                 .files => renderFiles(&screen),
                 .settings => renderSettings(&screen, inter),
@@ -947,15 +989,92 @@ pub fn renderCalendar(screen: *Framebuffer) void {
     renderScreen(screen, .{ .title = "Calendar", .sub = "Your day, in blocks", .sections = &sections, .agent_tool = "calendar.read \u{00B7} agents plan here" });
 }
 
-/// Weather: saved locations and their current reading, external data an agent may retrieve.
-pub fn renderWeather(screen: *Framebuffer) void {
-    const places = [_]Row{
-        .{ .title = "Lisbon", .sub = "Clear \u{00B7} light breeze", .colour = theme.amber, .value = "24\u{00B0}" },
-        .{ .title = "Porto", .sub = "Cloudy", .colour = theme.human, .value = "19\u{00B0}" },
-        .{ .title = "Home", .sub = "Rain later", .colour = theme.human, .value = "17\u{00B0}" },
+/// The places the Weather app knows: the first `weather_seeded` are saved from the start (read live on
+/// attach); the rest are offered as places the person can add, which saves and reads them for real.
+const weather_places = [_][]const u8{ "Lisbon", "Porto", "Sintra" };
+const weather_seeded: usize = 2;
+
+fn weatherRowRect(i: usize) graphics.paint.Rect {
+    return cardRect(172 + @as(i32, @intCast(i)) * (@as(i32, @intFromFloat(u(60))) + 8), @intFromFloat(u(60)));
+}
+
+/// The tappable control on the right of a place row: an alert bell for a saved place, an add pill for
+/// one not saved yet.
+fn weatherActionRect(i: usize) graphics.paint.Rect {
+    const rect = weatherRowRect(i);
+    const w_px: i32 = @intFromFloat(u(64));
+    const h_px: i32 = @intFromFloat(u(30));
+    return .{ .x = rightI(rect) - @as(i32, @intFromFloat(u(16))) - w_px, .y = rect.y + @divTrunc(@as(i32, @intCast(rect.h)) - h_px, 2), .w = @intCast(w_px), .h = @intCast(h_px) };
+}
+
+fn weatherLabel(condition: applications.weather.Condition) []const u8 {
+    return switch (condition) {
+        .clear => "Clear",
+        .cloudy => "Cloudy",
+        .rain => "Rain",
+        .snow => "Snow",
+        .storm => "Storm",
     };
-    const sections = [_]Section{.{ .label = "Your places", .rows = &places }};
-    renderScreen(screen, .{ .title = "Weather", .sub = "Saved locations", .sections = &sections, .agent_tool = "weather.read \u{00B7} open to agents" });
+}
+
+fn weatherColour(condition: applications.weather.Condition) design.theme.Colour {
+    return switch (condition) {
+        .clear => theme.amber,
+        .cloudy => theme.human,
+        .rain => theme.teal,
+        .snow => theme.human,
+        .storm => theme.denied,
+    };
+}
+
+/// Weather: saved places with their real reading, each with an alert the person can arm, and places
+/// they can add. Every reading and change goes through the app's real weather domain.
+pub fn renderWeather(screen: *Framebuffer, inter: *const Interaction) void {
+    header(screen, "Weather", "Your places, read live");
+    agentDoorChip(screen, @floatFromInt(pad), u(96), "weather.read \u{00B7} open to agents");
+
+    for (weather_places, 0..) |place, i| {
+        const rect = card(screen, weatherRowRect(i).y, @intFromFloat(u(60)));
+        const left = @as(f32, @floatFromInt(rect.x)) + u(20);
+        _ = text.drawWeighted(screen, left, @as(f32, @floatFromInt(rect.y)) + u(26), place, u(15), s(theme.screen_text), .semibold);
+
+        const action = weatherActionRect(i);
+        if (inter.weatherReading(place)) |reading| {
+            // A saved place: its live reading, and an alert the person can arm.
+            var sub_buf: [40]u8 = undefined;
+            const sub = std.fmt.bufPrint(&sub_buf, "{s} \u{00B7} {d}\u{00B0}", .{ weatherLabel(reading.condition), reading.temp_c }) catch weatherLabel(reading.condition);
+            _ = text.draw(screen, left, @as(f32, @floatFromInt(rect.y)) + u(44), sub, u(11), s(weatherColour(reading.condition)));
+
+            const armed = inter.weatherHasAlert(place);
+            const track = if (armed) s(theme.amber) else s(theme.screen_hairline);
+            paint.paint(screen, &.{.{ .rounded = .{ .rect = action, .radius = @intFromFloat(u(15)), .colour = track } }});
+            const badge = if (armed) "Alerting" else "Alert";
+            const badge_colour = if (armed) theme.base else theme.screen_text_muted;
+            _ = text.drawWeighted(screen, @as(f32, @floatFromInt(action.x)) + (@as(f32, @floatFromInt(action.w)) - text.measureWeighted(badge, u(11), .semibold)) / 2.0, @as(f32, @floatFromInt(action.y)) + u(20), badge, u(11), s(badge_colour), .semibold);
+        } else {
+            // A place not saved yet: an add pill that saves and reads it for real.
+            _ = text.draw(screen, left, @as(f32, @floatFromInt(rect.y)) + u(44), "not saved", u(11), s(theme.screen_text_muted));
+            paint.paint(screen, &.{.{ .rounded = .{ .rect = action, .radius = @intFromFloat(u(15)), .colour = s(theme.teal) } }});
+            _ = text.drawWeighted(screen, @as(f32, @floatFromInt(action.x)) + (@as(f32, @floatFromInt(action.w)) - text.measureWeighted("Add", u(11), .semibold)) / 2.0, @as(f32, @floatFromInt(action.y)) + u(20), "Add", u(11), s(theme.base), .semibold);
+        }
+    }
+}
+
+/// Arms an alert on a saved place, or adds an unsaved one — whichever the tapped row offers. Returns
+/// true when a tap landed on a place's action.
+pub fn weatherTap(inter: *Interaction, sx: i32, sy: i32) bool {
+    for (weather_places, 0..) |place, i| {
+        const action = weatherActionRect(i);
+        if (sy >= action.y and sy <= action.y + @as(i32, @intCast(action.h)) and sx >= action.x and sx <= action.x + @as(i32, @intCast(action.w))) {
+            if (inter.weatherSaved(place)) {
+                if (!inter.weatherHasAlert(place)) inter.weatherAlert(place);
+            } else {
+                inter.weatherAdd(place);
+            }
+            return true;
+        }
+    }
+    return false;
 }
 
 /// Contacts: people, and — surfaced honestly alongside them — the non-human principals a person
@@ -1750,6 +1869,27 @@ test "the camera selects a mode and gates capture by the real rule" {
     // Capture proceeds only while the indicator is lit and the app is foreground — the real rule.
     try testing.expect(applications.camera.mayCapture(true, true));
     try testing.expect(!applications.camera.mayCapture(false, true));
+}
+
+test "weather adds an unsaved place and arms an alert, through the real domain" {
+    var inter = Interaction{};
+    inter.attach(testing.allocator);
+    defer inter.release();
+    // Sintra starts unsaved; a tap on its action adds it and reads a real reading.
+    const sintra = "Sintra";
+    try testing.expect(!inter.weatherSaved(sintra));
+    const add_action = weatherActionRect(2);
+    try testing.expect(weatherTap(&inter, add_action.x + 5, add_action.y + 5));
+    try testing.expect(inter.weatherSaved(sintra));
+    try testing.expect(inter.weatherReading(sintra) != null);
+    // A saved place with no alert arms one on tap; a second tap leaves it armed (enable-only).
+    const lisbon = "Lisbon";
+    try testing.expect(!inter.weatherHasAlert(lisbon));
+    const alert_action = weatherActionRect(0);
+    try testing.expect(weatherTap(&inter, alert_action.x + 5, alert_action.y + 5));
+    try testing.expect(inter.weatherHasAlert(lisbon));
+    try testing.expect(weatherTap(&inter, alert_action.x + 5, alert_action.y + 5));
+    try testing.expect(inter.weatherHasAlert(lisbon));
 }
 
 test "settings toggles an open setting through the domain and refuses a sensitive one" {
