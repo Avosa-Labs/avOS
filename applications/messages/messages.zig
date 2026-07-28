@@ -27,6 +27,7 @@ pub const App = framework.App;
 /// drafting are the agent's own; sending is external and therefore held for the person.
 pub const tools = [_]framework.Tool{
     .{ .name = "message.search", .required_capability = "messages.read", .effect = .read_only },
+    .{ .name = "message.read", .required_capability = "messages.read", .effect = .read_only },
     .{ .name = "message.draft", .required_capability = "messages.compose", .effect = .local_mutation },
     .{ .name = "message.send", .required_capability = "messages.send", .effect = .external },
 };
