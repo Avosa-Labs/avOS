@@ -81,6 +81,7 @@ pub fn originOf(url: []const u8) []const u8 {
 }
 
 const Grant = struct { origin: []const u8, permission: Permission };
+const Field = struct { name: []const u8, value: []const u8 };
 const Applied = struct { key: u128, result: []const u8 };
 
 pub const Store = struct {
@@ -89,6 +90,9 @@ pub const Store = struct {
     history: std.ArrayListUnmanaged([]const u8) = .empty,
     bookmarks: std.ArrayListUnmanaged([]const u8) = .empty,
     grants: std.ArrayListUnmanaged(Grant) = .empty,
+    /// The form fields filled on the current page, awaiting a submit. Filling is local; only the
+    /// submit that sends them off the device is consequential.
+    filled: std.ArrayListUnmanaged(Field) = .empty,
     applied: std.ArrayListUnmanaged(Applied) = .empty,
     current: ?Page = null,
     reply: [48]u8 = undefined,
@@ -101,8 +105,22 @@ pub const Store = struct {
         store.history.deinit(store.gpa);
         store.bookmarks.deinit(store.gpa);
         store.grants.deinit(store.gpa);
+        store.filled.deinit(store.gpa);
         store.applied.deinit(store.gpa);
         store.* = undefined;
+    }
+
+    /// How many form fields are filled on the current page and waiting to be submitted.
+    pub fn filledCount(store: Store) usize {
+        return store.filled.items.len;
+    }
+
+    /// The value filled into a named field, or null if that field has not been filled.
+    pub fn filledValue(store: Store, name: []const u8) ?[]const u8 {
+        for (store.filled.items) |field| {
+            if (std.mem.eql(u8, field.name, name)) return field.value;
+        }
+        return null;
     }
 
     pub fn historyCount(store: Store) usize {
@@ -161,6 +179,29 @@ pub const Store = struct {
             if (input.args.len == 0) return .failed;
             if (!store.isBookmarked(input.args)) store.bookmarks.append(store.gpa, input.args) catch return .failed;
             return store.commit(key, "bookmarked");
+        }
+        if (std.mem.eql(u8, op, "browser.fill")) {
+            // Filling a form field is a local change: it stages a value on the page, nothing leaves the
+            // device until a submit. `args` is "name=value"; filling a field again updates it.
+            if (store.current == null) return .failed;
+            const eq = std.mem.indexOfScalar(u8, input.args, '=') orelse return .failed;
+            const name = input.args[0..eq];
+            const value = input.args[eq + 1 ..];
+            for (store.filled.items) |*field| {
+                if (std.mem.eql(u8, field.name, name)) {
+                    field.value = value;
+                    return store.commit(key, "filled");
+                }
+            }
+            store.filled.append(store.gpa, .{ .name = name, .value = value }) catch return .failed;
+            return store.commit(key, "filled");
+        }
+        if (std.mem.eql(u8, op, "browser.submit")) {
+            // Submitting the filled form sends it off the device — the consequential act the frame holds
+            // for the person, applied exactly once. On submit the staged fields are consumed.
+            if (store.current == null or store.filled.items.len == 0) return .failed;
+            store.filled.clearRetainingCapacity();
+            return store.commit(key, "submitted");
         }
         if (std.mem.eql(u8, op, "browser.grant_site")) {
             // Granting a site a sensitive permission is the consequential act — the frame holds an
@@ -241,6 +282,43 @@ test "bookmarking a page adds it once" {
     _ = Store.execute(&store, .{ .operation = "browser.bookmark", .args = "https://lisbon.example/" }, agent(), 2); // same page, different key
     try testing.expect(store.isBookmarked("https://lisbon.example/"));
     try testing.expectEqual(@as(usize, 1), store.bookmarks.items.len);
+}
+
+test "filling stages form fields on the page, and re-filling updates a field" {
+    var store = fixture();
+    defer store.deinit();
+    // Filling with nothing open fails — a form belongs to a page.
+    try testing.expectEqual(DomainResult.failed, Store.execute(&store, .{ .operation = "browser.fill", .args = "email=a@b.c" }, agent(), 1));
+    _ = Store.execute(&store, .{ .operation = "browser.open", .args = "https://shop.example/checkout" }, agent(), 2);
+    _ = Store.execute(&store, .{ .operation = "browser.fill", .args = "email=me@here.test" }, agent(), 3);
+    _ = Store.execute(&store, .{ .operation = "browser.fill", .args = "city=Lisbon" }, agent(), 4);
+    try testing.expectEqual(@as(usize, 2), store.filledCount());
+    // Re-filling the same field updates it in place, not a second field.
+    _ = Store.execute(&store, .{ .operation = "browser.fill", .args = "email=new@here.test" }, agent(), 5);
+    try testing.expectEqual(@as(usize, 2), store.filledCount());
+    try testing.expectEqualStrings("new@here.test", store.filledValue("email").?);
+}
+
+test "submitting the form is the consequential act, applied once, and consumes the fields" {
+    var store = fixture();
+    defer store.deinit();
+    _ = Store.execute(&store, .{ .operation = "browser.open", .args = "https://shop.example/checkout" }, agent(), 1);
+    // Submitting an empty form fails — there is nothing to send.
+    try testing.expectEqual(DomainResult.failed, Store.execute(&store, .{ .operation = "browser.submit", .args = "" }, agent(), 2));
+    _ = Store.execute(&store, .{ .operation = "browser.fill", .args = "email=me@here.test" }, agent(), 3);
+    const first = Store.execute(&store, .{ .operation = "browser.submit", .args = "" }, agent(), 9);
+    switch (first) {
+        .ok => |t| try testing.expectEqualStrings("submitted", t),
+        .failed => return error.TestUnexpectedResult,
+    }
+    // The fields are consumed by the submit.
+    try testing.expectEqual(@as(usize, 0), store.filledCount());
+    // A re-drive under the same key submits once — it returns the first result, not a second send.
+    const again = Store.execute(&store, .{ .operation = "browser.submit", .args = "" }, agent(), 9);
+    switch (again) {
+        .ok => |t| try testing.expectEqualStrings("submitted", t),
+        .failed => return error.TestUnexpectedResult,
+    }
 }
 
 test "granting a site a permission marks the whole origin, exactly once" {
