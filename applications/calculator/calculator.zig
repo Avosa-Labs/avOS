@@ -25,6 +25,7 @@ pub const tools = [_]framework.Tool{
 /// person's keypad and an agent reach this one function; it is read-only and needs no approval.
 pub const evaluateExpression = domain.evaluate;
 pub const ExpressionError = domain.Error;
+pub const History = @import("history.zig").History;
 
 pub const Op = enum { add, subtract, multiply, divide };
 
