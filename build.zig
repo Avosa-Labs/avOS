@@ -887,6 +887,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "core", .module = core_module },
             .{ .name = "applications", .module = applications_module },
+            .{ .name = "agents", .module = agents_module },
             .{ .name = "session", .module = session_module },
             .{ .name = "emulator", .module = emulator_module },
             .{ .name = "shell", .module = shell_module },
