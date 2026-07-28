@@ -14,6 +14,8 @@ pub const encoding = @import("encoding/encoding.zig");
 pub const localization = @import("localization/localization.zig");
 pub const identity = @import("identity/identity.zig");
 pub const time = @import("time/time.zig");
+pub const civil = @import("time/civil.zig");
+pub const zone = @import("time/zone.zig");
 pub const resource = @import("resource/resource.zig");
 pub const principal = @import("principal/principal.zig");
 pub const authentication = @import("principal/authentication.zig");
@@ -35,6 +37,8 @@ test {
     _ = localization;
     _ = identity;
     _ = time;
+    _ = civil;
+    _ = zone;
     _ = resource;
     _ = principal;
     _ = capability;
