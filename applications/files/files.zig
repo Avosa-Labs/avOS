@@ -29,7 +29,9 @@ pub const tools = [_]framework.Tool{
     .{ .name = "file.edit", .required_capability = "files.write", .effect = .local_mutation },
     .{ .name = "file.move", .required_capability = "files.write", .effect = .local_mutation },
     .{ .name = "file.share", .required_capability = "files.share", .effect = .external },
-    .{ .name = "file.delete", .required_capability = "files.write", .effect = .local_mutation },
+    // Deleting is consequential — irreversible data loss — so an agent's delete is held
+    // for the person rather than run on the agent's own authority.
+    .{ .name = "file.delete", .required_capability = "files.write", .effect = .external },
 };
 
 /// Assembles the Files app over the shared frame.
@@ -44,10 +46,12 @@ test "the grant rule is enforced and re-exported from the domain" {
     try testing.expect(!withinGrant("../other/secrets"));
 }
 
-test "sharing is external and held; reads and local changes are the agent's" {
+test "sharing and deleting are held; reads and other local changes are the agent's" {
     for (tools) |tool| {
         const held = tool.effect.needsApproval();
-        // Only sharing reaches outside the device and is held; everything else is silent or local.
-        try testing.expectEqual(std.mem.eql(u8, tool.name, "file.share"), held);
+        // Sharing reaches outside the device and deleting is irreversible data loss, so both
+        // are held for the person; reads and reversible local changes are the agent's own.
+        const consequential = std.mem.eql(u8, tool.name, "file.share") or std.mem.eql(u8, tool.name, "file.delete");
+        try testing.expectEqual(consequential, held);
     }
 }
