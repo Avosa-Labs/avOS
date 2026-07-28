@@ -11,12 +11,30 @@
 
 const std = @import("std");
 const core = @import("core");
+const agents = @import("agents");
 
 const capability = core.capability;
 const principal = core.principal;
 const identity = core.identity;
 const time = core.time;
 const audit = core.audit;
+const mind_seam = agents.model_mind;
+const model_interface = agents.model_interface;
+
+// A minimal available mind for the swap test: it proposes bounded, untrusted output and reports
+// itself healthy. Two contexts stand for two different minds behind the same contract.
+var mind_ctx_a: u8 = 0;
+var mind_ctx_b: u8 = 0;
+
+fn stubPropose(_: *anyopaque, request: model_interface.Request) mind_seam.Proposal {
+    return .{ .tokens = request.max_tokens };
+}
+fn stubHealthy(_: *anyopaque) mind_seam.Health {
+    return .available;
+}
+fn stubMind(ctx: *u8) mind_seam.Mind {
+    return .{ .context = ctx, .propose_fn = stubPropose, .health_fn = stubHealthy };
+}
 
 /// The enforcement world under test: a principal registry and the capability service over it, with
 /// one human who issues grants to agents.
@@ -193,6 +211,45 @@ test "an agent cannot use a grant issued to a different agent, whatever mind it 
     try std.testing.expectError(error.Unauthorized, world.store.check(handle, .{
         .holder = impostor,
         .operation = .read,
+        .resource = .{ .kind = "calendar" },
+    }));
+}
+
+test "swapping a running agent's mind leaves its identity and authority unchanged" {
+    const gpa = std.testing.allocator;
+    var world: World = undefined;
+    try World.init(gpa, &world);
+    defer world.deinit();
+
+    const agent = try world.enrollAgent("running-agent");
+    const handle = try world.store.issue(.{
+        .issuer = world.human,
+        .holder = agent,
+        .resource = .{ .kind = "calendar" },
+        .operations = readOnly(),
+    });
+
+    // With its first mind, the granted read passes and an out-of-grant write is refused.
+    _ = try world.store.check(handle, .{ .holder = agent, .operation = .read, .resource = .{ .kind = "calendar" } });
+    try std.testing.expectError(error.Unauthorized, world.store.check(handle, .{
+        .holder = agent,
+        .operation = .write,
+        .resource = .{ .kind = "calendar" },
+    }));
+
+    // The agent is bound to mind A; swap it to mind B mid-life. The binding's id stands for this
+    // agent's identity, which the swap must preserve — a change of engine, not of actor.
+    const before = mind_seam.Binding{ .agent = 0xA9E27, .mind = stubMind(&mind_ctx_a) };
+    const after = mind_seam.swap(before, stubMind(&mind_ctx_b));
+    try std.testing.expectEqual(before.agent, after.agent); // identity preserved
+    try std.testing.expect(after.canAct()); // the swapped-in mind is available
+
+    // After the swap, the SAME grant yields the SAME authorization: the capability service never saw
+    // the mind, so changing the engine changed nothing about what the agent may do.
+    _ = try world.store.check(handle, .{ .holder = agent, .operation = .read, .resource = .{ .kind = "calendar" } });
+    try std.testing.expectError(error.Unauthorized, world.store.check(handle, .{
+        .holder = agent,
+        .operation = .write,
         .resource = .{ .kind = "calendar" },
     }));
 }
