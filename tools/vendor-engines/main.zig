@@ -8,6 +8,12 @@
 //! local cache the device adapters build against. Nothing is committed; the cache is rebuilt
 //! from the pin on any machine.
 //!
+//! Downloaded archives are kept in `.engine-archives/<name>.tar.gz` so a later run reuses the
+//! bytes instead of re-fetching (llama.cpp alone is ~300MB). The cache holds the archive, never
+//! the extracted tree, and the digest is re-verified on every run whether the bytes came from
+//! the cache or the network — a corrupt cache entry fails the same check and is dropped, so the
+//! cache is only ever a fetch shortcut, never a verification shortcut.
+//!
 //! It is opt-in — run `zig build vendor-engines` — and not part of the gate set, so ordinary
 //! builds and CI stay offline. The digest is the trust boundary: fetching is only ever
 //! allowed to place bytes that match the committed pin.
@@ -24,6 +30,11 @@ const tar = std.tar;
 
 const manifest_path = "engines.lock.json";
 const cache_root = ".engines";
+const archive_root = ".engine-archives";
+
+// Cached archives can be large (llama.cpp is ~300MB); read them back with a
+// generous ceiling rather than the manifest's small one.
+const archive_limit: std.Io.Limit = .limited(2 * 1024 * 1024 * 1024);
 
 pub fn main(init: std.process.Init) !u8 {
     const io = init.io;
@@ -69,42 +80,77 @@ pub fn main(init: std.process.Init) !u8 {
 
         try out.print("vendor-engines: {s} @ {s}\n", .{ name, version });
 
-        // Fetch the pinned archive into memory.
+        const cwd = io_adapters.cwd();
+        const archive_path = try archivePath(arena, name);
+
+        // Obtain the archive bytes: reuse the cached archive if one is present,
+        // otherwise fetch it from the pinned source. Either way the bytes pass
+        // through the identical digest check below — the cache is a fetch
+        // shortcut, never a verification shortcut.
         var body: std.Io.Writer.Allocating = .init(gpa);
         defer body.deinit();
-        const result = client.fetch(.{
-            .location = .{ .url = source },
-            .response_writer = &body.writer,
-        }) catch |fetch_error| {
-            try out.print("  fetch failed: {t}\n", .{fetch_error});
-            try out.flush();
-            return 1;
+        var bytes: []const u8 = undefined;
+        const from_cache = cache: {
+            if (cwd.readFileAlloc(io, archive_path, gpa, archive_limit)) |cached| {
+                try out.print("  using cached archive {s}\n", .{archive_path});
+                bytes = cached;
+                break :cache true;
+            } else |_| {
+                // Not cached (or unreadable): fetch the pinned archive into memory.
+                const result = client.fetch(.{
+                    .location = .{ .url = source },
+                    .response_writer = &body.writer,
+                }) catch |fetch_error| {
+                    try out.print("  fetch failed: {t}\n", .{fetch_error});
+                    try out.flush();
+                    return 1;
+                };
+                if (result.status != .ok) {
+                    try out.print("  fetch returned HTTP {d}\n", .{@intFromEnum(result.status)});
+                    try out.flush();
+                    return 1;
+                }
+                bytes = body.written();
+                break :cache false;
+            }
         };
-        if (result.status != .ok) {
-            try out.print("  fetch returned HTTP {d}\n", .{@intFromEnum(result.status)});
+        defer if (from_cache) gpa.free(bytes);
+
+        // Verify the digest before a single byte is written to the tree. This
+        // runs for the cached and the freshly fetched case alike.
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+        const got = std.fmt.bytesToHex(digest, .lower);
+        if (!std.mem.eql(u8, &got, pinned)) {
+            if (from_cache) {
+                // The cached archive is corrupt; drop it and make the user re-run.
+                cwd.deleteTree(io, archive_path) catch {};
+                try out.print(
+                    "  cached archive corrupt: pinned {s}, got {s} — removed {s}, re-run vendor-engines\n",
+                    .{ pinned, got[0..], archive_path },
+                );
+            } else {
+                try out.print("  DIGEST MISMATCH: pinned {s}, received {s}\n", .{ pinned, got[0..] });
+            }
             try out.flush();
             return 1;
         }
 
-        // Verify the digest before a single byte is written to the tree.
-        var digest: [32]u8 = undefined;
-        std.crypto.hash.sha2.Sha256.hash(body.written(), &digest, .{});
-        const got = std.fmt.bytesToHex(digest, .lower);
-        if (!std.mem.eql(u8, &got, pinned)) {
-            try out.print("  DIGEST MISMATCH: pinned {s}, received {s}\n", .{ pinned, got[0..] });
-            try out.flush();
-            return 1;
+        // A fresh fetch verified: persist it so the next run reuses the bytes.
+        // Best-effort — a write failure only forfeits the shortcut next time.
+        if (!from_cache) {
+            cwd.createDirPath(io, archive_root) catch {};
+            io_adapters.writeFile(cwd, io, archive_path, bytes) catch {};
         }
 
         // Unpack the verified archive into a fresh cache directory.
         const dest = try std.fmt.allocPrint(arena, "{s}/{s}", .{ cache_root, name });
-        const cwd = io_adapters.cwd();
         cwd.deleteTree(io, dest) catch {};
         try cwd.createDirPath(io, dest);
         var dir = try cwd.openDir(io, dest, .{});
         defer dir.close(io);
 
-        var input: std.Io.Reader = .fixed(body.written());
+        var input: std.Io.Reader = .fixed(bytes);
         var window: [64 * 1024]u8 = undefined;
         var decompress = flate.Decompress.init(&input, .gzip, &window);
         tar.extract(io, dir, &decompress.reader, .{ .strip_components = 1 }) catch |unpack_error| {
@@ -125,6 +171,11 @@ fn malformed(out: anytype) !u8 {
     try out.print("vendor-engines: {s} is malformed\n", .{manifest_path});
     try out.flush();
     return 3;
+}
+
+/// The cached-archive path for an engine, under `archive_root`.
+fn archivePath(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
+    return std.fmt.allocPrint(allocator, "{s}/{s}.tar.gz", .{ archive_root, name });
 }
 
 /// A non-empty string field of a JSON object, or null.
@@ -148,6 +199,12 @@ test "the digest of known bytes is its lowercase hex, as the verify step compare
         "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
         &hex,
     );
+}
+
+test "archivePath places each engine's archive under the archive root" {
+    const path = try archivePath(testing.allocator, "vulkan-headers");
+    defer testing.allocator.free(path);
+    try testing.expectEqualStrings(".engine-archives/vulkan-headers.tar.gz", path);
 }
 
 test "stringField reads present non-empty strings and rejects the rest" {
