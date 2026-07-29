@@ -1,0 +1,10 @@
+.{
+    // The package identity and declared capabilities for the Wallet app. What an agent can discover in
+    // it is exactly what is declared here and verified against its tools. Listing cards and reading the
+    // balance are silent, adding a card is a local change, and a payment transfers value and is held.
+    .name = "Wallet",
+    .package = "default.wallet",
+    .kind = .default_app,
+    .capabilities = .{ "wallet.list", "wallet.balance", "wallet.add_card", "wallet.pay" },
+    .signing = .system_image,
+}
