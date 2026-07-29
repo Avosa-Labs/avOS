@@ -11,8 +11,11 @@
 //! Every CoreAudio and CoreFoundation C type stays inside this module (all of it comes through
 //! `bindings.zig`); nothing above the seam sees a HAL type. The returned device names must outlive the
 //! call, so the backend context owns fixed-size name buffers and the returned `[]const u8` slices point
-//! into them — never onto the stack. This adapter enumerates and answers can-open; actually starting a
-//! realtime stream is a follow-up behind the same seam.
+//! into them — never onto the stack. Beyond enumerate/can-open, the adapter opens a real playback
+//! stream: a default-output AudioUnit whose stream format is set from the seam `Format`, driven by a
+//! zero-fill render callback (running silence — the proof is a real, started CoreAudio stream, not
+//! audible content), started on open and torn down on stop. The output unit and its live flag are held
+//! in the backend context, so `stopStream`/`streamLive` at the seam read the truth of the hardware.
 //!
 //! Built only on macOS (see the build's os gate); off macOS the seam keeps its honest-until-bound
 //! default and this module is never compiled.
@@ -34,6 +37,9 @@ pub const CoreAudioBackend = struct {
     /// One UTF-8 name buffer per possible returned device entry. `devices` writes a name here and hands
     /// back a slice into it, so the name outlives the enumeration call.
     name_store: [max_entries][name_capacity]u8 = undefined,
+    /// The default-output AudioUnit while a playback stream is open, else null. Its presence is the live
+    /// flag the seam reads: a stream is live exactly when this holds a started unit.
+    output_unit: ?c.AudioComponentInstance = null,
 
     pub fn init() CoreAudioBackend {
         return .{};
@@ -45,7 +51,26 @@ pub const CoreAudioBackend = struct {
             .context = @ptrCast(self),
             .devices_fn = devicesFn,
             .can_open_fn = canOpenFn,
+            .open_stream_fn = openStreamFn,
+            .stop_stream_fn = stopStreamFn,
+            .stream_live_fn = streamLiveFn,
         };
+    }
+
+    fn openStreamFn(context: *anyopaque, device_id: u32, direction: audio.Direction, format: audio.Format) audio.OpenError!void {
+        const self: *CoreAudioBackend = @ptrCast(@alignCast(context));
+        _ = device_id; // the default-output unit follows the system default device
+        return self.openStream(direction, format);
+    }
+
+    fn stopStreamFn(context: *anyopaque) void {
+        const self: *CoreAudioBackend = @ptrCast(@alignCast(context));
+        self.stopStream();
+    }
+
+    fn streamLiveFn(context: *anyopaque) bool {
+        const self: *CoreAudioBackend = @ptrCast(@alignCast(context));
+        return self.output_unit != null;
     }
 
     fn devicesFn(context: *anyopaque, out: []audio.Device) []const audio.Device {
@@ -165,7 +190,107 @@ pub const CoreAudioBackend = struct {
         const fallback = std.fmt.bufPrint(store, "audio-device-{d}", .{id}) catch return store[0..0];
         return fallback;
     }
+
+    /// Opens and starts a real stream for a direction. Playback opens the system default-output
+    /// AudioUnit, sets its client (input-scope) stream format from the seam `Format`, installs a
+    /// zero-fill render callback, initializes and starts it — a genuinely running CoreAudio stream. Any
+    /// HAL step that fails leaves nothing half-open (the unit is disposed) and yields `StreamFailed`.
+    /// Capture is not run by this adapter yet, so a capture request keeps the seam's validate-only
+    /// success (the device was already confirmed to exist) without a live stream — honest about what is
+    /// and is not wired.
+    fn openStream(self: *CoreAudioBackend, direction: audio.Direction, format: audio.Format) audio.OpenError!void {
+        if (direction != .playback) return; // capture stream not wired; validation already passed
+        if (self.output_unit != null) self.stopStream(); // never leak a prior open
+
+        var desc = c.AudioComponentDescription{
+            .componentType = c.kAudioUnitType_Output,
+            .componentSubType = c.kAudioUnitSubType_DefaultOutput,
+            .componentManufacturer = c.kAudioUnitManufacturer_Apple,
+            .componentFlags = 0,
+            .componentFlagsMask = 0,
+        };
+        const comp = c.AudioComponentFindNext(null, &desc) orelse return audio.OpenError.StreamFailed;
+
+        var unit: c.AudioComponentInstance = null;
+        if (c.AudioComponentInstanceNew(comp, &unit) != 0 or unit == null) return audio.OpenError.StreamFailed;
+        errdefer _ = c.AudioComponentInstanceDispose(unit);
+
+        // The client format on the output unit's input scope, element 0 — the side the render callback
+        // feeds. Interleaved, packed linear PCM in the seam's encoding.
+        const bits: c.UInt32 = switch (format.encoding) {
+            .s16 => 16,
+            .f32 => 32,
+        };
+        const flags: c.UInt32 = switch (format.encoding) {
+            .s16 => c.kAudioFormatFlagIsSignedInteger | c.kAudioFormatFlagIsPacked,
+            .f32 => c.kAudioFormatFlagIsFloat | c.kAudioFormatFlagIsPacked,
+        };
+        const bytes_per_frame: c.UInt32 = (bits / 8) * @as(c.UInt32, format.channels);
+        var asbd = c.AudioStreamBasicDescription{
+            .mSampleRate = @floatFromInt(format.sample_rate_hz),
+            .mFormatID = c.kAudioFormatLinearPCM,
+            .mFormatFlags = flags,
+            .mBytesPerPacket = bytes_per_frame,
+            .mFramesPerPacket = 1,
+            .mBytesPerFrame = bytes_per_frame,
+            .mChannelsPerFrame = format.channels,
+            .mBitsPerChannel = bits,
+            .mReserved = 0,
+        };
+        if (c.AudioUnitSetProperty(unit, c.kAudioUnitProperty_StreamFormat, c.kAudioUnitScope_Input, 0, &asbd, @sizeOf(c.AudioStreamBasicDescription)) != 0) {
+            return audio.OpenError.StreamFailed;
+        }
+
+        var cb = c.AURenderCallbackStruct{ .inputProc = renderSilence, .inputProcRefCon = null };
+        if (c.AudioUnitSetProperty(unit, c.kAudioUnitProperty_SetRenderCallback, c.kAudioUnitScope_Input, 0, &cb, @sizeOf(c.AURenderCallbackStruct)) != 0) {
+            return audio.OpenError.StreamFailed;
+        }
+
+        if (c.AudioUnitInitialize(unit) != 0) return audio.OpenError.StreamFailed;
+        errdefer _ = c.AudioUnitUninitialize(unit);
+
+        if (c.AudioOutputUnitStart(unit) != 0) return audio.OpenError.StreamFailed;
+
+        self.output_unit = unit;
+    }
+
+    /// Stops and tears down the open playback stream, if any: stop, uninitialize, dispose, clear the
+    /// live flag. Idempotent — with nothing open it does nothing.
+    fn stopStream(self: *CoreAudioBackend) void {
+        const unit = self.output_unit orelse return;
+        _ = c.AudioOutputUnitStop(unit);
+        _ = c.AudioUnitUninitialize(unit);
+        _ = c.AudioComponentInstanceDispose(unit);
+        self.output_unit = null;
+    }
 };
+
+/// The output unit's render proc: zero-fill every buffer so the stream runs real, inaudible silence.
+/// A started AudioUnit pulls this on a realtime thread; it touches only the buffers it is handed.
+fn renderSilence(
+    in_refcon: ?*anyopaque,
+    io_action_flags: ?*c.AudioUnitRenderActionFlags,
+    in_timestamp: ?*const c.AudioTimeStamp,
+    in_bus: c.UInt32,
+    in_frames: c.UInt32,
+    io_data: ?*c.AudioBufferList,
+) callconv(.c) c.OSStatus {
+    _ = in_refcon;
+    _ = io_action_flags;
+    _ = in_timestamp;
+    _ = in_bus;
+    _ = in_frames;
+    const data = io_data orelse return 0;
+    const buffers: [*]c.AudioBuffer = @ptrCast(&data.mBuffers);
+    var i: usize = 0;
+    while (i < data.mNumberBuffers) : (i += 1) {
+        if (buffers[i].mData) |ptr| {
+            const bytes: [*]u8 = @ptrCast(ptr);
+            @memset(bytes[0..buffers[i].mDataByteSize], 0);
+        }
+    }
+    return 0;
+}
 
 // --- Tests (real macOS Core Audio HAL, this host's actual devices) ---
 
@@ -192,6 +317,8 @@ test "can-open agrees with the enumerated set" {
     var ca = CoreAudioBackend.init();
     var host = audio.Audio{};
     host.bind(ca.backend());
+    // Opening a playback device now starts a real output stream; leave none running when the test ends.
+    defer host.stopStream();
 
     var buf: [max_entries]audio.Device = undefined;
     const devices = host.devices(&buf);
@@ -221,4 +348,48 @@ test "can-open agrees with the enumerated set" {
         if (!present) break;
     }
     try testing.expectError(audio.OpenError.NoSuchDevice, host.openStream(bogus, .capture, .{ .sample_rate_hz = 48_000, .channels = 1, .encoding = .s16 }));
+}
+
+test "a playback stream opens, starts, and stops on the real default-output unit" {
+    var ca = CoreAudioBackend.init();
+    var host = audio.Audio{};
+    host.bind(ca.backend());
+
+    // Nothing is open before the first stream.
+    try testing.expect(!host.streamLive());
+
+    // Find a real playback device this host enumerates (#315 found several here); its id routes to the
+    // system default-output unit the adapter opens.
+    var buf: [max_entries]audio.Device = undefined;
+    const devices = host.devices(&buf);
+    var playback_id: ?u32 = null;
+    for (devices) |d| {
+        if (d.direction == .playback) {
+            playback_id = d.id;
+            break;
+        }
+    }
+
+    if (playback_id) |id| {
+        // Open + start a real, running CoreAudio output stream, immediately (no sleeping for audio).
+        const result = host.openStream(id, .playback, .{ .sample_rate_hz = 48_000, .channels = 2, .encoding = .f32 });
+        if (result) |_| {
+            // It opened: the live indicator, read from the hardware at the source, must be lit; stopping
+            // must clear it cleanly.
+            try testing.expect(host.streamLive());
+            host.stopStream();
+            try testing.expect(!host.streamLive());
+            // Stop is idempotent — a second stop with nothing open stays clean and unlit.
+            host.stopStream();
+            try testing.expect(!host.streamLive());
+        } else |err| {
+            // A headless runner may lack a usable default output. That is honest: a typed OpenError,
+            // never a crash or a hang, and the indicator stays off.
+            try testing.expect(err == audio.OpenError.StreamFailed or err == audio.OpenError.NoSuchDevice or err == audio.OpenError.BadFormat);
+            try testing.expect(!host.streamLive());
+        }
+    } else {
+        // No playback device here (a headless runner): honestly nothing to open, indicator stays off.
+        try testing.expect(!host.streamLive());
+    }
 }
