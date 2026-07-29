@@ -1127,6 +1127,8 @@ pub fn build(b: *std.Build) void {
             .{ .name = "session", .module = session_module },
             .{ .name = "storage", .module = storage_module },
             .{ .name = "examples", .module = examples_module },
+            .{ .name = "agents", .module = agents_module },
+            .{ .name = "applications", .module = applications_module },
         },
     });
     addModuleTests(b, test_step, "acceptance", acceptance_module);
