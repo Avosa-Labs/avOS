@@ -46,12 +46,16 @@ pub const Kind = enum {
 };
 
 const Contact = struct { name: []const u8, kind: Kind = .person, email: []const u8 = "", phone: []const u8 = "" };
+/// A contact's membership in a named group — how the book is organised into circles ("Family",
+/// "Work") a person and an agent can address together.
+const Membership = struct { contact: []const u8, group: []const u8 };
 const Applied = struct { key: u128, result: []const u8 };
 
 /// The Contacts store: the real records and the record of applied keyed changes.
 pub const Store = struct {
     gpa: std.mem.Allocator,
     contacts: std.ArrayListUnmanaged(Contact) = .empty,
+    memberships: std.ArrayListUnmanaged(Membership) = .empty,
     applied: std.ArrayListUnmanaged(Applied) = .empty,
     reply: [16]u8 = undefined,
 
@@ -61,8 +65,26 @@ pub const Store = struct {
 
     pub fn deinit(store: *Store) void {
         store.contacts.deinit(store.gpa);
+        store.memberships.deinit(store.gpa);
         store.applied.deinit(store.gpa);
         store.* = undefined;
+    }
+
+    /// Whether a contact belongs to a named group.
+    pub fn inGroup(store: Store, contact_name: []const u8, group: []const u8) bool {
+        for (store.memberships.items) |m| {
+            if (std.mem.eql(u8, m.contact, contact_name) and std.mem.eql(u8, m.group, group)) return true;
+        }
+        return false;
+    }
+
+    /// How many contacts belong to a named group — the size a group view shows.
+    pub fn groupMemberCount(store: Store, group: []const u8) usize {
+        var n: usize = 0;
+        for (store.memberships.items) |m| {
+            if (std.mem.eql(u8, m.group, group)) n += 1;
+        }
+        return n;
     }
 
     pub fn count(store: Store) usize {
@@ -154,7 +176,25 @@ pub const Store = struct {
             const text = std.fmt.bufPrint(&store.reply, "{d}", .{matches.len}) catch return .failed;
             return .{ .ok = text };
         }
+        if (std.mem.eql(u8, op, "contact.group_of")) {
+            // A silent read: how many contacts are in the named group. The members' names are read
+            // through the domain, never leaked by the count.
+            const text = std.fmt.bufPrint(&store.reply, "{d}", .{store.groupMemberCount(input.args)}) catch return .failed;
+            return .{ .ok = text };
+        }
         if (store.priorResult(key)) |prior| return .{ .ok = prior };
+        if (std.mem.eql(u8, op, "contact.group")) {
+            // Filing a contact into a group is a local change. `args` is "contact@group"; the contact
+            // must exist, and a contact already in the group is a harmless no-op.
+            const at = std.mem.indexOfScalar(u8, input.args, '@') orelse return .failed;
+            const contact_name = input.args[0..at];
+            const group = input.args[at + 1 ..];
+            if (group.len == 0 or store.find(contact_name) == null) return .failed;
+            if (!store.inGroup(contact_name, group)) {
+                store.memberships.append(store.gpa, .{ .contact = contact_name, .group = group }) catch return .failed;
+            }
+            return store.commit(key, "grouped");
+        }
         if (std.mem.eql(u8, op, "contact.add")) {
             if (input.args.len == 0) return .failed;
             store.contacts.append(store.gpa, .{ .name = input.args }) catch return .failed;
@@ -203,6 +243,27 @@ test "adding and deleting change the real book, exactly once by key" {
     try testing.expectEqual(@as(usize, 1), store.count());
     _ = Store.execute(&store, .{ .operation = "contact.delete", .args = "Ada" }, agent(), 2);
     try testing.expectEqual(@as(usize, 0), store.count());
+}
+
+test "filing contacts into a group counts them, once by key, and a missing contact is refused" {
+    const gpa = testing.allocator;
+    var store = Store.init(gpa);
+    defer store.deinit();
+    _ = Store.execute(&store, .{ .operation = "contact.add", .args = "Ada" }, agent(), 1);
+    _ = Store.execute(&store, .{ .operation = "contact.add", .args = "Alan" }, agent(), 2);
+    try testing.expectEqual(@as(usize, 0), store.groupMemberCount("Family"));
+
+    _ = Store.execute(&store, .{ .operation = "contact.group", .args = "Ada@Family" }, agent(), 3);
+    _ = Store.execute(&store, .{ .operation = "contact.group", .args = "Ada@Family" }, agent(), 3); // same key: no double
+    _ = Store.execute(&store, .{ .operation = "contact.group", .args = "Alan@Family" }, agent(), 4);
+    try testing.expect(store.inGroup("Ada", "Family"));
+    try testing.expectEqual(@as(usize, 2), store.groupMemberCount("Family"));
+    // The count comes back through the door as a silent read.
+    try testing.expectEqualStrings("2", Store.execute(&store, .{ .operation = "contact.group_of", .args = "Family" }, agent(), 0).ok);
+
+    // Filing a contact that does not exist is refused; a contact is not in a group it was never filed into.
+    try testing.expectEqual(DomainResult.failed, Store.execute(&store, .{ .operation = "contact.group", .args = "Ghost@Family" }, agent(), 5));
+    try testing.expect(!store.inGroup("Alan", "Work"));
 }
 
 test "search matches names case-insensitively across people and principals" {

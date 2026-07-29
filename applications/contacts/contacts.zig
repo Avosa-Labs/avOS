@@ -21,7 +21,9 @@ pub const Kind = domain.Kind;
 pub const tools = [_]framework.Tool{
     .{ .name = "contact.read", .required_capability = "contacts.read", .effect = .read_only },
     .{ .name = "contact.search", .required_capability = "contacts.read", .effect = .read_only },
+    .{ .name = "contact.group_of", .required_capability = "contacts.read", .effect = .read_only },
     .{ .name = "contact.add", .required_capability = "contacts.write", .effect = .local_mutation },
+    .{ .name = "contact.group", .required_capability = "contacts.write", .effect = .local_mutation },
     .{ .name = "contact.edit", .required_capability = "contacts.write", .effect = .local_mutation },
     .{ .name = "contact.delete", .required_capability = "contacts.write", .effect = .local_mutation },
     .{ .name = "contact.share", .required_capability = "contacts.share", .effect = .external },
