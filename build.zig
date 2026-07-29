@@ -594,7 +594,7 @@ pub fn build(b: *std.Build) void {
         // generic (architecture-agnostic) kernel path is used — GGML_CPU_GENERIC — so the same source
         // set compiles on every target host, arm64 and x86_64 alike, without an arch-specific SIMD
         // variant per architecture. It is llama.cpp's own portable fallback, not a stand-in.
-        const c_flags = [_][]const u8{ "-DGGML_USE_CPU", "-DGGML_CPU_GENERIC", "-D_GNU_SOURCE", "-DNDEBUG", "-std=c11", "-DGGML_VERSION=\"b10173\"", "-DGGML_COMMIT=\"e9fa0781f1c25fc4fe8c86be1edc6970661ad6f0\"" };
+        const c_flags = [_][]const u8{ "-DGGML_USE_CPU", "-DGGML_CPU_GENERIC", "-D_GNU_SOURCE", "-DNDEBUG", "-std=c11", "-U__AMX_INT8__", "-U__AVX512VNNI__", "-DGGML_VERSION=\"b10173\"", "-DGGML_COMMIT=\"e9fa0781f1c25fc4fe8c86be1edc6970661ad6f0\"" };
         module.addCSourceFiles(.{
             .root = .{ .cwd_relative = root },
             .files = &.{
@@ -609,7 +609,7 @@ pub fn build(b: *std.Build) void {
 
         // The ggml C++ sources (backend registry — CPU statically registered under GGML_USE_CPU —
         // graph ops, gguf reader) and the full llama library.
-        const cpp_flags = [_][]const u8{ "-DGGML_USE_CPU", "-DGGML_CPU_GENERIC", "-D_GNU_SOURCE", "-DNDEBUG", "-std=c++17", "-DGGML_VERSION=\"b10173\"", "-DGGML_COMMIT=\"e9fa0781f1c25fc4fe8c86be1edc6970661ad6f0\"" };
+        const cpp_flags = [_][]const u8{ "-DGGML_USE_CPU", "-DGGML_CPU_GENERIC", "-D_GNU_SOURCE", "-DNDEBUG", "-std=c++17", "-U__AMX_INT8__", "-U__AVX512VNNI__", "-DGGML_VERSION=\"b10173\"", "-DGGML_COMMIT=\"e9fa0781f1c25fc4fe8c86be1edc6970661ad6f0\"" };
         module.addCSourceFiles(.{
             .root = .{ .cwd_relative = root },
             .files = &.{
