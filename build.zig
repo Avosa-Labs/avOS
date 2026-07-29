@@ -570,6 +570,132 @@ pub fn build(b: *std.Build) void {
         harfbuzz_module = module;
     }
 
+    // The on-device inference adapter: llama.cpp and the ggml tensor library under it, compiled
+    // CPU-only from the vendored source where it is present, presented behind the mind seam as a
+    // real local backend. Absent, the local mind keeps its honest-until-loaded unavailable
+    // fallback. The engine is arm64 NEON, CPU backend statically registered (GGML_USE_CPU) — no
+    // GPU, Accelerate, OpenMP, or dynamic backend loading.
+    if (llamaRoot(b)) |root| {
+        const module = b.createModule(.{
+            .root_source_file = b.path("agents/model/local/llama/llama.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        const llama_engine_module = module;
+        module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{root}) });
+        module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/ggml/include", .{root}) });
+        module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/ggml/src", .{root}) });
+        module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/ggml/src/ggml-cpu", .{root}) });
+        module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/src", .{root}) });
+        module.link_libc = true;
+        module.link_libcpp = true; // llama and most of ggml are C++
+
+        // The ggml C sources (tensor core, allocator, quants) and the CPU backend's C kernels,
+        // including the arm64 NEON arch path.
+        const c_flags = [_][]const u8{ "-DGGML_USE_CPU", "-DNDEBUG", "-std=c11", "-DGGML_VERSION=\"b10173\"", "-DGGML_COMMIT=\"e9fa0781f1c25fc4fe8c86be1edc6970661ad6f0\"" };
+        module.addCSourceFiles(.{
+            .root = .{ .cwd_relative = root },
+            .files = &.{
+                "ggml/src/ggml.c",
+                "ggml/src/ggml-alloc.c",
+                "ggml/src/ggml-quants.c",
+                "ggml/src/ggml-cpu/ggml-cpu.c",
+                "ggml/src/ggml-cpu/quants.c",
+                "ggml/src/ggml-cpu/arch/arm/quants.c",
+            },
+            .flags = &c_flags,
+        });
+
+        // The ggml C++ sources (backend registry — CPU statically registered under GGML_USE_CPU —
+        // graph ops, gguf reader) and the full llama library.
+        const cpp_flags = [_][]const u8{ "-DGGML_USE_CPU", "-DNDEBUG", "-std=c++17", "-DGGML_VERSION=\"b10173\"", "-DGGML_COMMIT=\"e9fa0781f1c25fc4fe8c86be1edc6970661ad6f0\"" };
+        module.addCSourceFiles(.{
+            .root = .{ .cwd_relative = root },
+            .files = &.{
+                // ggml base + backend registry (static single CPU backend).
+                "ggml/src/ggml.cpp",
+                "ggml/src/ggml-backend.cpp",
+                "ggml/src/ggml-backend-meta.cpp",
+                "ggml/src/ggml-opt.cpp",
+                "ggml/src/ggml-threading.cpp",
+                "ggml/src/gguf.cpp",
+                "ggml/src/ggml-backend-reg.cpp",
+                "ggml/src/ggml-backend-dl.cpp",
+                // ggml CPU backend C++ kernels + arm64 NEON arch path.
+                "ggml/src/ggml-cpu/ggml-cpu.cpp",
+                "ggml/src/ggml-cpu/repack.cpp",
+                "ggml/src/ggml-cpu/hbm.cpp",
+                "ggml/src/ggml-cpu/traits.cpp",
+                "ggml/src/ggml-cpu/binary-ops.cpp",
+                "ggml/src/ggml-cpu/unary-ops.cpp",
+                "ggml/src/ggml-cpu/vec.cpp",
+                "ggml/src/ggml-cpu/ops.cpp",
+                "ggml/src/ggml-cpu/arch/arm/repack.cpp",
+                // llama.
+                "src/llama.cpp",
+                "src/llama-adapter.cpp",
+                "src/llama-arch.cpp",
+                "src/llama-batch.cpp",
+                "src/llama-chat.cpp",
+                "src/llama-context.cpp",
+                "src/llama-cparams.cpp",
+                "src/llama-grammar.cpp",
+                "src/llama-graph.cpp",
+                "src/llama-hparams.cpp",
+                "src/llama-impl.cpp",
+                "src/llama-io.cpp",
+                "src/llama-kv-cache-dsa.cpp",
+                "src/llama-kv-cache-dsv4.cpp",
+                "src/llama-kv-cache-iswa.cpp",
+                "src/llama-kv-cache.cpp",
+                "src/llama-memory-hybrid-iswa.cpp",
+                "src/llama-memory-hybrid.cpp",
+                "src/llama-memory-recurrent.cpp",
+                "src/llama-memory.cpp",
+                "src/llama-mmap.cpp",
+                "src/llama-model-loader.cpp",
+                "src/llama-model-saver.cpp",
+                "src/llama-model.cpp",
+                "src/llama-quant.cpp",
+                "src/llama-sampler.cpp",
+                "src/llama-vocab.cpp",
+                "src/unicode.cpp",
+                "src/unicode-data.cpp",
+            },
+            .flags = &cpp_flags,
+        });
+
+        // The per-architecture model graph builders. CMake globs `src/models/*.cpp`; each defines
+        // the vtable for one `llama_model_<arch>` subclass that `llama-model.cpp` constructs, so
+        // they must all be linked or the model constructors are undefined symbols.
+        module.addCSourceFiles(.{
+            .root = .{ .cwd_relative = root },
+            .files = llamaModelSources(b, root),
+            .flags = &cpp_flags,
+        });
+
+        addModuleTests(b, test_step, "local-llama", module);
+        addCompileCheck(b, engine_compile_step, "local-llama", module);
+
+        // The mind-seam backend: a separate module rooted at backend.zig that reaches the engine
+        // through the named `llama_engine` module and the seam through the named `agents` module,
+        // so nothing crosses a relative module boundary. It transitively needs the C, so it links
+        // libc/libc++ too.
+        const llama_backend_module = b.createModule(.{
+            .root_source_file = b.path("agents/model/local/llama/backend.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "llama_engine", .module = llama_engine_module },
+                .{ .name = "agents", .module = agents_module },
+            },
+        });
+        llama_backend_module.link_libc = true;
+        llama_backend_module.link_libcpp = true;
+        addModuleTests(b, test_step, "local-llama-backend", llama_backend_module);
+        addCompileCheck(b, engine_compile_step, "local-llama-backend", llama_backend_module);
+    }
+
     // The text-run path: shape a string with HarfBuzz, rasterize each shaped glyph with FreeType,
     // assemble the run's coverage, and draw it through the Vulkan device. Built only where all
     // three engines are vendored, so it stands on the whole text pipeline at once.
@@ -1103,6 +1229,39 @@ fn harfbuzzRoot(b: *std.Build) ?[]const u8 {
     const root = ".engines/harfbuzz";
     b.build_root.handle.access(io, root ++ "/src/harfbuzz.cc", .{}) catch return null;
     return root;
+}
+
+/// The root of the vendored llama.cpp source, or null if absent. The on-device inference adapter
+/// compiles the engine (llama + ggml, CPU-only) from this source only when it is vendored; without
+/// it the local mind stays honestly unavailable. `zig build vendor-engines` fetches it.
+fn llamaRoot(b: *std.Build) ?[]const u8 {
+    const io = b.graph.io;
+    const root = ".engines/llama-cpp";
+    b.build_root.handle.access(io, root ++ "/include/llama.h", .{}) catch return null;
+    return root;
+}
+
+/// The per-architecture model source files (`src/models/*.cpp`), which CMake pulls in with a glob.
+/// Each defines one `llama_model_<arch>` subclass's graph builder and vtable; `llama-model.cpp`
+/// constructs them, so every one must be compiled or the constructors are undefined at link. Listed
+/// from disk rather than hand-enumerated so a vendored-source bump can add or drop an architecture
+/// without a build edit. Paths are returned relative to `root` (the `.root` of the C-source add).
+fn llamaModelSources(b: *std.Build, root: []const u8) []const []const u8 {
+    const io = b.graph.io;
+    var dir = b.build_root.handle.openDir(io, b.fmt("{s}/src/models", .{root}), .{ .iterate = true }) catch
+        @panic("llama vendored source present but src/models is unreadable");
+    defer dir.close(io);
+
+    var files: std.ArrayList([]const u8) = .empty;
+    var walker = dir.walk(b.allocator) catch @panic("OOM");
+    defer walker.deinit();
+    while (walker.next(io) catch @panic("iterating llama src/models failed")) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.path, ".cpp")) continue;
+        files.append(b.allocator, b.fmt("src/models/{s}", .{entry.path})) catch @panic("OOM");
+    }
+    if (files.items.len == 0) @panic("llama src/models has no .cpp sources");
+    return files.toOwnedSlice(b.allocator) catch @panic("OOM");
 }
 
 /// The developer-local reference-design path, from the environment or a git-ignored local
