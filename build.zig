@@ -720,6 +720,10 @@ pub fn build(b: *std.Build) void {
         module.link_libc = true;
         module.linkFramework("CoreAudio", .{});
         module.linkFramework("CoreFoundation", .{});
+        // AudioToolbox and AudioUnit carry the output-stream symbols (AudioComponent*, AudioUnit*,
+        // AudioOutputUnit*) the adapter opens a real default-output stream through.
+        module.linkFramework("AudioToolbox", .{});
+        module.linkFramework("AudioUnit", .{});
         addModuleTests(b, test_step, "coreaudio", module);
         addCompileCheck(b, engine_compile_step, "coreaudio", module);
     }

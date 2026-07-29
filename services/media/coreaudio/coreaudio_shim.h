@@ -45,3 +45,83 @@ AudioObjectGetPropertyData( AudioObjectID                       inObjectID,
                             const void*                         inQualifierData,
                             UInt32*                             ioDataSize,
                             void*                               outData);
+
+// --- AudioUnit / AudioToolbox surface for opening a real output stream ---
+//
+// The AudioUnit umbrella (<AudioUnit/AudioUnit.h>) transitively drags in the same block typedefs that
+// keep <CoreAudio/AudioHardware.h> out of translate-c, so — exactly as the enumeration symbols above —
+// the output-stream API is hand-declared here against the real framework ABI. AudioStreamBasicDescription,
+// AudioBufferList, AudioBuffer and AudioTimeStamp (plus kAudioFormatLinearPCM and the linear-PCM format
+// flags) already arrive through <CoreAudio/CoreAudioTypes.h>, pulled in by AudioHardwareBase.h above, so
+// only the AudioComponent/AudioUnit types, the property/scope constants, the render-callback shape, and
+// the seven functions the output path calls are declared below. The AudioToolbox and AudioUnit frameworks
+// are linked (see build.zig), so every call reaches the real stack.
+
+typedef UInt32 AudioUnitPropertyID;
+typedef UInt32 AudioUnitScope;
+typedef UInt32 AudioUnitElement;
+typedef UInt32 AudioUnitRenderActionFlags;
+
+typedef struct OpaqueAudioComponent*          AudioComponent;
+typedef struct OpaqueAudioComponentInstance*  AudioComponentInstance;
+typedef AudioComponentInstance                AudioUnit;
+
+typedef struct AudioComponentDescription {
+    OSType  componentType;
+    OSType  componentSubType;
+    OSType  componentManufacturer;
+    UInt32  componentFlags;
+    UInt32  componentFlagsMask;
+} AudioComponentDescription;
+
+// The render proc the output unit pulls samples from. A zero-fill proc renders running silence.
+typedef OSStatus (*AURenderCallback)( void*                        inRefCon,
+                                      AudioUnitRenderActionFlags*  ioActionFlags,
+                                      const AudioTimeStamp*        inTimeStamp,
+                                      UInt32                       inBusNumber,
+                                      UInt32                       inNumberFrames,
+                                      AudioBufferList*             ioData);
+
+typedef struct AURenderCallbackStruct {
+    AURenderCallback  inputProc;
+    void*             inputProcRefCon;
+} AURenderCallbackStruct;
+
+// AudioComponent identifiers for the system default-output unit (Apple-manufactured).
+enum { kAudioUnitType_Output       = 'auou' };
+enum { kAudioUnitSubType_DefaultOutput = 'def ' };
+enum { kAudioUnitManufacturer_Apple = 'appl' };
+
+// The two AudioUnit properties the output path sets: the stream format and the render callback.
+enum { kAudioUnitProperty_StreamFormat      = 8  };
+enum { kAudioUnitProperty_SetRenderCallback = 23 };
+
+// AudioUnit scopes. The output unit's input scope (element 0) is where the client format and the render
+// callback are installed — it is the side the client feeds.
+enum { kAudioUnitScope_Global = 0 };
+enum { kAudioUnitScope_Input  = 1 };
+enum { kAudioUnitScope_Output = 2 };
+
+extern AudioComponent
+AudioComponentFindNext( AudioComponent                     inComponent,
+                        const AudioComponentDescription*   inDesc);
+
+extern OSStatus
+AudioComponentInstanceNew( AudioComponent            inComponent,
+                           AudioComponentInstance*   outInstance);
+
+extern OSStatus
+AudioComponentInstanceDispose( AudioComponentInstance inInstance);
+
+extern OSStatus
+AudioUnitSetProperty( AudioUnit             inUnit,
+                      AudioUnitPropertyID   inID,
+                      AudioUnitScope        inScope,
+                      AudioUnitElement      inElement,
+                      const void*           inData,
+                      UInt32                inDataSize);
+
+extern OSStatus AudioUnitInitialize(AudioUnit inUnit);
+extern OSStatus AudioUnitUninitialize(AudioUnit inUnit);
+extern OSStatus AudioOutputUnitStart(AudioUnit ci);
+extern OSStatus AudioOutputUnitStop(AudioUnit ci);
