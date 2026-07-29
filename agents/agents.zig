@@ -12,6 +12,7 @@ pub const context = @import("context/context.zig");
 pub const device_control = @import("device-control/device_control.zig");
 pub const injection_defense = @import("injection-defense/injection_defense.zig");
 pub const planner = @import("planner/planner.zig");
+pub const planner_executor = @import("planner/executor.zig");
 pub const router = @import("router/router.zig");
 pub const scheduler = @import("scheduler/scheduler.zig");
 pub const tool_registry = @import("tool-registry/tool_registry.zig");
@@ -42,6 +43,7 @@ test {
     _ = device_control;
     _ = injection_defense;
     _ = planner;
+    _ = planner_executor;
     _ = router;
     _ = scheduler;
     _ = tool_registry;
