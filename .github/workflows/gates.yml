@@ -128,6 +128,24 @@ jobs:
         if: matrix.host == 'linux-x86_64'
         run: infrastructure/ci/provision-lavapipe.sh
 
+      # Cache the downloaded engine archives, not the extracted tree.
+      #
+      # Same argument as the toolchain-archive cache above: vendor-engines
+      # re-hashes each archive against the SHA-256 pinned in engines.lock.json
+      # on every run, whether the bytes came from this cache or a fresh
+      # download, and drops a cache entry that fails. So a cache hit still
+      # passes through the digest verification and a poisoned cache fails it —
+      # the cache never substitutes for verification. Keyed on the manifest's
+      # content, so a re-pin is a new entry; the restore-key reuses the nearest
+      # prior archives when only some pins changed.
+      - name: Cache the downloaded engine archives
+        uses: actions/cache@v4
+        with:
+          path: .engine-archives
+          key: engine-archives-${{ matrix.host }}-${{ hashFiles('engines.lock.json') }}
+          restore-keys: |
+            engine-archives-${{ matrix.host }}-
+
       # Fetch and verify the pinned graphics engines so the device adapters
       # (built only when their headers are present) are compiled and their
       # tests run in CI, catching a binding regression that a checkout without
