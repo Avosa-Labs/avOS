@@ -590,9 +590,11 @@ pub fn build(b: *std.Build) void {
         module.link_libc = true;
         module.link_libcpp = true; // llama and most of ggml are C++
 
-        // The ggml C sources (tensor core, allocator, quants) and the CPU backend's C kernels,
-        // including the arm64 NEON arch path.
-        const c_flags = [_][]const u8{ "-DGGML_USE_CPU", "-DNDEBUG", "-std=c11", "-DGGML_VERSION=\"b10173\"", "-DGGML_COMMIT=\"e9fa0781f1c25fc4fe8c86be1edc6970661ad6f0\"" };
+        // The ggml C sources (tensor core, allocator, quants) and the CPU backend's C kernels. The
+        // generic (architecture-agnostic) kernel path is used — GGML_CPU_GENERIC — so the same source
+        // set compiles on every target host, arm64 and x86_64 alike, without an arch-specific SIMD
+        // variant per architecture. It is llama.cpp's own portable fallback, not a stand-in.
+        const c_flags = [_][]const u8{ "-DGGML_USE_CPU", "-DGGML_CPU_GENERIC", "-DNDEBUG", "-std=c11", "-DGGML_VERSION=\"b10173\"", "-DGGML_COMMIT=\"e9fa0781f1c25fc4fe8c86be1edc6970661ad6f0\"" };
         module.addCSourceFiles(.{
             .root = .{ .cwd_relative = root },
             .files = &.{
@@ -601,14 +603,13 @@ pub fn build(b: *std.Build) void {
                 "ggml/src/ggml-quants.c",
                 "ggml/src/ggml-cpu/ggml-cpu.c",
                 "ggml/src/ggml-cpu/quants.c",
-                "ggml/src/ggml-cpu/arch/arm/quants.c",
             },
             .flags = &c_flags,
         });
 
         // The ggml C++ sources (backend registry — CPU statically registered under GGML_USE_CPU —
         // graph ops, gguf reader) and the full llama library.
-        const cpp_flags = [_][]const u8{ "-DGGML_USE_CPU", "-DNDEBUG", "-std=c++17", "-DGGML_VERSION=\"b10173\"", "-DGGML_COMMIT=\"e9fa0781f1c25fc4fe8c86be1edc6970661ad6f0\"" };
+        const cpp_flags = [_][]const u8{ "-DGGML_USE_CPU", "-DGGML_CPU_GENERIC", "-DNDEBUG", "-std=c++17", "-DGGML_VERSION=\"b10173\"", "-DGGML_COMMIT=\"e9fa0781f1c25fc4fe8c86be1edc6970661ad6f0\"" };
         module.addCSourceFiles(.{
             .root = .{ .cwd_relative = root },
             .files = &.{
@@ -621,7 +622,7 @@ pub fn build(b: *std.Build) void {
                 "ggml/src/gguf.cpp",
                 "ggml/src/ggml-backend-reg.cpp",
                 "ggml/src/ggml-backend-dl.cpp",
-                // ggml CPU backend C++ kernels + arm64 NEON arch path.
+                // ggml CPU backend C++ kernels (generic, architecture-agnostic).
                 "ggml/src/ggml-cpu/ggml-cpu.cpp",
                 "ggml/src/ggml-cpu/repack.cpp",
                 "ggml/src/ggml-cpu/hbm.cpp",
@@ -630,7 +631,6 @@ pub fn build(b: *std.Build) void {
                 "ggml/src/ggml-cpu/unary-ops.cpp",
                 "ggml/src/ggml-cpu/vec.cpp",
                 "ggml/src/ggml-cpu/ops.cpp",
-                "ggml/src/ggml-cpu/arch/arm/repack.cpp",
                 // llama.
                 "src/llama.cpp",
                 "src/llama-adapter.cpp",
