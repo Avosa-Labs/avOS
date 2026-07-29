@@ -48,14 +48,28 @@ pub const OpenError = error{
     BadFormat,
     /// The named device does not exist for the requested direction.
     NoSuchDevice,
+    /// A bound backend accepted the request but the hardware stream would not open or start.
+    StreamFailed,
 };
 
 /// The backend an adapter provides once it binds a real audio library: it enumerates devices and opens
 /// streams. Held behind the interface so nothing above it depends on which library serves.
+///
+/// `devices_fn` and `can_open_fn` are always present. The three streaming hooks are optional and
+/// default to null: a backend that only enumerates and validates (as every backend did before real
+/// streaming was wired) leaves them null and the seam keeps its validate-only behaviour, so existing
+/// `Backend{...}` literals compile and behave unchanged. A backend that opens real hardware streams
+/// sets them, and the seam routes through them.
+///   - `open_stream_fn` opens and starts a real stream after the seam's validation passes.
+///   - `stop_stream_fn` stops and tears the stream down.
+///   - `stream_live_fn` reads, at the source, whether a stream is currently running.
 pub const Backend = struct {
     context: *anyopaque,
     devices_fn: *const fn (context: *anyopaque, out: []Device) []const Device,
     can_open_fn: *const fn (context: *anyopaque, device_id: u32, direction: Direction) bool,
+    open_stream_fn: ?*const fn (context: *anyopaque, device_id: u32, direction: Direction, format: Format) OpenError!void = null,
+    stop_stream_fn: ?*const fn (context: *anyopaque) void = null,
+    stream_live_fn: ?*const fn (context: *anyopaque) bool = null,
 };
 
 /// The platform audio interface: a seam a backend binds behind. With no backend bound it is honestly
@@ -83,11 +97,31 @@ pub const Audio = struct {
 
     /// Opens a stream on a device in a direction with a format — or a typed error. With no backend
     /// there is no hardware, so it fails NoBackend rather than pretending. A bad format or an unknown
-    /// device fails likewise, before any sample flows.
+    /// device fails likewise, before any sample flows. Once validation passes, a backend that has wired
+    /// real streaming (a non-null `open_stream_fn`) actually opens and starts the hardware stream and
+    /// its result stands; a backend that has not keeps the validate-only success it always gave, so the
+    /// honest-until-bound contract is unchanged.
     pub fn openStream(audio: Audio, device_id: u32, direction: Direction, format: Format) OpenError!void {
         const backend = audio.backend orelse return OpenError.NoBackend;
         if (!format.valid()) return OpenError.BadFormat;
         if (!backend.can_open_fn(backend.context, device_id, direction)) return OpenError.NoSuchDevice;
+        if (backend.open_stream_fn) |open| return open(backend.context, device_id, direction, format);
+    }
+
+    /// Stops a stream the bound backend has open. A backend without real streaming (no `stop_stream_fn`)
+    /// has nothing running to stop, so this is a no-op — matching its validate-only open. With no
+    /// backend there is nothing to stop either.
+    pub fn stopStream(audio: Audio) void {
+        const backend = audio.backend orelse return;
+        if (backend.stop_stream_fn) |stop| stop(backend.context);
+    }
+
+    /// Whether a stream is currently live, read from the bound backend at the source. Unbound, or a
+    /// backend that does not run real streams, is never live.
+    pub fn streamLive(audio: Audio) bool {
+        const backend = audio.backend orelse return false;
+        if (backend.stream_live_fn) |live| return live(backend.context);
+        return false;
     }
 };
 
