@@ -724,6 +724,39 @@ pub fn build(b: *std.Build) void {
         addCompileCheck(b, engine_compile_step, "coreaudio", module);
     }
 
+    // The AVFoundation camera adapter: a real macOS backend behind the platform camera seam
+    // (services/media/camera.zig), enumerating the host's actual video capture devices through
+    // AVFoundation. Built only on macOS — off macOS the seam keeps its honest-until-bound default and
+    // this module is never created, so the Linux gate skips it cleanly. AVCaptureDevice is Objective-C
+    // only, so a tiny .m shim (compiled with -fobjc-arc) exposes a pure-C ABI the adapter binds to; the
+    // AVFoundation, Foundation, and CoreMedia frameworks are linked so the calls reach the real stack.
+    if (target.result.os.tag == .macos) {
+        const camera_seam_module = b.createModule(.{
+            .root_source_file = b.path("services/media/camera.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        const module = b.createModule(.{
+            .root_source_file = b.path("services/media/avfoundation/avfoundation.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "camera", .module = camera_seam_module },
+            },
+        });
+        module.addIncludePath(b.path("services/media/avfoundation")); // the shim.h
+        module.addCSourceFile(.{
+            .file = b.path("services/media/avfoundation/shim.m"),
+            .flags = &.{"-fobjc-arc"},
+        });
+        module.link_libc = true;
+        module.linkFramework("AVFoundation", .{});
+        module.linkFramework("Foundation", .{});
+        module.linkFramework("CoreMedia", .{});
+        addModuleTests(b, test_step, "avfoundation", module);
+        addCompileCheck(b, engine_compile_step, "avfoundation", module);
+    }
+
     // The text-run path: shape a string with HarfBuzz, rasterize each shaped glyph with FreeType,
     // assemble the run's coverage, and draw it through the Vulkan device. Built only where all
     // three engines are vendored, so it stands on the whole text pipeline at once.
