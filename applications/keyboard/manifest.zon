@@ -1,0 +1,10 @@
+.{
+    // The package identity and declared capabilities for the Keyboard app. What an agent can discover
+    // in it is exactly what is declared here and verified against its tools. Reading the shortcuts and
+    // expanding a trigger are silent; adding a shortcut and learning a word are local changes.
+    .name = "Keyboard",
+    .package = "default.keyboard",
+    .kind = .default_app,
+    .capabilities = .{ "keyboard.shortcuts", "keyboard.expand", "keyboard.add_shortcut", "keyboard.learn" },
+    .signing = .system_image,
+}
