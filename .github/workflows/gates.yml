@@ -35,7 +35,11 @@ jobs:
   gates:
     name: gates (${{ matrix.host }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    # Headroom for the one-time cold compile of the on-device model engine (llama.cpp and
+    # ggml). It compiles once when its pin or the build changes and is reused from the Zig
+    # cache on every run in between, so a warm run finishes in a fraction of this; the ceiling
+    # only has to let that first cold build finish and populate the cache.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
