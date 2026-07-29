@@ -724,6 +724,43 @@ pub fn build(b: *std.Build) void {
         addCompileCheck(b, engine_compile_step, "coreaudio", module);
     }
 
+    // The ALSA host-audio adapter: a real Linux backend behind the platform audio seam
+    // (services/media/audio.zig), enumerating the host's actual PCM devices through libasound. Built
+    // only on Linux — off Linux the seam keeps its honest-until-bound default and this module is never
+    // created, so the macOS gate skips it cleanly. The adapter hand-declares the libasound ABI with
+    // `extern` (there are no ALSA headers to @cImport), so nothing crosses a relative module boundary,
+    // and links the system "asound" library so the hint calls reach real ALSA.
+    if (target.result.os.tag == .linux) {
+        const audio_seam_module = b.createModule(.{
+            .root_source_file = b.path("services/media/audio.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        const module = b.createModule(.{
+            .root_source_file = b.path("services/media/alsa/alsa.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "audio", .module = audio_seam_module },
+            },
+        });
+        module.link_libc = true;
+        module.linkSystemLibrary("asound", .{});
+        // Cross-compiling to Linux from a host that has no libasound (this repo's macOS build host),
+        // the compile-check still resolves the "asound" library file even though it never links a
+        // binary, so it needs a libasound.so to *find*. Point the module at an empty stub named
+        // libasound.so so `engine-compile -Dtarget=x86_64-linux-gnu` passes locally as a compile
+        // proof. This branch is taken only off a Linux host: on the native Linux CI runner the stub is
+        // never added, so the real system libasound (from libasound2-dev) is what gets linked and run.
+        if (b.graph.host.result.os.tag != .linux) {
+            const asound_stub = b.addWriteFiles();
+            _ = asound_stub.add("libasound.so", "");
+            module.addLibraryPath(asound_stub.getDirectory());
+        }
+        addModuleTests(b, test_step, "alsa", module);
+        addCompileCheck(b, engine_compile_step, "alsa", module);
+    }
+
     // The AVFoundation camera adapter: a real macOS backend behind the platform camera seam
     // (services/media/camera.zig), enumerating the host's actual video capture devices through
     // AVFoundation. Built only on macOS — off macOS the seam keeps its honest-until-bound default and
