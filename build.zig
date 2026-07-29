@@ -761,6 +761,31 @@ pub fn build(b: *std.Build) void {
         addCompileCheck(b, engine_compile_step, "alsa", module);
     }
 
+    // The V4L2 camera adapter: a real Linux backend behind the platform camera seam
+    // (services/media/camera.zig), enumerating the host's /dev/video* capture devices through
+    // Video4Linux2. Built only on Linux — off Linux the module is never created, so other hosts keep
+    // the seam's dark honest-until-bound default. V4L2 is kernel ioctls over libc, so there is no
+    // external library to link (no gates.yml change) and the UAPI struct and ioctl request are
+    // hand-declared, so no headers are needed to build; only libc is linked.
+    if (target.result.os.tag == .linux) {
+        const camera_seam_module = b.createModule(.{
+            .root_source_file = b.path("services/media/camera.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        const module = b.createModule(.{
+            .root_source_file = b.path("services/media/v4l2/v4l2.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "camera", .module = camera_seam_module },
+            },
+        });
+        module.link_libc = true;
+        addModuleTests(b, test_step, "v4l2", module);
+        addCompileCheck(b, engine_compile_step, "v4l2", module);
+    }
+
     // The AVFoundation camera adapter: a real macOS backend behind the platform camera seam
     // (services/media/camera.zig), enumerating the host's actual video capture devices through
     // AVFoundation. Built only on macOS — off macOS the seam keeps its honest-until-bound default and
