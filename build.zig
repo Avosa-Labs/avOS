@@ -696,6 +696,34 @@ pub fn build(b: *std.Build) void {
         addCompileCheck(b, engine_compile_step, "local-llama-backend", llama_backend_module);
     }
 
+    // The CoreAudio host-audio adapter: a real macOS backend behind the platform audio seam
+    // (services/media/audio.zig), enumerating the host's actual devices through the Core Audio HAL.
+    // Built only on macOS — off macOS the seam keeps its honest-until-bound default and this module is
+    // never created, so the Linux gate skips it cleanly. It reaches the seam through the named "audio"
+    // module, so nothing crosses a relative module boundary, and links the CoreAudio and
+    // CoreFoundation frameworks (the latter for CFString device names).
+    if (target.result.os.tag == .macos) {
+        const audio_seam_module = b.createModule(.{
+            .root_source_file = b.path("services/media/audio.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        const module = b.createModule(.{
+            .root_source_file = b.path("services/media/coreaudio/coreaudio.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "audio", .module = audio_seam_module },
+            },
+        });
+        module.addIncludePath(b.path("services/media/coreaudio")); // the coreaudio_shim.h
+        module.link_libc = true;
+        module.linkFramework("CoreAudio", .{});
+        module.linkFramework("CoreFoundation", .{});
+        addModuleTests(b, test_step, "coreaudio", module);
+        addCompileCheck(b, engine_compile_step, "coreaudio", module);
+    }
+
     // The text-run path: shape a string with HarfBuzz, rasterize each shaped glyph with FreeType,
     // assemble the run's coverage, and draw it through the Vulkan device. Built only where all
     // three engines are vendored, so it stands on the whole text pipeline at once.
