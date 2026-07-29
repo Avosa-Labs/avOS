@@ -1,0 +1,10 @@
+.{
+    // The package identity and declared capabilities for the Home app. What an agent can discover in it
+    // is exactly what is declared here and verified against its tools. Listing and reading a device are
+    // silent, controlling a light/plug/lock is a local change, and unlocking a lock is held.
+    .name = "Home",
+    .package = "default.home",
+    .kind = .default_app,
+    .capabilities = .{ "home.list", "home.status", "home.set", "home.unlock" },
+    .signing = .system_image,
+}
