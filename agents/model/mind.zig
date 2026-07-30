@@ -39,6 +39,10 @@ pub const Health = enum {
 pub const Proposal = struct {
     provenance: interface.Provenance = interface.output_provenance,
     tokens: u32,
+    /// The generated text, when the mind produces it — a slice of the caller's buffer, owned by the
+    /// caller, never by the mind. A mind that proves only a bounded pass (or one that fabricates
+    /// nothing) leaves this empty; it carries the same untrusted taint as the proposal itself.
+    text: []const u8 = "",
 };
 
 /// The mind contract every adapter conforms to: it proposes, and it reports its health.
