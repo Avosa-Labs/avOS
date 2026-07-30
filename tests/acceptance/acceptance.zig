@@ -11,6 +11,7 @@ pub const session_continuity = @import("session_continuity.zig");
 pub const integrated_demonstration = @import("integrated_demonstration.zig");
 pub const crash_recovery = @import("crash_recovery.zig");
 pub const example_walkthrough = @import("example_walkthrough.zig");
+pub const agent_acts = @import("agent_acts.zig");
 
 test {
     _ = agent_shell;
@@ -19,4 +20,5 @@ test {
     _ = integrated_demonstration;
     _ = crash_recovery;
     _ = example_walkthrough;
+    _ = agent_acts;
 }
