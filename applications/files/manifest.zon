@@ -6,6 +6,6 @@
     .name = "Files",
     .package = "default.files",
     .kind = .default_app,
-    .capabilities = .{ "file.list", "file.open", "file.search", "file.tagged", "file.tag", "file.edit", "file.move", "file.share", "file.delete" },
+    .capabilities = .{ "file.list", "file.open", "file.preview", "file.search", "file.tagged", "file.tag", "file.edit", "file.move", "file.revert", "file.share", "file.delete" },
     .signing = .system_image,
 }

@@ -25,11 +25,14 @@ pub const search = domain.Store.search;
 pub const tools = [_]framework.Tool{
     .{ .name = "file.list", .required_capability = "files.read", .effect = .read_only },
     .{ .name = "file.open", .required_capability = "files.read", .effect = .read_only },
+    .{ .name = "file.preview", .required_capability = "files.read", .effect = .read_only },
     .{ .name = "file.search", .required_capability = "files.read", .effect = .read_only },
     .{ .name = "file.tagged", .required_capability = "files.read", .effect = .read_only },
     .{ .name = "file.tag", .required_capability = "files.write", .effect = .local_mutation },
     .{ .name = "file.edit", .required_capability = "files.write", .effect = .local_mutation },
     .{ .name = "file.move", .required_capability = "files.write", .effect = .local_mutation },
+    // Reverting a move or rename is itself a reversible local change, so it is the agent's own.
+    .{ .name = "file.revert", .required_capability = "files.write", .effect = .local_mutation },
     .{ .name = "file.share", .required_capability = "files.share", .effect = .external },
     // Deleting is consequential — irreversible data loss — so an agent's delete is held
     // for the person rather than run on the agent's own authority.

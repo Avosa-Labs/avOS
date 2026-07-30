@@ -21,6 +21,23 @@ pub const Input = framework.Input;
 
 const Entry = struct { path: []const u8, is_dir: bool };
 const Applied = struct { key: u128, result: []const u8 };
+/// A move that can be undone: the file went from `from` to `to`, and reverting it puts the path
+/// back. Only reversible local changes are recorded — a held delete is a deliberate, irreversible
+/// act and is not something revert quietly resurrects.
+const Move = struct { from: []const u8, to: []const u8 };
+
+/// A file's kind for a quick look, without opening it: a folder, its extension when it has one, or a
+/// plain file. A pure read of the path — the borrowed extension outlives the call like the path does.
+pub fn previewKind(path: []const u8, is_dir: bool) []const u8 {
+    if (is_dir) return "folder";
+    const slash = std.mem.lastIndexOfScalar(u8, path, '/');
+    const base = if (slash) |s| path[s + 1 ..] else path;
+    const dot = std.mem.lastIndexOfScalar(u8, base, '.');
+    if (dot) |d| {
+        if (d > 0 and d + 1 < base.len) return base[d + 1 ..]; // an extension, not a dotfile or a trailing dot
+    }
+    return "file";
+}
 
 /// Whether a relative path stays within the granted root — never absolute, never
 /// climbing above it.
@@ -47,6 +64,7 @@ pub const Store = struct {
     entries: std.ArrayListUnmanaged(Entry) = .empty,
     tags: std.ArrayListUnmanaged(Tag) = .empty,
     applied: std.ArrayListUnmanaged(Applied) = .empty,
+    undo_log: std.ArrayListUnmanaged(Move) = .empty,
     reply: [8]u8 = undefined,
 
     pub fn init(gpa: std.mem.Allocator) Store {
@@ -57,7 +75,16 @@ pub const Store = struct {
         store.entries.deinit(store.gpa);
         store.tags.deinit(store.gpa);
         store.applied.deinit(store.gpa);
+        store.undo_log.deinit(store.gpa);
         store.* = undefined;
+    }
+
+    /// Undoes the most recent recorded move, putting the file's path back. Returns the restored path,
+    /// or null when there is nothing to undo. Constant work beyond finding the moved entry.
+    fn revertLast(store: *Store) ?[]const u8 {
+        const last = store.undo_log.pop() orelse return null;
+        if (store.find(last.to)) |index| store.entries.items[index].path = last.from;
+        return last.from;
     }
 
     /// Seeds the tree with an entry, for the surface and tests to populate it.
@@ -161,6 +188,13 @@ pub const Store = struct {
             if (!withinGrant(input.args)) return .failed;
             return if (store.find(input.args) != null) .{ .ok = "opened" } else .failed;
         }
+        if (std.mem.eql(u8, op, "file.preview")) {
+            // A quick look: the file's kind, without opening it. A read, confined to the grant.
+            if (!withinGrant(input.args)) return .failed;
+            const index = store.find(input.args) orelse return .failed;
+            const entry = store.entries.items[index];
+            return .{ .ok = previewKind(entry.path, entry.is_dir) };
+        }
         if (std.mem.eql(u8, op, "file.search")) {
             // A silent, grant-confined search: `args` is the query. The count of matches is
             // returned; the matched paths are the surface's to read through `search`.
@@ -200,8 +234,16 @@ pub const Store = struct {
             const to = input.args[sep + 1 ..];
             if (!withinGrant(from) or !withinGrant(to)) return .failed;
             const index = store.find(from) orelse return .failed;
+            // Record the move before applying it, so a recorded undo is always one that happened.
+            store.undo_log.append(store.gpa, .{ .from = from, .to = to }) catch return .failed;
             store.entries.items[index].path = to;
             return store.commit(key, "moved");
+        }
+        if (std.mem.eql(u8, op, "file.revert")) {
+            // Undo the last move or rename — a reversible local change, exactly-once by key. There is
+            // nothing to revert if no move is recorded.
+            _ = store.revertLast() orelse return .failed;
+            return store.commit(key, "reverted");
         }
         if (std.mem.eql(u8, op, "file.share")) {
             if (!withinGrant(input.args) or store.find(input.args) == null) return .failed;
@@ -277,6 +319,48 @@ test "an operation on a path outside the grant is refused before it touches the 
     defer store.deinit();
     try store.add("documents/report.txt", false);
     try testing.expectEqual(DomainResult.failed, Store.execute(&store, .{ .operation = "file.open", .args = "../escape" }, agent(), 1));
+}
+
+test "a quick-look preview reports a file's kind without opening it" {
+    const gpa = testing.allocator;
+    var store = Store.init(gpa);
+    defer store.deinit();
+    try store.add("documents/report.txt", false);
+    try store.add("photos/lisbon.JPG", false);
+    try store.add("documents", true);
+    try store.add("documents/.hidden", false);
+
+    // The extension is the kind, case preserved from the path; a folder reads as a folder.
+    try testing.expectEqualStrings("txt", Store.execute(&store, .{ .operation = "file.preview", .args = "documents/report.txt" }, agent(), 0).ok);
+    try testing.expectEqualStrings("JPG", Store.execute(&store, .{ .operation = "file.preview", .args = "photos/lisbon.JPG" }, agent(), 0).ok);
+    try testing.expectEqualStrings("folder", Store.execute(&store, .{ .operation = "file.preview", .args = "documents" }, agent(), 0).ok);
+    // A dotfile has no extension to preview.
+    try testing.expectEqualStrings("file", Store.execute(&store, .{ .operation = "file.preview", .args = "documents/.hidden" }, agent(), 0).ok);
+    // A preview is confined to the grant and to real files.
+    try testing.expectEqual(DomainResult.failed, Store.execute(&store, .{ .operation = "file.preview", .args = "../escape" }, agent(), 0));
+    try testing.expectEqual(DomainResult.failed, Store.execute(&store, .{ .operation = "file.preview", .args = "documents/ghost.txt" }, agent(), 0));
+}
+
+test "reverting undoes the last move, exactly once, and refuses when there is nothing to undo" {
+    const gpa = testing.allocator;
+    var store = Store.init(gpa);
+    defer store.deinit();
+    try store.add("documents/report.txt", false);
+
+    // Nothing moved yet: there is nothing to revert.
+    try testing.expectEqual(DomainResult.failed, Store.execute(&store, .{ .operation = "file.revert", .args = "" }, agent(), 1));
+
+    // Move, then revert: the file is back at its original path.
+    _ = Store.execute(&store, .{ .operation = "file.move", .args = "documents/report.txt>archive/report.txt" }, agent(), 2);
+    try testing.expect(store.find("archive/report.txt") != null);
+    _ = Store.execute(&store, .{ .operation = "file.revert", .args = "" }, agent(), 3);
+    try testing.expect(store.find("documents/report.txt") != null);
+    try testing.expect(store.find("archive/report.txt") == null);
+
+    // Exactly-once by key: replaying the same revert key does not pop a second move.
+    _ = Store.execute(&store, .{ .operation = "file.move", .args = "documents/report.txt>archive/report.txt" }, agent(), 4);
+    _ = Store.execute(&store, .{ .operation = "file.revert", .args = "" }, agent(), 3); // same key as the first revert
+    try testing.expect(store.find("archive/report.txt") != null); // not undone: the key was already spent
 }
 
 test "search is case-insensitive, grant-confined, and returns matching paths" {
