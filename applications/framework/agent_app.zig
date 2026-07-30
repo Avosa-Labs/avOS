@@ -49,6 +49,15 @@ pub const platform = struct {
     pub const time = core.time;
     pub const civil = core.civil;
     pub const zone = core.zone;
+    /// The on-device vision mind — an image in, untrusted text out, behind the same seam every mind
+    /// sits behind. Re-exported so an app whose surface reads a frame (Camera Lens and Describe) can
+    /// reach it through the frame rather than importing the agent plane directly. Honest-until-loaded:
+    /// with no vision runtime bound it is unavailable, and the app shows that rather than inventing a
+    /// reading.
+    pub const vision = agents.model_local_vision;
+    /// The model-call interface — the request bound and provenance the vision mind reads a frame
+    /// under. An app needs it only to state how large a reading it wants.
+    pub const model = agents.model_interface;
 };
 
 /// How the data an app handles is classified for the model router: whether it may ever leave the
