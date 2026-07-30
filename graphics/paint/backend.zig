@@ -88,6 +88,18 @@ fn instanceFor(command: paint.Command) Instance {
             .top = colour(c.top),
             .bottom = colour(c.bottom),
         },
+        // No dedicated shadow instance yet: encode as a rounded silhouette at the shadow tint and
+        // alpha, the blur folded into the radius. The CPU path renders the true feather.
+        .shadow => |c| .{
+            .x = @floatFromInt(c.rect.x),
+            .y = @floatFromInt(c.rect.y),
+            .w = @floatFromInt(c.rect.w),
+            .h = @floatFromInt(c.rect.h),
+            .radius = @floatFromInt(c.radius + c.blur),
+            .kind = @intFromEnum(Kind.rounded),
+            .top = .{ c.colour.r, c.colour.g, c.colour.b, c.alpha },
+            .bottom = .{ c.colour.r, c.colour.g, c.colour.b, c.alpha },
+        },
     };
 }
 
