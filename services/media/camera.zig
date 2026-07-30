@@ -41,12 +41,25 @@ pub const StartError = error{
     NoSuchCamera,
 };
 
-/// The backend an adapter provides once it binds a real capture library: it enumerates cameras and
-/// reports whether one can start. Held behind the interface so nothing above depends on which library.
+/// The backend an adapter provides once it binds a real capture library. Enumeration is always
+/// present; real frame streaming is optional, so an adapter that only answers "which cameras exist"
+/// (like the first enumeration-only adapters) still binds, and one that carries a live capture session
+/// fills the streaming functions in:
+///   - `start_stream_fn` starts a real capture session on a camera, validating it exists.
+///   - `stop_stream_fn` stops the session and tears it down.
+///   - `stream_live_fn` reads, at the source, whether a session is currently delivering — the truth
+///     the privacy indicator is read from, so it cannot be held on without the light.
+///   - `latest_frame_fn` reports the most recent delivered frame's shape, or false before any frame
+///     has arrived. The pixels stay in the backend's buffer; only the frame's shape crosses the seam.
+/// Held behind the interface so nothing above depends on which library.
 pub const Backend = struct {
     context: *anyopaque,
     cameras_fn: *const fn (context: *anyopaque, out: []Camera) []const Camera,
     has_camera_fn: *const fn (context: *anyopaque, camera_id: u32) bool,
+    start_stream_fn: ?*const fn (context: *anyopaque, camera_id: u32) StartError!void = null,
+    stop_stream_fn: ?*const fn (context: *anyopaque) void = null,
+    stream_live_fn: ?*const fn (context: *anyopaque) bool = null,
+    latest_frame_fn: ?*const fn (context: *anyopaque, out: *Frame) bool = null,
 };
 
 /// The platform camera interface: a seam a backend binds behind. Dark until bound, and while a stream
@@ -75,22 +88,45 @@ pub const CameraSource = struct {
     }
 
     /// Starts streaming from a camera, or a typed error. With no backend there is no camera, so it
-    /// fails NoBackend. Starting turns the privacy indicator on.
+    /// fails NoBackend. A backend with real streaming (a non-null `start_stream_fn`) starts an actual
+    /// capture session, which validates the camera itself; an enumeration-only backend falls back to
+    /// checking the camera exists. Either way, starting turns the privacy indicator on.
     pub fn start(source: *CameraSource, camera_id: u32) StartError!void {
         const backend = source.backend orelse return StartError.NoBackend;
-        if (!backend.has_camera_fn(backend.context, camera_id)) return StartError.NoSuchCamera;
+        if (backend.start_stream_fn) |start_stream| {
+            try start_stream(backend.context, camera_id);
+        } else if (!backend.has_camera_fn(backend.context, camera_id)) {
+            return StartError.NoSuchCamera;
+        }
         source.streaming = true;
     }
 
-    /// Stops streaming, turning the indicator off.
+    /// Stops streaming, turning the indicator off. A backend with a real session has it torn down.
     pub fn stop(source: *CameraSource) void {
+        if (source.backend) |backend| {
+            if (backend.stop_stream_fn) |stop_stream| stop_stream(backend.context);
+        }
         source.streaming = false;
     }
 
-    /// Whether the privacy indicator is lit. It is read from whether a stream is live at the source, so
-    /// it cannot be held on without the light or off with the camera open — the indicator is the truth
-    /// of the source, not a flag a principal sets.
+    /// The most recent frame's shape, or null before any frame has arrived (or with no streaming
+    /// backend bound). The pixels are not carried here — only the frame's dimensions and format, for a
+    /// consumer to size its work against.
+    pub fn latestFrame(source: CameraSource) ?Frame {
+        const backend = source.backend orelse return null;
+        const latest = backend.latest_frame_fn orelse return null;
+        var frame: Frame = undefined;
+        return if (latest(backend.context, &frame)) frame else null;
+    }
+
+    /// Whether the privacy indicator is lit. When a real streaming backend is bound it is read from
+    /// the source itself (`stream_live_fn`), so it cannot be held on without the light or off with the
+    /// camera open; otherwise it reflects whether a stream was started. The indicator is the truth of
+    /// the source, not a flag a principal sets.
     pub fn indicatorLit(source: CameraSource) bool {
+        if (source.backend) |backend| {
+            if (backend.stream_live_fn) |live| return live(backend.context);
+        }
         return source.streaming;
     }
 };
@@ -151,4 +187,73 @@ test "unbinding stops the stream and clears the indicator" {
     source.unbind();
     try testing.expect(!source.available());
     try testing.expect(!source.indicatorLit()); // the light cannot survive the source going away
+}
+
+// A streaming stub standing for a real capture backend: it runs a session, reports the indicator from
+// the session's own state, and delivers a frame once running — so the streaming seam is observable
+// without a camera.
+const StreamStub = struct {
+    running: bool = false,
+    fn cameras(_: *anyopaque, out: []Camera) []const Camera {
+        return stubCameras(undefined, out);
+    }
+    fn hasCamera(_: *anyopaque, camera_id: u32) bool {
+        return stubHasCamera(undefined, camera_id);
+    }
+    fn startStream(context: *anyopaque, camera_id: u32) StartError!void {
+        const self: *StreamStub = @ptrCast(@alignCast(context));
+        if (!stubHasCamera(undefined, camera_id)) return StartError.NoSuchCamera;
+        self.running = true;
+    }
+    fn stopStream(context: *anyopaque) void {
+        const self: *StreamStub = @ptrCast(@alignCast(context));
+        self.running = false;
+    }
+    fn streamLive(context: *anyopaque) bool {
+        const self: *StreamStub = @ptrCast(@alignCast(context));
+        return self.running;
+    }
+    fn latestFrame(context: *anyopaque, out: *Frame) bool {
+        const self: *StreamStub = @ptrCast(@alignCast(context));
+        if (!self.running) return false; // no frame before a session is delivering
+        out.* = .{ .width = 1280, .height = 720, .format = .nv12 };
+        return true;
+    }
+    fn backend(self: *StreamStub) Backend {
+        return .{
+            .context = self,
+            .cameras_fn = cameras,
+            .has_camera_fn = hasCamera,
+            .start_stream_fn = startStream,
+            .stop_stream_fn = stopStream,
+            .stream_live_fn = streamLive,
+            .latest_frame_fn = latestFrame,
+        };
+    }
+};
+
+test "a streaming backend delivers frames and drives the indicator from the live session" {
+    var stub = StreamStub{};
+    var source = CameraSource{};
+    source.bind(stub.backend());
+
+    // Before starting: the session is not live, so no frame and the indicator is off — read from the
+    // source, not a local flag.
+    try testing.expect(!source.indicatorLit());
+    try testing.expectEqual(@as(?Frame, null), source.latestFrame());
+
+    // Starting runs the real session: the indicator lights from the source and a frame is delivered.
+    try source.start(1);
+    try testing.expect(source.indicatorLit());
+    const frame = source.latestFrame() orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(u16, 1280), frame.width);
+    try testing.expectEqual(PixelFormat.nv12, frame.format);
+
+    // Stopping tears the session down: the indicator follows the source off, and frames stop.
+    source.stop();
+    try testing.expect(!source.indicatorLit());
+    try testing.expectEqual(@as(?Frame, null), source.latestFrame());
+
+    // An unknown camera cannot start a session.
+    try testing.expectError(StartError.NoSuchCamera, source.start(99));
 }
