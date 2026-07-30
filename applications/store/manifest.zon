@@ -6,6 +6,6 @@
     .name = "Store",
     .package = "default.store",
     .kind = .default_app,
-    .capabilities = .{ "store.browse", "store.details", "store.install", "store.update" },
+    .capabilities = .{ "store.browse", "store.details", "store.provenance", "store.install", "store.sideload", "store.update" },
     .signing = .system_image,
 }

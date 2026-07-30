@@ -14,7 +14,11 @@ pub const updateWidensCapabilities = domain.updateWidensCapabilities;
 pub const tools = [_]framework.Tool{
     .{ .name = "store.browse", .required_capability = "store.browse", .effect = .read_only },
     .{ .name = "store.details", .required_capability = "store.browse", .effect = .read_only },
+    .{ .name = "store.provenance", .required_capability = "store.browse", .effect = .read_only },
     .{ .name = "store.install", .required_capability = "store.install", .effect = .value_transfer },
+    // A sideload installs from outside the store; like an install it is held for the person, and its
+    // source is recorded so a sideloaded app is never mistaken for a signed store one.
+    .{ .name = "store.sideload", .required_capability = "store.install", .effect = .value_transfer },
     .{ .name = "store.update", .required_capability = "store.install", .effect = .local_mutation },
 };
 
@@ -27,6 +31,10 @@ test "a sideloaded install always needs an explicit acknowledgement" {
     try testing.expect(installNeedsAcknowledgement(.sideload));
     try testing.expect(!installNeedsAcknowledgement(.store));
 }
-test "installing is value-transfer and held for the person" {
-    try testing.expect(tools[2].effect.needsApproval());
+test "installing and sideloading are value-transfer and held for the person" {
+    for (tools) |tool| {
+        const held = tool.effect.needsApproval();
+        const consequential = std.mem.eql(u8, tool.name, "store.install") or std.mem.eql(u8, tool.name, "store.sideload");
+        try testing.expectEqual(consequential, held);
+    }
 }
