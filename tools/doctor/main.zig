@@ -15,7 +15,7 @@ const brand = @import("brand");
 
 const manifest_path = "toolchain.lock.json";
 const package_manifest_path = "build.zig.zon";
-const specification_path = "docs/PLATFORM_SPEC.md";
+const specification_path = "docs/private/PLATFORM_SPEC.md";
 const git_exclude_path = ".git/info/exclude";
 
 /// Declarations that would make a dependency float instead of resolving to one

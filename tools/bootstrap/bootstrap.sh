@@ -33,7 +33,7 @@ USAGE
 repository_root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 manifest="$repository_root/toolchain.lock.json"
 tool_root="$repository_root/.tools"
-specification="docs/PLATFORM_SPEC.md"
+specification="docs/private/PLATFORM_SPEC.md"
 
 offline=0
 check_only=0
