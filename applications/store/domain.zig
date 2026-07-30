@@ -41,10 +41,11 @@ pub fn updateWidensCapabilities(granted: []const []const u8, requested: []const 
 
 const Applied = struct { key: u128, result: []const u8 };
 
-/// What a package was granted at install: its name and the capabilities it declared, so a later
-/// update can be diffed against them. Capabilities are held as the comma-separated list the install
-/// carried, split on demand for the diff.
-const Grant = struct { app: []const u8, caps: []const u8 };
+/// What a package was granted at install: its name, the capabilities it declared (so a later update
+/// can be diffed against them), and the source it came from (so its provenance is recorded, not
+/// guessed). Capabilities are held as the comma-separated list the install carried, split on demand
+/// for the diff.
+const Grant = struct { app: []const u8, caps: []const u8, source: Source };
 
 /// The part of an install/update argument before the "|": the app name. Arguments are "app" or
 /// "app|cap1,cap2".
@@ -98,6 +99,20 @@ pub const Store = struct {
         }
         return null;
     }
+    /// The source an installed app came from, or null if it is not installed — its provenance, for
+    /// the surface to badge a sideloaded app apart from one that came signed from the store.
+    pub fn provenanceOf(store: *Store, app: []const u8) ?Source {
+        if (store.grantIndex(app)) |i| return store.grants.items[i].source;
+        return null;
+    }
+    /// Records an install from `source`, granting the declared capabilities, exactly-once by key.
+    fn installFrom(store: *Store, args: []const u8, source: Source, key: u128, result: []const u8) DomainResult {
+        if (args.len == 0) return .failed;
+        const app = appPart(args);
+        store.installed.append(store.gpa, app) catch return .failed;
+        store.grants.append(store.gpa, .{ .app = app, .caps = capsPart(args), .source = source }) catch return .failed;
+        return store.commit(key, result);
+    }
     fn priorResult(store: *Store, key: u128) ?[]const u8 {
         for (store.applied.items) |e| if (e.key == key) return e.result;
         return null;
@@ -111,13 +126,18 @@ pub const Store = struct {
         const store: *Store = @ptrCast(@alignCast(context));
         const op = input.operation;
         if (std.mem.eql(u8, op, "store.browse") or std.mem.eql(u8, op, "store.details")) return .{ .ok = "browsed" };
+        if (std.mem.eql(u8, op, "store.provenance")) {
+            // A read: where an installed app came from, so the surface can badge a sideload apart
+            // from a store install. An app that is not installed has no provenance.
+            return if (store.provenanceOf(input.args)) |src| .{ .ok = @tagName(src) } else .failed;
+        }
         if (store.priorResult(key)) |prior| return .{ .ok = prior };
-        if (std.mem.eql(u8, op, "store.install")) {
-            if (input.args.len == 0) return .failed;
-            const app = appPart(input.args);
-            store.installed.append(store.gpa, app) catch return .failed;
-            store.grants.append(store.gpa, .{ .app = app, .caps = capsPart(input.args) }) catch return .failed;
-            return store.commit(key, "installed");
+        if (std.mem.eql(u8, op, "store.install")) return store.installFrom(input.args, .store, key, "installed");
+        if (std.mem.eql(u8, op, "store.sideload")) {
+            // A sideload installs a package from outside the store. It is held for the person like an
+            // install, and its provenance is recorded as a sideload so it is never mistaken for a
+            // signed store app — the acknowledgement a sideload needs is the person's own approval.
+            return store.installFrom(input.args, .sideload, key, "sideloaded");
         }
         if (std.mem.eql(u8, op, "store.update")) {
             const app = appPart(input.args);
@@ -166,6 +186,25 @@ test "an update within the granted capabilities applies; one that widens is refu
     // The same widening update by the person proceeds — granting new authority is the person's to do.
     const by_person = Store.execute(&store, .{ .operation = "store.update", .args = "Itinerary|read,admin" }, human(), 4);
     try testing.expectEqualStrings("updated", by_person.ok);
+}
+
+test "an install records its provenance: store or sideload, read back by the surface" {
+    const gpa = testing.allocator;
+    var store = Store.init(gpa);
+    defer store.deinit();
+    // A store install and a sideload of two different apps.
+    _ = Store.execute(&store, .{ .operation = "store.install", .args = "Itinerary|read" }, agent(), 1);
+    _ = Store.execute(&store, .{ .operation = "store.sideload", .args = "SideApp|read" }, human(), 2);
+    try testing.expectEqual(@as(usize, 2), store.installedCount());
+
+    // Provenance comes back as the source each came from — the badge the surface shows.
+    try testing.expectEqualStrings("store", Store.execute(&store, .{ .operation = "store.provenance", .args = "Itinerary" }, agent(), 0).ok);
+    try testing.expectEqualStrings("sideload", Store.execute(&store, .{ .operation = "store.provenance", .args = "SideApp" }, agent(), 0).ok);
+    // An app that is not installed has no provenance.
+    try testing.expectEqual(DomainResult.failed, Store.execute(&store, .{ .operation = "store.provenance", .args = "Ghost" }, agent(), 0));
+    // A sideload is exactly-once by key like any install.
+    _ = Store.execute(&store, .{ .operation = "store.sideload", .args = "SideApp|read" }, human(), 2);
+    try testing.expectEqual(@as(usize, 2), store.installedCount());
 }
 
 test "the capability diff detects a newly requested capability" {
