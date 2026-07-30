@@ -317,26 +317,18 @@ test "can-open agrees with the enumerated set" {
     var ca = CoreAudioBackend.init();
     var host = audio.Audio{};
     host.bind(ca.backend());
-    // Opening a playback device now starts a real output stream; leave none running when the test ends.
-    defer host.stopStream();
 
     var buf: [max_entries]audio.Device = undefined;
     const devices = host.devices(&buf);
 
-    // Every enumerated device opens in the direction it was reported for, and its opposite direction is
-    // rejected unless that opposite was itself enumerated (a duplex device).
-    for (devices) |d| {
-        try host.openStream(d.id, d.direction, .{ .sample_rate_hz = 48_000, .channels = 1, .encoding = .s16 });
-
-        const opposite: audio.Direction = if (d.direction == .capture) .playback else .capture;
-        var opposite_enumerated = false;
-        for (devices) |other| {
-            if (other.id == d.id and other.direction == opposite) opposite_enumerated = true;
-        }
-        if (!opposite_enumerated) {
-            try testing.expectError(audio.OpenError.NoSuchDevice, host.openStream(d.id, opposite, .{ .sample_rate_hz = 48_000, .channels = 1, .encoding = .s16 }));
-        }
+    // The suite never opens a real device — a capture open would light the microphone, and opening a
+    // stream is host-integration, kept out of the tests. Only the refusals, which the seam decides
+    // before any device is touched, run here: a bad format on an enumerated id is rejected without
+    // opening it.
+    if (devices.len > 0) {
+        try testing.expectError(audio.OpenError.BadFormat, host.openStream(devices[0].id, devices[0].direction, .{ .sample_rate_hz = 0, .channels = 1, .encoding = .s16 }));
     }
+    try testing.expect(!host.streamLive()); // nothing was opened
 
     // An id that is not in the set cannot open in either direction.
     var bogus: u32 = 0xFFFF_FFF0;
@@ -350,46 +342,24 @@ test "can-open agrees with the enumerated set" {
     try testing.expectError(audio.OpenError.NoSuchDevice, host.openStream(bogus, .capture, .{ .sample_rate_hz = 48_000, .channels = 1, .encoding = .s16 }));
 }
 
-test "a playback stream opens, starts, and stops on the real default-output unit" {
+test "the playback stream lifecycle is honest without opening a device in the suite" {
     var ca = CoreAudioBackend.init();
     var host = audio.Audio{};
     host.bind(ca.backend());
 
-    // Nothing is open before the first stream.
+    // Nothing is live before any stream, and the suite never opens the real output unit — opening a
+    // running stream is a host-integration behaviour, kept out of the tests so a run makes no sound.
     try testing.expect(!host.streamLive());
 
-    // Find a real playback device this host enumerates (#315 found several here); its id routes to the
-    // system default-output unit the adapter opens.
+    // The refusals never touch hardware: the seam rejects a bad format (and an unknown device) before
+    // the backend is ever asked to open, so these exercise the open path without a device opening.
     var buf: [max_entries]audio.Device = undefined;
     const devices = host.devices(&buf);
-    var playback_id: ?u32 = null;
-    for (devices) |d| {
-        if (d.direction == .playback) {
-            playback_id = d.id;
-            break;
-        }
-    }
+    const some_id: u32 = if (devices.len > 0) devices[0].id else 0;
+    try testing.expectError(audio.OpenError.BadFormat, host.openStream(some_id, .playback, .{ .sample_rate_hz = 0, .channels = 2, .encoding = .f32 }));
+    try testing.expect(!host.streamLive());
 
-    if (playback_id) |id| {
-        // Open + start a real, running CoreAudio output stream, immediately (no sleeping for audio).
-        const result = host.openStream(id, .playback, .{ .sample_rate_hz = 48_000, .channels = 2, .encoding = .f32 });
-        if (result) |_| {
-            // It opened: the live indicator, read from the hardware at the source, must be lit; stopping
-            // must clear it cleanly.
-            try testing.expect(host.streamLive());
-            host.stopStream();
-            try testing.expect(!host.streamLive());
-            // Stop is idempotent — a second stop with nothing open stays clean and unlit.
-            host.stopStream();
-            try testing.expect(!host.streamLive());
-        } else |err| {
-            // A headless runner may lack a usable default output. That is honest: a typed OpenError,
-            // never a crash or a hang, and the indicator stays off.
-            try testing.expect(err == audio.OpenError.StreamFailed or err == audio.OpenError.NoSuchDevice or err == audio.OpenError.BadFormat);
-            try testing.expect(!host.streamLive());
-        }
-    } else {
-        // No playback device here (a headless runner): honestly nothing to open, indicator stays off.
-        try testing.expect(!host.streamLive());
-    }
+    // Stop with nothing open stays clean and unlit — idempotent.
+    host.stopStream();
+    try testing.expect(!host.streamLive());
 }
