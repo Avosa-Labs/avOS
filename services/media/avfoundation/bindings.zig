@@ -13,3 +13,12 @@
 pub const c = @cImport({
     @cInclude("shim.h");
 });
+
+// The capture-session streaming entry points, hand-declared against the C ABI in shim.h. They are
+// declared here directly (rather than reached through `c`) so the streaming surface the adapter binds
+// is spelled out in Zig, in the same style the ALSA adapter declares its libasound ABI. `avf_latest_frame`
+// takes plain out-params — the frame's shape only — so no pixel buffer ever crosses into Zig.
+pub extern fn avf_stream_start(id: c_uint) c_int;
+pub extern fn avf_stream_stop() void;
+pub extern fn avf_stream_live() c_int;
+pub extern fn avf_latest_frame(width: *c_uint, height: *c_uint, format: *c_uint) c_int;
