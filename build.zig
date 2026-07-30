@@ -694,6 +694,78 @@ pub fn build(b: *std.Build) void {
         llama_backend_module.link_libcpp = true;
         addModuleTests(b, test_step, "local-llama-backend", llama_backend_module);
         addCompileCheck(b, engine_compile_step, "local-llama-backend", llama_backend_module);
+
+        // The multimodal extension: libmtmd (the projector + clip layer) compiled atop the same
+        // llama + ggml objects the text engine already builds, presented behind the vision seam as a
+        // real on-device eye. It reuses the text engine module for the language runtime rather than
+        // compiling it twice — only the mtmd/clip sources are added here. Built only where the mtmd
+        // source is present in the vendored tree (it ships inside the llama.cpp pin); absent, the
+        // vision mind keeps its honest-until-loaded unavailable fallback.
+        if (mtmdRoot(b, root)) |mtmd| {
+            const vision_module = b.createModule(.{
+                .root_source_file = b.path("agents/model/local/llama/vision.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "llama_engine", .module = llama_engine_module },
+                },
+            });
+            // The llama + ggml headers (as the text engine uses), the mtmd headers, and the engine's
+            // own vendor headers (stb_image, miniaudio) the helper compiles inline.
+            vision_module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{root}) });
+            vision_module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/ggml/include", .{root}) });
+            vision_module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/ggml/src", .{root}) });
+            vision_module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/ggml/src/ggml-cpu", .{root}) });
+            vision_module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/src", .{root}) });
+            vision_module.addIncludePath(.{ .cwd_relative = mtmd });
+            vision_module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/vendor", .{root}) });
+            vision_module.link_libc = true;
+            vision_module.link_libcpp = true;
+
+            // The mtmd sources: the projector/clip layer, the image and audio preprocessors, the
+            // encode/decode helper, and every vision model graph builder (globbed like llama's, so a
+            // vendored-source bump adds or drops a model without a build edit). Video is left off, so
+            // no ffmpeg/subprocess dependency is pulled. The llama + ggml symbols under these come
+            // from the imported text engine module, linked once.
+            const mtmd_flags = [_][]const u8{ "-DGGML_USE_CPU", "-DGGML_CPU_GENERIC", "-D_GNU_SOURCE", "-DNDEBUG", "-std=c++17", "-Wno-cast-qual", "-U__AMX_INT8__", "-U__AVX512VNNI__", "-DGGML_VERSION=\"b10173\"", "-DGGML_COMMIT=\"e9fa0781f1c25fc4fe8c86be1edc6970661ad6f0\"" };
+            vision_module.addCSourceFiles(.{
+                .root = .{ .cwd_relative = mtmd },
+                .files = &.{
+                    "mtmd.cpp",
+                    "mtmd-audio.cpp",
+                    "mtmd-image.cpp",
+                    "mtmd-helper.cpp",
+                    "clip.cpp",
+                },
+                .flags = &mtmd_flags,
+            });
+            vision_module.addCSourceFiles(.{
+                .root = .{ .cwd_relative = mtmd },
+                .files = mtmdModelSources(b, mtmd),
+                .flags = &mtmd_flags,
+            });
+
+            addModuleTests(b, test_step, "local-vision", vision_module);
+            addCompileCheck(b, engine_compile_step, "local-vision", vision_module);
+
+            // The vision-seam backend: a separate module rooted at vision_backend.zig that reaches the
+            // engine through the named `vision_engine` module and the seam through the named `agents`
+            // module, so nothing crosses a relative module boundary. It transitively needs the C, so
+            // it links libc/libc++ too.
+            const vision_backend_module = b.createModule(.{
+                .root_source_file = b.path("agents/model/local/llama/vision_backend.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "vision_engine", .module = vision_module },
+                    .{ .name = "agents", .module = agents_module },
+                },
+            });
+            vision_backend_module.link_libc = true;
+            vision_backend_module.link_libcpp = true;
+            addModuleTests(b, test_step, "local-vision-backend", vision_backend_module);
+            addCompileCheck(b, engine_compile_step, "local-vision-backend", vision_backend_module);
+        }
     }
 
     // The CoreAudio host-audio adapter: a real macOS backend behind the platform audio seam
@@ -1394,6 +1466,40 @@ fn llamaModelSources(b: *std.Build, root: []const u8) []const []const u8 {
         files.append(b.allocator, b.fmt("src/models/{s}", .{entry.path})) catch @panic("OOM");
     }
     if (files.items.len == 0) @panic("llama src/models has no .cpp sources");
+    return files.toOwnedSlice(b.allocator) catch @panic("OOM");
+}
+
+/// The root of the vendored multimodal source (libmtmd + clip), or null if absent. It ships inside
+/// the llama.cpp pin under `tools/mtmd`, so it is gated on that header being present rather than a
+/// separate vendor: where it is, the vision adapter compiles the projector/clip layer atop the text
+/// engine; where it is not, the vision mind stays honestly unavailable. `root` is the llama root.
+fn mtmdRoot(b: *std.Build, root: []const u8) ?[]const u8 {
+    const io = b.graph.io;
+    const path = b.fmt("{s}/tools/mtmd", .{root});
+    b.build_root.handle.access(io, b.fmt("{s}/mtmd.h", .{path}), .{}) catch return null;
+    return path;
+}
+
+/// The vision model graph builders (`tools/mtmd/models/*.cpp`), which CMake pulls in with a glob.
+/// Each defines one model's clip graph; `clip.cpp` constructs them, so every one must be compiled or
+/// the constructors are undefined at link. Listed from disk rather than hand-enumerated so a vendored
+/// bump can add or drop a model without a build edit. Paths are returned relative to `mtmd` (the
+/// `.root` of the C-source add).
+fn mtmdModelSources(b: *std.Build, mtmd: []const u8) []const []const u8 {
+    const io = b.graph.io;
+    var dir = b.build_root.handle.openDir(io, b.fmt("{s}/models", .{mtmd}), .{ .iterate = true }) catch
+        @panic("mtmd vendored source present but models is unreadable");
+    defer dir.close(io);
+
+    var files: std.ArrayList([]const u8) = .empty;
+    var walker = dir.walk(b.allocator) catch @panic("OOM");
+    defer walker.deinit();
+    while (walker.next(io) catch @panic("iterating mtmd models failed")) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.path, ".cpp")) continue;
+        files.append(b.allocator, b.fmt("models/{s}", .{entry.path})) catch @panic("OOM");
+    }
+    if (files.items.len == 0) @panic("mtmd models has no .cpp sources");
     return files.toOwnedSlice(b.allocator) catch @panic("OOM");
 }
 

@@ -35,6 +35,29 @@ pub fn weightsName(tier: Tier) []const u8 {
     };
 }
 
+/// The GGUF weight file the vision path loads for a tier — the language half of the multimodal pair,
+/// pinned to the same open-weights family the text tiers use (Qwen2-VL, Apache-2.0). The pitch tier
+/// runs the 7B; a memory-tight device runs the 2B. This names only the language model; the projector
+/// that turns pixels into embeddings is named by `visionProjectorName` and the two load together.
+pub fn visionWeightsName(tier: Tier) []const u8 {
+    return switch (tier) {
+        .pitch => "qwen2-vl-7b-instruct-q4_k_m.gguf",
+        .constrained => "qwen2-vl-2b-instruct-q4_k_m.gguf",
+    };
+}
+
+/// The multimodal projector (the "mmproj") a tier loads beside its vision weights — the small model
+/// that embeds an image into the language model's token space. It is paired to the language weights,
+/// so each tier names its own; a projector built for one size does not fit the other. Loaded from a
+/// path at runtime alongside the language model, and like the weights it is a provisioning concern,
+/// never shipped in the image.
+pub fn visionProjectorName(tier: Tier) []const u8 {
+    return switch (tier) {
+        .pitch => "qwen2-vl-7b-instruct-mmproj-f16.gguf",
+        .constrained => "qwen2-vl-2b-instruct-mmproj-f16.gguf",
+    };
+}
+
 // --- Tests ---
 
 const testing = std.testing;
@@ -50,4 +73,17 @@ test "each tier names a distinct weight file" {
     try testing.expect(!std.mem.eql(u8, weightsName(.pitch), weightsName(.constrained)));
     try testing.expect(weightsName(.pitch).len > 0);
     try testing.expect(std.mem.endsWith(u8, weightsName(.constrained), ".gguf"));
+}
+
+test "each tier names a distinct vision model and a projector paired to it" {
+    // The two tiers load different vision weights, and each names its own projector — the pitch
+    // projector is not the constrained one.
+    try testing.expect(!std.mem.eql(u8, visionWeightsName(.pitch), visionWeightsName(.constrained)));
+    try testing.expect(!std.mem.eql(u8, visionProjectorName(.pitch), visionProjectorName(.constrained)));
+    // A projector is a distinct file from its language weights, both GGUF.
+    for ([_]Tier{ .pitch, .constrained }) |t| {
+        try testing.expect(!std.mem.eql(u8, visionWeightsName(t), visionProjectorName(t)));
+        try testing.expect(std.mem.endsWith(u8, visionWeightsName(t), ".gguf"));
+        try testing.expect(std.mem.endsWith(u8, visionProjectorName(t), ".gguf"));
+    }
 }
