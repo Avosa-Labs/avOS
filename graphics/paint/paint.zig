@@ -43,6 +43,11 @@ pub const Command = union(enum) {
     rounded: struct { rect: Rect, radius: u32, colour: Rgba },
     /// Fill a rounded rectangle with a vertical gradient — the shape of an icon tile.
     rounded_vgradient: struct { rect: Rect, radius: u32, top: Rgba, bottom: Rgba },
+    /// A soft drop shadow: the silhouette of a rounded rectangle, feathered outward over `blur`
+    /// pixels and laid at `alpha`, so a card set over it reads as raised. `rect` is the card's own
+    /// rectangle; the shadow is drawn where the card will sit (offset the rect downward before
+    /// painting it for a cast shadow). The elevation the whole design depends on to separate layers.
+    shadow: struct { rect: Rect, radius: u32, blur: u32, colour: Rgba, alpha: u8 },
 };
 
 /// Executes a display list onto a framebuffer, in order.
@@ -53,6 +58,52 @@ pub fn paint(target: *Framebuffer, commands: []const Command) void {
             .vgradient => |c| fillVGradient(target, c.rect, c.top, c.bottom),
             .rounded => |c| fillRounded(target, c.rect, c.radius, c.colour, null),
             .rounded_vgradient => |c| fillRounded(target, c.rect, c.radius, c.top, c.bottom),
+            .shadow => |c| fillShadow(target, c.rect, c.radius, c.blur, c.colour, c.alpha),
+        }
+    }
+}
+
+/// Paints a soft drop shadow for a rounded rectangle. Coverage is the exact rounded-box signed
+/// distance field: full inside the shape, falling smoothly to zero over `blur` pixels beyond its
+/// edge (a smoothstep on the distance), scaled by `alpha`. Cost is one pass over the shape grown by
+/// `blur` on each side — O(area), a fixed blend per covered pixel, no separable-blur passes.
+fn fillShadow(target: *Framebuffer, rect: Rect, radius_in: u32, blur: u32, colour: Rgba, alpha: u8) void {
+    const radius = @min(radius_in, @min(rect.w, rect.h) / 2);
+    const rf: f32 = @floatFromInt(radius);
+    const bf: f32 = @floatFromInt(@max(blur, 1));
+    // The shape's centre and half-extents, in float pixel space.
+    const cx = @as(f32, @floatFromInt(rect.x)) + @as(f32, @floatFromInt(rect.w)) / 2.0;
+    const cy = @as(f32, @floatFromInt(rect.y)) + @as(f32, @floatFromInt(rect.h)) / 2.0;
+    const hx = @as(f32, @floatFromInt(rect.w)) / 2.0;
+    const hy = @as(f32, @floatFromInt(rect.h)) / 2.0;
+    // The shape grown by the blur radius on every side, clamped to the framebuffer.
+    const grown: Rect = .{
+        .x = rect.x - @as(i32, @intCast(blur)),
+        .y = rect.y - @as(i32, @intCast(blur)),
+        .w = rect.w + 2 * blur,
+        .h = rect.h + 2 * blur,
+    };
+    const bounds = clampBounds(target.*, grown);
+    var y = bounds.y0;
+    while (y < bounds.y1) : (y += 1) {
+        const py = @as(f32, @floatFromInt(y)) + 0.5;
+        var x = bounds.x0;
+        while (x < bounds.x1) : (x += 1) {
+            const px = @as(f32, @floatFromInt(x)) + 0.5;
+            // Rounded-box signed distance: negative inside, positive outside, zero on the edge.
+            const qx = @abs(px - cx) - (hx - rf);
+            const qy = @abs(py - cy) - (hy - rf);
+            const ox = @max(qx, 0.0);
+            const oy = @max(qy, 0.0);
+            const outside = @sqrt(ox * ox + oy * oy);
+            const inside = @min(@max(qx, qy), 0.0);
+            const dist = outside + inside - rf;
+            // Coverage: 1 at/inside the edge, 0 by `blur` pixels out, smoothed.
+            var cov = 1.0 - dist / bf;
+            cov = @min(@max(cov, 0.0), 1.0);
+            cov = cov * cov * (3.0 - 2.0 * cov); // smoothstep
+            const a: u8 = @intFromFloat(@round(cov * @as(f32, @floatFromInt(alpha))));
+            if (a > 0) target.blend(x, y, colour, a);
         }
     }
 }
@@ -287,6 +338,28 @@ test "an icon-tile gradient fills the centre and rounds the corners" {
     } }});
     try testing.expect(target.get(12, 2).r > target.get(12, 22).r); // lighter at top
     try testing.expect(target.get(0, 0).r < 128); // corner clipped
+}
+
+test "a soft shadow is dense under the shape and fades to nothing past the blur" {
+    // A transparent field so the shadow's own coverage is what each pixel reads back as alpha.
+    var target = try Framebuffer.init(testing.allocator, 60, 60, .{ .r = 0, .g = 0, .b = 0, .a = 0 });
+    defer target.deinit();
+    paint(&target, &.{.{ .shadow = .{
+        .rect = .{ .x = 20, .y = 20, .w = 20, .h = 20 },
+        .radius = 6,
+        .blur = 8,
+        .colour = .{ .r = 0, .g = 0, .b = 0, .a = 255 },
+        .alpha = 200,
+    } }});
+    // Under the shape's centre the shadow is at (near) its full alpha.
+    try testing.expect(target.get(30, 30).a >= 190);
+    // Just outside the edge it is partial — the feather.
+    const edge = target.get(30, 44).a; // 4px below the shape's bottom edge, within the blur band
+    try testing.expect(edge > 0 and edge < 190);
+    // Well past the blur radius it is gone entirely.
+    try testing.expectEqual(@as(u8, 0), target.get(30, 59).a);
+    // The far corner, outside both shape and blur, is untouched.
+    try testing.expectEqual(@as(u8, 0), target.get(2, 2).a);
 }
 
 test "painting is bounded to the framebuffer for an oversized rect" {

@@ -95,6 +95,13 @@ fn encodeCommand(command: paint.Command, ox: f32, oy: f32, opacity: f32, clip: R
         .vgradient => |c| quad(c.rect, 0, c.top, c.bottom, ox, oy, opacity, clip),
         .rounded => |c| quad(c.rect, c.radius, c.colour, c.colour, ox, oy, opacity, clip),
         .rounded_vgradient => |c| quad(c.rect, c.radius, c.top, c.bottom, ox, oy, opacity, clip),
+        // A shadow has no dedicated GPU primitive yet: approximate it as its rounded silhouette at the
+        // shadow colour and alpha, the blur folded into a softer (larger) corner radius. The software
+        // path renders the true feathered field; the GPU path lands a close rounded silhouette.
+        .shadow => |c| blk: {
+            const tint: Rgba = .{ .r = c.colour.r, .g = c.colour.g, .b = c.colour.b, .a = c.alpha };
+            break :blk quad(c.rect, c.radius + c.blur, tint, tint, ox, oy, opacity, clip);
+        },
     };
 }
 
