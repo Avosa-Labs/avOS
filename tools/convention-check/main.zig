@@ -97,7 +97,7 @@ const skipped_prefixes = [_][]const u8{
     ".engines/", // vendored third-party engine source, not authored here
     "out/",
     "zig-out/",
-    "docs/PLATFORM_SPEC.md",
+    "docs/private/", // local-only dev docs (specs, instructions, designs), not authored source
 };
 
 /// The one exemption: the term lists above must exist as literal text.

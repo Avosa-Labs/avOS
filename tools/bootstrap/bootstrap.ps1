@@ -51,7 +51,7 @@ function Fail([string] $Message) {
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $manifestPath = Join-Path $repositoryRoot 'toolchain.lock.json'
 $toolRoot = Join-Path $repositoryRoot '.tools'
-$specification = 'docs/PLATFORM_SPEC.md'
+$specification = 'docs/private/PLATFORM_SPEC.md'
 
 if (-not (Test-Path $manifestPath)) {
     Fail "missing $manifestPath; the toolchain is not pinned"
