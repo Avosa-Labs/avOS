@@ -28,6 +28,10 @@ const mind = agents.model_mind;
 pub const LocalBackend = struct {
     model: llama.Model,
     prompt: []const u8,
+    /// The decoded generation lands here; the proposal's text is a slice of this buffer, so it lives as
+    /// long as the backend. Sized generously for a bounded reply — a full budget of tokens detokenizes
+    /// to a few bytes each, and generation stops cleanly when this fills.
+    out: [16 * 1024]u8 = undefined,
 
     pub fn init(model: llama.Model, prompt: []const u8) LocalBackend {
         return .{ .model = model, .prompt = prompt };
@@ -42,8 +46,8 @@ pub const LocalBackend = struct {
             .refuse => return .{ .tokens = 0 },
         };
         // A real bounded pass. Any engine failure yields nothing rather than a fabricated proposal.
-        const produced = self.model.generate(self.prompt, budget) catch return .{ .tokens = 0 };
-        return .{ .tokens = produced, .provenance = .untrusted };
+        const produced = self.model.generate(self.prompt, budget, &self.out) catch return .{ .tokens = 0 };
+        return .{ .tokens = produced.tokens, .text = produced.text, .provenance = .untrusted };
     }
 
     /// Presents this loaded runtime as a backend the local mind can load.
@@ -63,6 +67,8 @@ test "a refused request generates nothing, never touching the engine" {
     const b = lb.backend();
     const proposal = b.generate_fn(b.context, .{ .max_tokens = 0 });
     try testing.expectEqual(@as(u32, 0), proposal.tokens);
+    // A refusal fabricates no text either — the text channel is empty, not a made-up reply.
+    try testing.expectEqual(@as(usize, 0), proposal.text.len);
 }
 
 test "an over-ceiling request is refused, generating nothing" {

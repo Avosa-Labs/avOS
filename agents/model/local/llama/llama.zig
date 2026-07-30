@@ -69,11 +69,20 @@ pub const Model = struct {
         c.llama_model_free(self.handle);
     }
 
+    /// What a bounded forward pass produced: how many tokens were generated, and the decoded text
+    /// written into the caller's buffer. The text is a slice of that buffer, so it lives as long as
+    /// the buffer does — the caller owns the storage, the engine only fills it.
+    pub const Generation = struct {
+        tokens: u32,
+        text: []const u8,
+    };
+
     /// Runs a bounded forward pass: tokenizes `prompt`, decodes it, then greedily samples at most
-    /// `max_tokens` new tokens, stopping early at an end-of-generation token. Returns the number of
-    /// tokens actually generated (0..=max_tokens). A real pass through the engine — no fabrication —
+    /// `max_tokens` new tokens, detokenizing each into `out` and stopping early at an end-of-generation
+    /// token — or when `out` has no room for the next piece, whichever comes first. Returns the token
+    /// count and the decoded text (a slice of `out`). A real pass through the engine — no fabrication —
     /// kept simple and hard-bounded so it can never run away.
-    pub fn generate(self: Model, prompt: []const u8, max_tokens: u32) Error!u32 {
+    pub fn generate(self: Model, prompt: []const u8, max_tokens: u32, out: []u8) Error!Generation {
         const vocab = c.llama_model_get_vocab(self.handle) orelse return Error.TokenizeFailed;
 
         // Tokenize the prompt into a bounded buffer.
@@ -106,19 +115,30 @@ pub const Model = struct {
         var prompt_batch = c.llama_batch_get_one(&tokens, @intCast(prompt_len));
         if (c.llama_decode(ctx, prompt_batch) != 0) return Error.DecodeFailed;
 
-        // Greedily sample new tokens, feeding each back in, until the budget is spent or the model
-        // emits an end-of-generation token.
+        // Greedily sample new tokens, feeding each back in, until the budget is spent, the model emits
+        // an end-of-generation token, or the output buffer is full. Each generated token is detokenized
+        // into `out` as it is produced.
         var generated: u32 = 0;
+        var written: usize = 0;
         var next: c.llama_token = c.llama_sampler_sample(sampler, ctx, -1);
         while (generated < max_tokens) : (generated += 1) {
             if (c.llama_vocab_is_eog(vocab, next)) break;
+
+            // Detokenize this generated token into the remaining buffer. A negative return means the
+            // piece would not fit; stop cleanly rather than truncate a multi-byte piece mid-way.
+            const room = out[written..];
+            if (room.len == 0) break;
+            const piece = c.llama_token_to_piece(vocab, next, room.ptr, @intCast(room.len), 0, false);
+            if (piece < 0) break;
+            written += @intCast(piece);
+
             var one: [1]c.llama_token = .{next};
             const step = c.llama_batch_get_one(&one, 1);
             if (c.llama_decode(ctx, step) != 0) return Error.DecodeFailed;
             next = c.llama_sampler_sample(sampler, ctx, -1);
         }
         _ = &prompt_batch;
-        return generated;
+        return .{ .tokens = generated, .text = out[0..written] };
     }
 };
 
