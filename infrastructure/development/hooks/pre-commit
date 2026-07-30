@@ -10,6 +10,16 @@ set -eu
 repository_root=$(git rev-parse --show-toplevel)
 cd "$repository_root"
 
+# Hard guard: paths that must never enter git history, on any branch, regardless of
+# .gitignore state. Committing one of these is what forces an expensive history rewrite,
+# so it is refused here before it can land. The set: the private dev docs, the vendored
+# engine cache (rebuilt from engines.lock.json), and build output written to the root.
+forbidden=$(git diff --cached --name-only | grep -E '^(docs/private/|\.engines/|[^/]+\.png$|.*Tour\.html$)' || true)
+if [ -n "$forbidden" ]; then
+    printf '\npre-commit: these paths are local-only or build output and must never be committed:\n%s\n\ncommit refused\n' "$forbidden" >&2
+    exit 1
+fi
+
 command -v zig >/dev/null 2>&1 || {
     printf 'pre-commit: zig is not on PATH; run tools/bootstrap/bootstrap.sh\n' >&2
     exit 1
