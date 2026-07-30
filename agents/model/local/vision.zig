@@ -80,6 +80,13 @@ pub const Frame = struct { width: u32, height: u32 };
 pub const Reading = struct {
     provenance: interface.Provenance = interface.output_provenance,
     tokens: u32,
+    /// The decoded caption — what the model claims is in the frame, as text. Carried alongside the
+    /// token count so a reading is the words, not just their size; defaulted empty so a backend that
+    /// only reports a count (or produces nothing) constructs a reading without it. Untrusted like the
+    /// reading itself: a proposal about the frame, never an instruction. The bytes are borrowed from
+    /// the backend's own buffer for the duration of the call, so the seam holds no per-pixel memory —
+    /// only the final text crosses it.
+    text: []const u8 = "",
 };
 
 /// The runtime behind a vision mind: what actually turns a frame and a request into a reading. The
@@ -206,6 +213,9 @@ test "loading a runtime makes the vision mind available and reading for real, un
     try testing.expectEqual(@as(u32, 128), reading.tokens);
     // A reading is untrusted content, like any mind's output.
     try testing.expectEqual(interface.Provenance.untrusted, reading.provenance);
+    // A backend that reports only a token count carries no caption text, and the field defaults empty
+    // rather than dangling.
+    try testing.expectEqualStrings("", reading.text);
     // Unloading returns it to unavailable.
     vm.unload();
     try testing.expectEqual(mind.Health.unavailable, vm.health());
