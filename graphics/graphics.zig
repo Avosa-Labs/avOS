@@ -54,6 +54,7 @@ pub const logo = @import("paint/logo.zig");
 pub const home = @import("paint/home.zig");
 pub const screens = @import("paint/screens.zig");
 pub const apps = @import("paint/apps.zig");
+pub const app_weather = @import("paint/app_weather.zig");
 // The GPU backend: the same display list encoded to an instance buffer a GPU draws in one pass, and
 // pointer hit-testing that routes a tap to the topmost target for the input decision layer.
 pub const backend = @import("paint/backend.zig");
@@ -95,6 +96,7 @@ test {
     _ = home;
     _ = screens;
     _ = apps;
+    _ = app_weather;
     _ = backend;
     _ = pointer;
     _ = anim;
