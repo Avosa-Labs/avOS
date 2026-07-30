@@ -792,10 +792,11 @@ pub fn build(b: *std.Build) void {
 
     // The AVFoundation camera adapter: a real macOS backend behind the platform camera seam
     // (services/media/camera.zig), enumerating the host's actual video capture devices through
-    // AVFoundation. Built only on macOS — off macOS the seam keeps its honest-until-bound default and
-    // this module is never created, so the Linux gate skips it cleanly. AVCaptureDevice is Objective-C
-    // only, so a tiny .m shim (compiled with -fobjc-arc) exposes a pure-C ABI the adapter binds to; the
-    // AVFoundation, Foundation, and CoreMedia frameworks are linked so the calls reach the real stack.
+    // AVFoundation and running a real capture session for frame streaming. Built only on macOS — off
+    // macOS the seam keeps its honest-until-bound default and this module is never created, so the Linux
+    // gate skips it cleanly. AVCaptureDevice is Objective-C only, so a tiny .m shim (compiled with
+    // -fobjc-arc) exposes a pure-C ABI the adapter binds to; the AVFoundation, Foundation, CoreMedia,
+    // and CoreVideo frameworks are linked so the calls reach the real stack.
     if (target.result.os.tag == .macos) {
         const camera_seam_module = b.createModule(.{
             .root_source_file = b.path("services/media/camera.zig"),
@@ -819,6 +820,9 @@ pub fn build(b: *std.Build) void {
         module.linkFramework("AVFoundation", .{});
         module.linkFramework("Foundation", .{});
         module.linkFramework("CoreMedia", .{});
+        // CoreVideo carries the CVPixelBuffer accessors the capture delegate reads each frame's shape
+        // from (width, height, pixel-format type).
+        module.linkFramework("CoreVideo", .{});
         addModuleTests(b, test_step, "avfoundation", module);
         addCompileCheck(b, engine_compile_step, "avfoundation", module);
     }
