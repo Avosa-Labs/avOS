@@ -18,6 +18,10 @@ pub const Deterministic = domain.Deterministic;
 pub const Reading = domain.Reading;
 pub const Condition = domain.Condition;
 
+/// The keyless open-meteo provider — the real forecast source behind the connector when the network
+/// is reachable, with the domain's cache as the offline fallback.
+pub const open_meteo = @import("open_meteo.zig");
+
 pub const tools = [_]framework.Tool{
     .{ .name = "weather.current", .required_capability = "weather.current", .effect = .read_only },
     .{ .name = "weather.forecast", .required_capability = "weather.forecast", .effect = .read_only },
