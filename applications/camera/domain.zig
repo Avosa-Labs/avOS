@@ -54,6 +54,20 @@ pub fn processingIsLocal(mode: Mode, off_device_grant: bool) bool {
     };
 }
 
+/// How many tokens a Lens or Describe reading is allowed to produce. A short caption or a scene
+/// narration is a sentence or two, not an essay — bounding it keeps the on-device pass cheap.
+pub const reading_tokens: u32 = 256;
+
+/// Whether Lens or Describe can produce a reading right now: the on-device vision mind must be
+/// available and the current frame must fit its on-device window. When no vision runtime is bound the
+/// vision mind is unavailable, so Lens and Describe honestly report they cannot read rather than
+/// inventing a reading — the same honesty the mind seam holds everywhere. The moment a vision runtime
+/// is bound this flips to true with no other change, exactly as a pending connector flips to live, so
+/// the wiring is real before any particular model is chosen.
+pub fn visionReadable(vision: framework.platform.vision.VisionMind, width: u32, height: u32) bool {
+    return vision.read(.{ .width = width, .height = height }, .{ .max_tokens = reading_tokens }) != null;
+}
+
 /// What a pending capture would take, surfaced in the approval sheet so a person approves
 /// a real frame rather than an abstract permission. The shell renders the live frame from
 /// this; the domain states that a capture approval must carry it.
@@ -156,6 +170,32 @@ test "Lens and Describe process on the device by default; only a per-use grant l
 test "a Lens or Describe reading is untrusted content" {
     const reading = Understanding{ .text = "A street sign that appears to read Rua Augusta" };
     try testing.expect(reading.untrusted());
+}
+
+// A stub vision runtime standing for a loaded on-device model: it reads any admitted, fitting frame,
+// so the "runtime bound" path is observable without real weights. Reached through the frame's re-
+// exported vision seam, not the agent plane directly.
+var vision_ctx: u8 = 0;
+fn stubRead(_: *anyopaque, _: framework.platform.vision.Frame, request: framework.platform.model.Request) framework.platform.vision.Reading {
+    return .{ .tokens = request.max_tokens };
+}
+
+test "Lens and Describe are readable only once a vision runtime is bound and the frame fits" {
+    var vision = framework.platform.vision.VisionMind{};
+    // No runtime bound: the vision mind is unavailable, so Lens and Describe cannot read — honest,
+    // never a fabricated caption.
+    try testing.expect(!visionReadable(vision, 1440, 1440));
+
+    // Bind a runtime: the same call flips to readable with nothing else changed, as a pending
+    // connector flips to live.
+    vision.load(.{ .context = &vision_ctx, .read_fn = stubRead });
+    try testing.expect(visionReadable(vision, 1440, 1440));
+    // An oversized frame still cannot be read on the device — declined, never silently downscaled.
+    try testing.expect(!visionReadable(vision, 8000, 8000));
+
+    // Unbinding returns Lens and Describe to honestly unavailable.
+    vision.unload();
+    try testing.expect(!visionReadable(vision, 1440, 1440));
 }
 
 test "an agent's capture runs the same domain path as the person's, and once per key" {
