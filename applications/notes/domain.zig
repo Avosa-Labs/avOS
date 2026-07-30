@@ -72,6 +72,24 @@ pub const Store = struct {
         return store.notes.items[idx].pinned;
     }
 
+    /// Searches the notebook for notes whose title or body contains `query`, case-insensitively.
+    /// Matches are written into `out` as titles, in notebook order; an empty query matches every note.
+    /// A search is a silent read — it names the notes that match, never quoting their bodies.
+    pub fn search(store: Store, query: []const u8, out: [][]const u8) []const []const u8 {
+        var n: usize = 0;
+        for (store.notes.items) |note| {
+            if (n >= out.len) break;
+            const hit = query.len == 0 or
+                std.ascii.indexOfIgnoreCase(note.title, query) != null or
+                std.ascii.indexOfIgnoreCase(note.body, query) != null;
+            if (hit) {
+                out[n] = note.title;
+                n += 1;
+            }
+        }
+        return out[0..n];
+    }
+
     /// How many notes are pinned — the count the notebook surfaces at the top.
     pub fn pinnedCount(store: Store) usize {
         var n: usize = 0;
@@ -105,6 +123,14 @@ pub const Store = struct {
         }
         if (std.mem.eql(u8, op, "note.read")) {
             return if (store.find(input.args) != null) .{ .ok = "read" } else .failed;
+        }
+        if (std.mem.eql(u8, op, "note.search")) {
+            // A silent read: the count of notes matching `args` across titles and bodies; the matched
+            // titles are the surface's to read through `search`.
+            var buffer: [64][]const u8 = undefined;
+            const matches = store.search(input.args, &buffer);
+            const text = std.fmt.bufPrint(&store.reply, "{d}", .{matches.len}) catch return .failed;
+            return .{ .ok = text };
         }
         if (store.priorResult(key)) |prior| return .{ .ok = prior };
         if (std.mem.eql(u8, op, "note.create")) {
@@ -186,4 +212,24 @@ test "pinning keeps a note marked, and the pinned count reflects it" {
     try testing.expectEqual(@as(usize, 1), store.pinnedCount());
     // Pinning a missing note fails.
     try testing.expectEqual(DomainResult.failed, Store.execute(&store, .{ .operation = "note.pin", .args = "Ghost" }, agent(), 5));
+}
+
+test "search matches across titles and bodies, case-insensitively, and counts through the door" {
+    const gpa = testing.allocator;
+    var store = Store.init(gpa);
+    defer store.deinit();
+    _ = Store.execute(&store, .{ .operation = "note.create", .args = "Groceries|milk and eggs" }, agent(), 1);
+    _ = Store.execute(&store, .{ .operation = "note.create", .args = "Trip|book a flight to Lisbon" }, agent(), 2);
+    _ = Store.execute(&store, .{ .operation = "note.create", .args = "Milk run|nothing here" }, agent(), 3);
+
+    var buf: [8][]const u8 = undefined;
+    // "milk" matches a body (Groceries) and a title (Milk run), case-insensitively — two notes.
+    try testing.expectEqual(@as(usize, 2), store.search("MILK", &buf).len);
+    // A body-only term matches its note.
+    try testing.expectEqual(@as(usize, 1), store.search("lisbon", &buf).len);
+    // An empty query matches every note; a miss matches none.
+    try testing.expectEqual(@as(usize, 3), store.search("", &buf).len);
+    try testing.expectEqual(@as(usize, 0), store.search("zzz", &buf).len);
+    // The count comes back through the door as a silent read.
+    try testing.expectEqualStrings("2", Store.execute(&store, .{ .operation = "note.search", .args = "milk" }, agent(), 0).ok);
 }
