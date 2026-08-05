@@ -17,10 +17,16 @@ pub const Connector = domain.Connector;
 pub const Deterministic = domain.Deterministic;
 pub const Reading = domain.Reading;
 pub const Condition = domain.Condition;
+/// How many hours of forecast the app holds — the size of a forecast buffer.
+pub const hourly_span = domain.hourly_span;
 
 /// The keyless open-meteo provider — the real forecast source behind the connector when the network
 /// is reachable, with the domain's cache as the offline fallback.
 pub const open_meteo = @import("open_meteo.zig");
+
+/// The device's current location, from a keyless network lookup — so the app opens on where the
+/// device actually is.
+pub const geolocation = @import("geolocation.zig");
 
 pub const tools = [_]framework.Tool{
     .{ .name = "weather.current", .required_capability = "weather.current", .effect = .read_only },
