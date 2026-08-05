@@ -62,5 +62,9 @@ docs/private/
 .engines/
 .engine-archives/
 
+# Provisioned on-device model weights, fetched by `zig build fetch-model`. A device concern,
+# never committed — the running OS discovers whatever model is here automatically.
+.models/
+
 # Generated icon artifacts — rebuilt by tools/icon-build, never hand-committed.
 /design/icons/generated/
