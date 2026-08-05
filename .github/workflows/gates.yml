@@ -184,7 +184,7 @@ jobs:
       # asserts the outcome that matters — none of them are tracked.
       - name: Assert no local-only or build-output path is tracked
         run: |
-          bad=$(git ls-files | grep -E '^(docs/private/|\.engines/|[^/]+\.png$|.*Tour\.html$|docs/(PLATFORM_SPEC|APPLICATION_LAYER|Agent-integration|No-Gated-On-You)\.md$)' || true)
+          bad=$(git ls-files | grep -E '^(docs/private/|\.engines/|\.models/|[^/]+\.png$|.*Tour\.html$|.*\.gguf$|docs/(PLATFORM_SPEC|APPLICATION_LAYER|Agent-integration|No-Gated-On-You)\.md$)' || true)
           if [ -n "$bad" ]; then
             echo "these paths must never be tracked (local-only or build output):" >&2
             echo "$bad" >&2
