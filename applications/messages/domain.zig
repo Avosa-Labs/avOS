@@ -41,13 +41,21 @@ const Applied = struct {
     result: []const u8,
 };
 
+/// A reply drafted but not yet sent: the body the draft carries, keyed by the operation
+/// that created it. Held so the surface reads back the real drafted content — what a held
+/// send shows the person — rather than repeating what it passed in.
+const Draft = struct {
+    key: u128,
+    body: []const u8,
+};
+
 /// The Messages store: threads of messages, pending drafts, and the record of which
 /// keyed operations have already taken effect.
 pub const Store = struct {
     gpa: std.mem.Allocator,
     messages: std.ArrayListUnmanaged(Message) = .empty,
     /// Drafts awaiting send, keyed by the operation key that created them.
-    drafts: std.ArrayListUnmanaged(Applied) = .empty,
+    drafts: std.ArrayListUnmanaged(Draft) = .empty,
     /// Keys whose consequential effect (a send) has already been applied, with the
     /// result returned the first time — so a re-drive returns it rather than re-sending.
     applied: std.ArrayListUnmanaged(Applied) = .empty,
@@ -91,6 +99,13 @@ pub const Store = struct {
         return store.messages.items[i].body;
     }
 
+    /// The body of the most recently drafted reply, or null if nothing is drafted — what the surface
+    /// reads back so a held send shows the real drafted content, not a line it kept on the side.
+    pub fn draftedBody(store: Store) ?[]const u8 {
+        if (store.drafts.items.len == 0) return null;
+        return store.drafts.items[store.drafts.items.len - 1].body;
+    }
+
     /// Records an exchange between two identified parties into the thread — how the surface adds an
     /// agent-to-agent negotiation it derives from the ledger, both principals shown. The domain
     /// stores the exchange; it never invents one, so the thread is always ground truth.
@@ -124,8 +139,13 @@ pub const Store = struct {
             return .{ .ok = text };
         }
         if (std.mem.eql(u8, operation, "message.draft")) {
-            if (priorResult(store.drafts.items, key)) |result| return .{ .ok = result };
-            store.drafts.append(store.gpa, .{ .key = key, .result = "drafted" }) catch return .failed;
+            // Idempotent by key: a re-driven draft leaves the one already recorded. The body is kept so
+            // the surface can read the real drafted content back for the held send.
+            for (store.drafts.items) |existing| {
+                if (existing.key == key) return .{ .ok = "drafted" };
+            }
+            const body = if (input.args.len > 0) input.args else "message";
+            store.drafts.append(store.gpa, .{ .key = key, .body = body }) catch return .failed;
             return .{ .ok = "drafted" };
         }
         if (std.mem.eql(u8, operation, "message.send")) {
@@ -190,6 +210,20 @@ test "drafting is idempotent by key and search changes nothing" {
     try testing.expectEqual(@as(usize, 1), store.drafts.items.len);
     _ = Store.execute(&store, .{ .operation = "message.search" }, agent, 0);
     try testing.expectEqual(@as(usize, 0), store.sent());
+}
+
+test "a draft keeps its body, read back for the held send it precedes" {
+    const gpa = testing.allocator;
+    var store = Store.init(gpa);
+    defer store.deinit();
+    const agent: Actor = .{ .kind = .agent, .principal = .{ .value = 0xA } };
+    try testing.expect(store.draftedBody() == null);
+    _ = Store.execute(&store, .{ .operation = "message.draft", .args = "On my way" }, agent, 0x1);
+    try testing.expectEqualStrings("On my way", store.draftedBody().?);
+    // Re-driving the same key does not add a second draft or lose the body.
+    _ = Store.execute(&store, .{ .operation = "message.draft", .args = "On my way" }, agent, 0x1);
+    try testing.expectEqual(@as(usize, 1), store.drafts.items.len);
+    try testing.expectEqualStrings("On my way", store.draftedBody().?);
 }
 
 test "an agent-to-agent exchange is a visible thread with both parties identified" {

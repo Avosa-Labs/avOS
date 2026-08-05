@@ -62,7 +62,16 @@ pub fn main(init: std.process.Init) !u8 {
     var idle = live.Interaction{};
     idle.attach(gpa);
     defer idle.release();
-    try live.renderSurface(gpa, &target, &host, surface, t, &idle);
+    // The Clock surface reads the device's real wall clock; captured before seeding so the agent's world
+    // time and the surface's own read the same instant. Other surfaces keep the deterministic default.
+    if (surface == .clock) idle.captureDeviceTime(io);
+    // Run each in-app agent's real work once, so an app surface shows its genuine last agent action
+    // derived from the domain — not a static chip. Weather is refreshed on its own live path below.
+    live.seedAgentPresence(&idle);
+    // Resolve the device's real location and fetch its live weather, so the weather surface reads where
+    // this host actually is. A host with no network stays honestly unlocated.
+    if (surface == .weather) idle.weatherRefresh(gpa, io);
+    try live.renderSurface(&target, &host, surface, t, &idle);
 
     const png = try target.encodePng(gpa);
     defer gpa.free(png);
@@ -90,10 +99,11 @@ fn renderSession(gpa: std.mem.Allocator, io: anytype, err: anytype, host: *live.
     var idle = live.Interaction{};
     idle.attach(gpa);
     defer idle.release();
+    live.seedAgentPresence(&idle);
     for (sequence) |frame| {
         var target = try Framebuffer.init(gpa, live.width, live.height, baseFill());
         defer target.deinit();
-        try live.renderSurface(gpa, &target, host, frame.surface, 0.0, &idle);
+        try live.renderSurface(&target, host, frame.surface, 0.0, &idle);
         const png = try target.encodePng(gpa);
         defer gpa.free(png);
         const path = try std.fmt.allocPrint(gpa, "{s}{s}.png", .{ prefix, frame.name });
