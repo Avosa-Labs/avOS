@@ -125,6 +125,9 @@ const photos_agent: core.identity.PrincipalId = .{ .value = 0xBB };
 const clock_agent: core.identity.PrincipalId = .{ .value = 0xBC };
 const home_agent: core.identity.PrincipalId = .{ .value = 0xBD };
 
+/// The account — the root human principal that endorses this owner's agents.
+const account_principal: core.identity.PrincipalId = .{ .value = 0xACC0 };
+
 fn agentActor(principal: core.identity.PrincipalId) framework.Actor {
     return .{ .kind = .agent, .principal = principal };
 }
@@ -377,6 +380,10 @@ pub const Interaction = struct {
     /// Which agent's detail is open (an index into the roster), and which agents the person has paused.
     open_agent: ?usize = null,
     agent_paused: [8]bool = [_]bool{false} ** 8,
+    /// The account keypair that endorses this owner's agents — the trust root their identities verify
+    /// against — and the agents whose trust the person has cut off. A revoked agent falls inert.
+    account_key: std.crypto.sign.Ed25519.KeyPair = undefined,
+    trust_revoked: [8]bool = [_]bool{false} ** 8,
     /// The person's decision on the screened incoming call: null while it waits, then answered or not.
     call_answered: ?bool = null,
     /// The camera mode the person has selected.
@@ -532,6 +539,7 @@ pub const Interaction = struct {
         // The control plane the in-app agents record through. The ledger borrows `self.ids`, so the
         // interaction must not be copied after this — the same rule the host holds its services under.
         self.ids = .initDeterministic(0xA6);
+        self.account_key = std.crypto.sign.Ed25519.KeyPair.generateDeterministic(@splat(0xAC)) catch unreachable;
         self.agent_clock = .init(.fromSeconds(1_767_225_600));
         self.ledger = .init(gpa, &self.ids, self.agent_clock.clock());
         self.store_state = applications.store.Store.init(gpa);
@@ -2147,6 +2155,71 @@ pub const Interaction = struct {
 
     pub fn toggleAgentPaused(self: *Interaction, index: usize) void {
         if (index < self.agent_paused.len) self.agent_paused[index] = !self.agent_paused[index];
+    }
+
+    /// The principal an agent's identity is issued under — deterministic, so it persists across runs.
+    fn agentTrustPrincipal(index: usize) core.identity.PrincipalId {
+        return .{ .value = 0xA6E7_0000 + index };
+    }
+
+    /// The agent's own signing key, derived deterministically so restarting never mints a new identity.
+    fn agentTrustKey(index: usize) std.crypto.sign.Ed25519.KeyPair {
+        var seed: [32]u8 = @splat(0x30);
+        seed[0] = @truncate(index);
+        return std.crypto.sign.Ed25519.KeyPair.generateDeterministic(seed) catch unreachable;
+    }
+
+    /// The manifest the person accepted for an agent: the capabilities it holds, each with the approval
+    /// class its operations clear. Read-mostly agents ask silently; a consequential one is held.
+    pub fn agentManifest(self: *const Interaction, index: usize) core.trust.manifest.Manifest {
+        _ = self;
+        const caps = &[_]core.trust.manifest.CapabilityRequest{
+            .{ .name = "read", .action_class = .silent },
+            .{ .name = "propose", .action_class = .notify },
+            .{ .name = "commit", .action_class = .hold },
+        };
+        return .{
+            .subject = agentTrustPrincipal(index),
+            .issuer = account_principal,
+            .kind = .agent,
+            .public_key = agentTrustKey(index).public_key.toBytes(),
+            .expires_at = null,
+            .capabilities = caps,
+            .namespaces_requested = &.{},
+            .namespaces_offered = &.{},
+            .delegation = .{},
+            .budgets = .{},
+            .data_class = .personal,
+        };
+    }
+
+    /// Whether an agent's identity verifies to the account root: its manifest is endorsed by the account
+    /// key and its trust has not been cut off. A revoked agent, or one whose endorsement fails, is inert.
+    pub fn agentVerified(self: *const Interaction, index: usize) bool {
+        if (self.agentTrustRevoked(index)) return false;
+        const manifest = self.agentManifest(index);
+        const endorsement = core.trust.manifest.endorse(self.account_key, account_principal, manifest) catch return false;
+        core.trust.manifest.verify(manifest, self.account_key.public_key.toBytes(), endorsement) catch return false;
+        return true;
+    }
+
+    /// How many of the agent's capabilities are held for the person — the count the manifest sheet shows.
+    pub fn agentHeldCount(self: *const Interaction, index: usize) usize {
+        var count: usize = 0;
+        for (self.agentManifest(index).capabilities) |request| {
+            if (request.action_class == .hold or request.action_class == .human_only) count += 1;
+        }
+        return count;
+    }
+
+    pub fn agentTrustRevoked(self: *const Interaction, index: usize) bool {
+        return index < self.trust_revoked.len and self.trust_revoked[index];
+    }
+
+    /// The trust kill switch: cut off an agent's authority in one act. Its identity stops verifying and
+    /// it falls inert everywhere it presented itself.
+    pub fn revokeAgentTrust(self: *Interaction, index: usize) void {
+        if (index < self.trust_revoked.len) self.trust_revoked[index] = true;
     }
 
     /// Installs `name` through the store's real domain — the same `store.install` an agent reaches, here
@@ -4002,9 +4075,15 @@ pub fn renderAgents(screen: *Framebuffer, host: *Host, inter: *const Interaction
         vector.fillDisc(screen, @as(f32, @floatFromInt(rect.x)) + u(20), @as(f32, @floatFromInt(rect.y)) + @as(f32, @floatFromInt(rect.h)) / 2.0, u(4.5), s(hue));
         _ = text.draw(screen, @as(f32, @floatFromInt(rect.x)) + u(42), @as(f32, @floatFromInt(rect.y)) + u(24), agent.name, u(13), s(theme.screen_text));
         _ = text.drawClipped(screen, @as(f32, @floatFromInt(rect.x)) + u(42), @as(f32, @floatFromInt(rect.y)) + u(40), agentPurpose(host, agent), u(10.5), s(theme.screen_text_muted), rightF(rect) - u(70));
-        const badge: []const u8 = if (paused) "PAUSED" else "LIVE";
+        const revoked = inter.agentTrustRevoked(i);
+        const badge: []const u8 = if (revoked) "REVOKED" else if (paused) "PAUSED" else "LIVE";
+        const badge_hue = if (revoked) theme.denied else hue;
         const bw = text.measureWeighted(badge, u(10), .semibold);
-        _ = text.drawWeighted(screen, rightF(rect) - u(18) - bw, @as(f32, @floatFromInt(rect.y)) + u(28), badge, u(10), s(hue), .semibold);
+        _ = text.drawWeighted(screen, rightF(rect) - u(18) - bw, @as(f32, @floatFromInt(rect.y)) + u(24), badge, u(10), s(badge_hue), .semibold);
+        // A small check under the badge when the agent's identity verifies to the account.
+        if (!revoked and inter.agentVerified(i)) {
+            _ = text.draw(screen, rightF(rect) - u(18) - text.measure("verified", u(9)), @as(f32, @floatFromInt(rect.y)) + u(42), "verified", u(9), s(theme.screen_text_muted));
+        }
     }
 }
 
@@ -4017,31 +4096,60 @@ fn renderAgentDetail(screen: *Framebuffer, host: *Host, inter: *const Interactio
     }
     const agent = host.agents.items[index];
     const paused = inter.isAgentPaused(index);
+    const verified = inter.agentVerified(index);
     header(screen, agent.name, if (paused) "Paused by you" else "Working in your world");
     agentDoorChip(screen, @floatFromInt(pad), u(96), "scoped, revocable authority");
 
-    const rect = card(screen, 172, 132);
-    _ = text.draw(screen, @floatFromInt(rect.x + 22), @floatFromInt(rect.y + 30), "Doing now", 11, s(theme.screen_text_muted));
-    _ = text.drawClipped(screen, @floatFromInt(rect.x + 22), @floatFromInt(rect.y + 52), agentPurpose(host, agent), 13, s(theme.screen_text), rightF(rect) - u(22));
-    _ = text.draw(screen, @floatFromInt(rect.x + 22), @floatFromInt(rect.y + 82), "Authority", 11, s(theme.screen_text_muted));
-    _ = text.draw(screen, @floatFromInt(rect.x + 22), @floatFromInt(rect.y + 104), "Scoped \u{00B7} revocable \u{00B7} budgeted", 12, s(theme.screen_text));
+    const rect = card(screen, 172, 166);
+    _ = text.draw(screen, @floatFromInt(rect.x + 22), @floatFromInt(rect.y + 28), "Doing now", 11, s(theme.screen_text_muted));
+    _ = text.drawClipped(screen, @floatFromInt(rect.x + 22), @floatFromInt(rect.y + 49), agentPurpose(host, agent), 13, s(theme.screen_text), rightF(rect) - u(22));
+
+    // Identity, from the trust layer: a real endorsement of the agent's manifest by the account, verified
+    // here. A revoked agent no longer verifies and reads as inert.
+    _ = text.draw(screen, @floatFromInt(rect.x + 22), @floatFromInt(rect.y + 82), "Identity", 11, s(theme.screen_text_muted));
+    const identity_line = if (verified) "Verified \u{00B7} endorsed by your account" else "Trust revoked \u{00B7} inert";
+    _ = text.drawWeighted(screen, @floatFromInt(rect.x + 22), @floatFromInt(rect.y + 103), identity_line, 12, s(if (verified) theme.agent else theme.denied), .semibold);
+
+    // The manifest the person accepted: how many capabilities it holds, and how many are held for the
+    // person rather than run silently.
+    _ = text.draw(screen, @floatFromInt(rect.x + 22), @floatFromInt(rect.y + 130), "Manifest", 11, s(theme.screen_text_muted));
+    var manifest_buf: [48]u8 = undefined;
+    const manifest_line = std.fmt.bufPrint(&manifest_buf, "{d} capabilities \u{00B7} {d} held for you", .{ inter.agentManifest(index).capabilities.len, inter.agentHeldCount(index) }) catch "capabilities";
+    _ = text.draw(screen, @floatFromInt(rect.x + 22), @floatFromInt(rect.y + 151), manifest_line, 12, s(theme.screen_text));
 
     // The pause control — the person holding or releasing this agent.
     const btn = agentPauseRect();
     paint.paint(screen, &.{.{ .rounded = .{ .rect = btn, .radius = @intFromFloat(u(19)), .colour = s(if (paused) theme.teal else theme.amber) } }});
     text.drawCentred(screen, @as(f32, @floatFromInt(btn.x)) + @as(f32, @floatFromInt(btn.w)) / 2.0, @as(f32, @floatFromInt(btn.y)) + u(25), if (paused) "Resume agent" else "Pause agent", u(12.5), s(theme.screen_card));
+
+    // The trust kill switch — one act cuts off this agent's authority. Once revoked it stays inert.
+    const kill = agentRevokeRect();
+    const revoked = inter.agentTrustRevoked(index);
+    paint.paint(screen, &.{.{ .rounded = .{ .rect = kill, .radius = @intFromFloat(u(19)), .colour = if (revoked) s(theme.screen_hairline) else sa(theme.denied, 36) } }});
+    text.drawCentred(screen, @as(f32, @floatFromInt(kill.x)) + @as(f32, @floatFromInt(kill.w)) / 2.0, @as(f32, @floatFromInt(kill.y)) + u(24), if (revoked) "Trust revoked" else "Revoke trust", u(12), s(if (revoked) theme.screen_text_muted else theme.denied));
 }
 
 fn agentPauseRect() graphics.paint.Rect {
     const w_px: i32 = @intFromFloat(u(160));
-    return .{ .x = @divTrunc(@as(i32, @intCast(width_screen())) - w_px, 2), .y = 340, .w = @intCast(w_px), .h = @intFromFloat(u(40)) };
+    return .{ .x = @divTrunc(@as(i32, @intCast(width_screen())) - w_px, 2), .y = 360, .w = @intCast(w_px), .h = @intFromFloat(u(40)) };
 }
 
-/// Toggles the open agent's pause when the tap lands on the pause button.
+fn agentRevokeRect() graphics.paint.Rect {
+    const w_px: i32 = @intFromFloat(u(160));
+    const pause = agentPauseRect();
+    return .{ .x = pause.x, .y = pause.y + @as(i32, @intCast(pause.h)) + @as(i32, @intFromFloat(u(12))), .w = @intCast(w_px), .h = @intFromFloat(u(38)) };
+}
+
+/// Handles a tap on the agent detail: the pause button holds or releases the agent, and the revoke
+/// button cuts off its trust for good. Returns true when a control was hit.
 pub fn agentDetailTap(inter: *Interaction, sx: i32, sy: i32) bool {
-    const btn = agentPauseRect();
-    if (sx >= btn.x and sx <= btn.x + @as(i32, @intCast(btn.w)) and sy >= btn.y and sy <= btn.y + @as(i32, @intCast(btn.h))) {
-        if (inter.open_agent) |index| inter.toggleAgentPaused(index);
+    const index = inter.open_agent orelse return false;
+    if (inRect(agentPauseRect(), sx, sy)) {
+        inter.toggleAgentPaused(index);
+        return true;
+    }
+    if (inRect(agentRevokeRect(), sx, sy)) {
+        inter.revokeAgentTrust(index);
         return true;
     }
     return false;
