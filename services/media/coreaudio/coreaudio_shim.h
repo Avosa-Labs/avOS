@@ -92,9 +92,24 @@ enum { kAudioUnitType_Output       = 'auou' };
 enum { kAudioUnitSubType_DefaultOutput = 'def ' };
 enum { kAudioUnitManufacturer_Apple = 'appl' };
 
+// The HAL output unit ('ahal') is the same component driven in reverse for capture: with input enabled
+// on bus 1 and output disabled on bus 0, it pulls samples from a hardware input device. The capture path
+// opens this subtype and binds it to the system default input device.
+enum { kAudioUnitSubType_HALOutput = 'ahal' };
+
+// The system object's default-input-device selector: reads the AudioDeviceID of the current default
+// input, the device the capture unit is pointed at.
+enum { kAudioHardwarePropertyDefaultInputDevice = 'dIn ' };
+
 // The two AudioUnit properties the output path sets: the stream format and the render callback.
 enum { kAudioUnitProperty_StreamFormat      = 8  };
 enum { kAudioUnitProperty_SetRenderCallback = 23 };
+
+// The output-unit properties the capture path sets: enable/disable I/O per bus (2003), point the unit at
+// a device (2000), and install the input callback the unit fires when a captured block is ready (2005).
+enum { kAudioOutputUnitProperty_CurrentDevice   = 2000 };
+enum { kAudioOutputUnitProperty_EnableIO        = 2003 };
+enum { kAudioOutputUnitProperty_SetInputCallback = 2005 };
 
 // AudioUnit scopes. The output unit's input scope (element 0) is where the client format and the render
 // callback are installed — it is the side the client feeds.
@@ -125,3 +140,13 @@ extern OSStatus AudioUnitInitialize(AudioUnit inUnit);
 extern OSStatus AudioUnitUninitialize(AudioUnit inUnit);
 extern OSStatus AudioOutputUnitStart(AudioUnit ci);
 extern OSStatus AudioOutputUnitStop(AudioUnit ci);
+
+// The capture path's input callback pulls the ready block out of the unit with AudioUnitRender, filling
+// an AudioBufferList the callback owns. Signature matches <AudioUnit/AudioOutputUnit.h> exactly.
+extern OSStatus
+AudioUnitRender( AudioUnit                     inUnit,
+                 AudioUnitRenderActionFlags*   ioActionFlags,
+                 const AudioTimeStamp*         inTimeStamp,
+                 UInt32                        inOutputBusNumber,
+                 UInt32                        inNumberFrames,
+                 AudioBufferList*              ioData);
