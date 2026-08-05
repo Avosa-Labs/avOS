@@ -4088,6 +4088,22 @@ pub fn renderAgents(screen: *Framebuffer, host: *Host, inter: *const Interaction
 }
 
 /// The detail for the open agent: its name, its live task purpose, and a pause the person controls.
+/// The manifest said plainly — the highest authority the agent holds, in words a person reads. This is
+/// the legible half of the consent: not capability names, but what the agent may actually do.
+fn manifestLegible(manifest: core.trust.manifest.Manifest) []const u8 {
+    var loosest: u8 = 0; // silent
+    for (manifest.capabilities) |request| {
+        const rank = @intFromEnum(request.action_class);
+        if (rank > loosest) loosest = rank;
+    }
+    return switch (loosest) {
+        3 => "asks you to act", // human_only
+        2 => "reads, proposes, asks to commit", // hold
+        1 => "reads and proposes with notice", // notify
+        else => "reads silently", // silent
+    };
+}
+
 fn renderAgentDetail(screen: *Framebuffer, host: *Host, inter: *const Interaction) void {
     const index = inter.open_agent orelse 0;
     if (index >= host.agents.items.len) {
@@ -4110,12 +4126,12 @@ fn renderAgentDetail(screen: *Framebuffer, host: *Host, inter: *const Interactio
     const identity_line = if (verified) "Verified \u{00B7} endorsed by your account" else "Trust revoked \u{00B7} inert";
     _ = text.drawWeighted(screen, @floatFromInt(rect.x + 22), @floatFromInt(rect.y + 103), identity_line, 12, s(if (verified) theme.agent else theme.denied), .semibold);
 
-    // The manifest the person accepted: how many capabilities it holds, and how many are held for the
-    // person rather than run silently.
+    // The manifest the person accepted, made legible: what this agent may do, said plainly, and how many
+    // of its actions are held for the person rather than run silently.
     _ = text.draw(screen, @floatFromInt(rect.x + 22), @floatFromInt(rect.y + 130), "Manifest", 11, s(theme.screen_text_muted));
-    var manifest_buf: [48]u8 = undefined;
-    const manifest_line = std.fmt.bufPrint(&manifest_buf, "{d} capabilities \u{00B7} {d} held for you", .{ inter.agentManifest(index).capabilities.len, inter.agentHeldCount(index) }) catch "capabilities";
-    _ = text.draw(screen, @floatFromInt(rect.x + 22), @floatFromInt(rect.y + 151), manifest_line, 12, s(theme.screen_text));
+    var manifest_buf: [72]u8 = undefined;
+    const manifest_line = std.fmt.bufPrint(&manifest_buf, "{s} \u{00B7} {d} held for you", .{ manifestLegible(inter.agentManifest(index)), inter.agentHeldCount(index) }) catch "reads silently";
+    _ = text.drawClipped(screen, @floatFromInt(rect.x + 22), @floatFromInt(rect.y + 151), manifest_line, 12, s(theme.screen_text), rightF(rect) - u(22));
 
     // The pause control — the person holding or releasing this agent.
     const btn = agentPauseRect();
