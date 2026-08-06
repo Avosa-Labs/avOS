@@ -19,6 +19,7 @@ const std = @import("std");
 const core = @import("core");
 const secure_element = @import("hardware").secure_element;
 const attestation = @import("../attestation/attestation.zig");
+const manifest = core.trust.manifest;
 
 pub const Error = error{
     /// No key by that name for this principal. Also what a principal asking for
@@ -196,6 +197,37 @@ pub const AttestationDelegate = struct {
         const delegate: *AttestationDelegate = @ptrCast(@alignCast(context_pointer));
         // A refusal here becomes an absent quote rather than an unsigned one,
         // which is what the attestation layer does with a null.
+        return delegate.keystore.sign(delegate.owner, delegate.name, digest) catch null;
+    }
+};
+
+/// Lets one named key endorse an agent's manifest on the account's behalf.
+///
+/// Endorsing a manifest means the account's key signs the manifest's content
+/// hash. This is the seam the provisioning path holds so it can ask for that
+/// signature without ever seeing the key: the delegate keeps the account and the
+/// key name, never the key, and the name is fixed when it is made, so whoever
+/// holds the delegate can sign one manifest under one key and cannot widen it to
+/// another. It is the manifest-layer counterpart of `AttestationDelegate` — the
+/// digest and signature sizes are the element's Ed25519 over Sha256, the same the
+/// manifest layer expects.
+pub const EndorsementDelegate = struct {
+    keystore: *Keystore,
+    owner: core.identity.PrincipalId,
+    name: []const u8,
+
+    pub fn signer(delegate: *EndorsementDelegate) manifest.Signer {
+        return .{ .context = delegate, .signFn = signFor };
+    }
+
+    fn signFor(
+        context: *anyopaque,
+        digest: [manifest.digest_bytes]u8,
+    ) ?[manifest.signature_bytes]u8 {
+        const delegate: *EndorsementDelegate = @ptrCast(@alignCast(context));
+        // A refusal here becomes a failed endorsement rather than an unsigned
+        // manifest: `endorseWith` turns a null into `EndorsementInvalid`, so an
+        // agent is issued no grant rather than one nobody endorsed.
         return delegate.keystore.sign(delegate.owner, delegate.name, digest) catch null;
     }
 };
@@ -454,5 +486,90 @@ test "a delegate cannot be pointed at another key" {
     try std.testing.expectError(
         error.SignatureVerificationFailed,
         (std.crypto.sign.Ed25519.Signature.fromBytes(signature)).verify(&digest, other_key),
+    );
+}
+
+fn sampleManifest(issuer: core.identity.PrincipalId, agent_key: [manifest.public_key_bytes]u8) manifest.Manifest {
+    return .{
+        .subject = .{ .value = 0xA },
+        .issuer = issuer,
+        .kind = .agent,
+        .public_key = agent_key,
+        .expires_at = .fromSeconds(10_000),
+        .capabilities = &.{.{ .name = "calendar.read", .action_class = .silent }},
+        .namespaces_requested = &.{},
+        .namespaces_offered = &.{},
+        .delegation = .{},
+        .budgets = .{},
+        .data_class = .never_leaves_device,
+    };
+}
+
+test "an endorsement key signs an agent manifest through the keystore" {
+    var software: secure_element.SoftwareElement = .{};
+    var keystore: Keystore = .init(software.element());
+    const owner = principal(1);
+    try keystore.create(owner, "endorsement", .user_authentication, .{});
+
+    var delegate: EndorsementDelegate = .{
+        .keystore = &keystore,
+        .owner = owner,
+        .name = "endorsement",
+    };
+    const agent_key = (try std.crypto.sign.Ed25519.KeyPair.generateDeterministic(@splat(9))).public_key.toBytes();
+    const document = sampleManifest(owner, agent_key);
+
+    // The account endorses without the provisioning path ever touching its key,
+    // and the endorsement verifies against the key's public half.
+    const endorsement = try manifest.endorseWith(delegate.signer(), owner, document);
+    const public = try keystore.publicKey(owner, "endorsement");
+    try manifest.verify(document, public, endorsement);
+}
+
+test "an endorsement delegate whose key is gone endorses nothing" {
+    var software: secure_element.SoftwareElement = .{};
+    var keystore: Keystore = .init(software.element());
+    const owner = principal(1);
+    try keystore.create(owner, "endorsement", .user_authentication, .{});
+
+    var delegate: EndorsementDelegate = .{
+        .keystore = &keystore,
+        .owner = owner,
+        .name = "endorsement",
+    };
+    try keystore.destroy(owner, "endorsement");
+
+    // No signature at all rather than a weaker one: `endorseWith` fails closed, so
+    // a manifest whose key is gone is issued no endorsement.
+    const agent_key = (try std.crypto.sign.Ed25519.KeyPair.generateDeterministic(@splat(9))).public_key.toBytes();
+    const document = sampleManifest(owner, agent_key);
+    try std.testing.expectError(
+        manifest.Error.EndorsementInvalid,
+        manifest.endorseWith(delegate.signer(), owner, document),
+    );
+}
+
+test "an endorsement delegate cannot be pointed at another key" {
+    var software: secure_element.SoftwareElement = .{};
+    var keystore: Keystore = .init(software.element());
+    const owner = principal(1);
+    try keystore.create(owner, "endorsement", .user_authentication, .{});
+    try keystore.create(owner, "storage", .storage_protection, .{});
+
+    var delegate: EndorsementDelegate = .{
+        .keystore = &keystore,
+        .owner = owner,
+        .name = "endorsement",
+    };
+    const agent_key = (try std.crypto.sign.Ed25519.KeyPair.generateDeterministic(@splat(9))).public_key.toBytes();
+    const document = sampleManifest(owner, agent_key);
+    const endorsement = try manifest.endorseWith(delegate.signer(), owner, document);
+
+    // The endorsement is the endorsement key's, not the storage key's, whatever
+    // the holder of the delegate would prefer.
+    const other = try keystore.publicKey(owner, "storage");
+    try std.testing.expectError(
+        manifest.Error.EndorsementInvalid,
+        manifest.verify(document, other, endorsement),
     );
 }

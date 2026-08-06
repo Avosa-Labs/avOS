@@ -13,6 +13,7 @@ pub const endorsement = @import("endorsement.zig");
 pub const rotation = @import("rotation.zig");
 pub const grant = @import("grant.zig");
 pub const provenance = @import("provenance.zig");
+pub const enforcement = @import("enforcement.zig");
 
 test {
     _ = manifest;
@@ -20,4 +21,5 @@ test {
     _ = rotation;
     _ = grant;
     _ = provenance;
+    _ = enforcement;
 }

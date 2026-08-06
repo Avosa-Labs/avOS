@@ -201,6 +201,29 @@ pub fn endorse(issuer_key: Ed25519.KeyPair, issuer: identity.PrincipalId, manife
     return .{ .issuer = issuer, .signature = signature.toBytes() };
 }
 
+/// A signer that never surfaces its private key: it takes a digest and returns the signature over it, or
+/// null when it declines. This is the seam a keystore over a secure element implements — the issuer's key
+/// stays in custody and only signatures leave it — so endorsing an agent's manifest never means handing
+/// the account's private key to the provisioning path.
+pub const Signer = struct {
+    context: *anyopaque,
+    signFn: *const fn (context: *anyopaque, digest: [digest_bytes]u8) ?[signature_bytes]u8,
+
+    pub fn sign(signer: Signer, digest: [digest_bytes]u8) ?[signature_bytes]u8 {
+        return signer.signFn(signer.context, digest);
+    }
+};
+
+/// Endorses a manifest through a custody-held signer rather than a bare key pair: the issuer's key stays
+/// inside the keystore and only the signature crosses out. Otherwise identical to `endorse` — the issuer
+/// must be the manifest's named endorser, and a signer that declines fails closed.
+pub fn endorseWith(signer: Signer, issuer: identity.PrincipalId, manifest: Manifest) Error!Endorsement {
+    if (!manifest.issuer.eql(issuer)) return Error.IssuerMismatch;
+    const digest = manifest.hash();
+    const signature = signer.sign(digest) orelse return Error.EndorsementInvalid;
+    return .{ .issuer = issuer, .signature = signature };
+}
+
 /// Verifies an endorsement: the signature is the issuer's over this exact manifest. A tampered manifest,
 /// a wrong endorser, or a broken signature all fail closed — the agent is inert until it verifies.
 pub fn verify(manifest: Manifest, issuer_public_key: [public_key_bytes]u8, endorsement: Endorsement) Error!void {
@@ -284,6 +307,30 @@ test "an endorsement verifies against the issuer's key and this exact manifest" 
 
     const endorsement = try endorse(issuer_key, .{ .value = 0x1 }, manifest);
     try verify(manifest, issuer_key.public_key.toBytes(), endorsement);
+}
+
+test "a custody-held signer endorses without ever surfacing its key" {
+    const issuer_key = try Ed25519.KeyPair.generateDeterministic(@splat(7));
+    const agent_key = try Ed25519.KeyPair.generateDeterministic(@splat(9));
+    const manifest = sampleManifest(0xA, 0x1, agent_key.public_key.toBytes());
+
+    // A signer that holds the key behind a closure, mirroring a keystore over a secure element.
+    const Custody = struct {
+        key: Ed25519.KeyPair,
+        fn signFor(context: *anyopaque, digest: [digest_bytes]u8) ?[signature_bytes]u8 {
+            const self: *@This() = @ptrCast(@alignCast(context));
+            const signature = self.key.sign(&digest, null) catch return null;
+            return signature.toBytes();
+        }
+    };
+    var custody = Custody{ .key = issuer_key };
+    const signer: Signer = .{ .context = &custody, .signFn = Custody.signFor };
+
+    const endorsement = try endorseWith(signer, .{ .value = 0x1 }, manifest);
+    try verify(manifest, issuer_key.public_key.toBytes(), endorsement);
+
+    // The seam still enforces that only the manifest's named issuer may endorse it.
+    try testing.expectError(Error.IssuerMismatch, endorseWith(signer, .{ .value = 0x2 }, manifest));
 }
 
 test "a tampered manifest fails verification, so drift disables the agent" {

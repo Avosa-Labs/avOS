@@ -492,6 +492,11 @@ pub fn build(b: *std.Build) void {
     security_module.addImport("boot", boot_module);
     security_module.addImport("hardware", hardware_module);
     addModuleTests(b, test_step, "security", security_module);
+    // The principal service issues an agent's manifest endorsed by a key the account
+    // holds in the keystore, so the services layer reaches the keystore and the
+    // secure element that backs it.
+    services_module.addImport("security", security_module);
+    services_module.addImport("hardware", hardware_module);
     addModuleTests(b, test_step, "design", design_module);
     addModuleTests(b, test_step, "shell", shell_module);
 
