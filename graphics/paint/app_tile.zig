@@ -523,11 +523,19 @@ fn angleBetween(ux: f32, uy: f32, vx: f32, vy: f32) f32 {
 // per-frame cost drops from re-running the whole SVG engine per tile to a bounded blit, so the 60fps
 // render loop does no vector work for a static launcher. The cache is keyed by the source SVG's address
 // (each app tile is one embedded, stable slice), scanned linearly over a set no larger than the app
-// count. The rasters live for the process; the memory is a few megabytes total and never grows.
+// count. The rasters live in a fixed static store — process-lifetime, never allocated and never grown —
+// so the cache holds about a megabyte and a half total and touches no allocator, and there is nothing to leak.
 
 const cache_edge: u32 = 128;
+const tile_pixels: usize = cache_edge * cache_edge * 4;
+/// A hard, never-growing bound on distinct cached tiles. The mapped tile set is smaller (22 distinct app
+/// tiles); a slot per entry keeps the raster backing and the slot table the same length by construction.
+const tile_slots: usize = 24;
+
 const Cached = struct { key: [*]const u8, pixels: []u8 };
-var cache_slots: [32]?Cached = .{null} ** 32;
+var cache_slots: [tile_slots]?Cached = .{null} ** tile_slots;
+/// Static backing for every slot's raster: bounded, process-lifetime, never allocated or freed.
+var tile_store: [tile_slots][tile_pixels]u8 = undefined;
 
 /// The rasterized image for a tile SVG, rasterising it once on first use. Null only if rasterisation
 /// fails or the cache is unexpectedly full, so the caller can fall back.
@@ -535,23 +543,22 @@ fn cachedTile(svg: []const u8) ?*const Cached {
     for (&cache_slots) |*slot| {
         if (slot.*) |c| if (c.key == svg.ptr) return &slot.*.?;
     }
-    var free: ?*?Cached = null;
-    for (&cache_slots) |*slot| {
+    var free_index: ?usize = null;
+    for (&cache_slots, 0..) |*slot, i| {
         if (slot.* == null) {
-            free = slot;
+            free_index = i;
             break;
         }
     }
-    const target_slot = free orelse return null;
-    const gpa = std.heap.page_allocator;
-    var offscreen = Framebuffer.init(gpa, cache_edge, cache_edge, .{ .r = 0, .g = 0, .b = 0, .a = 0 }) catch return null;
-    if (!rasterize(&offscreen, .{ .x = 0, .y = 0, .w = cache_edge, .h = cache_edge }, svg)) {
-        offscreen.deinit();
-        return null;
-    }
-    // Keep the offscreen's pixels as the cached raster (persisted for the process); do not deinit.
-    target_slot.* = .{ .key = svg.ptr, .pixels = offscreen.pixels };
-    return &target_slot.*.?;
+    const index = free_index orelse return null;
+    const pixels = tile_store[index][0..];
+    // Clear to transparent, matching the offscreen's former {0,0,0,0} init fill, then rasterise into a
+    // borrowed framebuffer view over the static row — no allocation, so nothing here can leak.
+    @memset(pixels, 0);
+    var offscreen = Framebuffer.over(pixels, cache_edge, cache_edge);
+    if (!rasterize(&offscreen, .{ .x = 0, .y = 0, .w = cache_edge, .h = cache_edge }, svg)) return null;
+    cache_slots[index] = .{ .key = svg.ptr, .pixels = pixels };
+    return &cache_slots[index].?;
 }
 
 /// Draws a tile into `rect`, rasterising its source vectors once and blitting the cached image on every

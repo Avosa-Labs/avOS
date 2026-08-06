@@ -49,6 +49,13 @@ pub const Framebuffer = struct {
         buffer.allocator.free(buffer.pixels);
     }
 
+    /// A borrowed view over caller-owned pixels: the framebuffer draws into `pixels` but does not own
+    /// them, so `deinit` must never be called on it. It backs a raster held in static or pooled storage
+    /// rather than a heap allocation. `pixels.len` must be width*height*4.
+    pub fn over(pixels: []u8, width: u32, height: u32) Framebuffer {
+        return .{ .width = width, .height = height, .pixels = pixels, .allocator = undefined };
+    }
+
     inline fn offset(buffer: Framebuffer, x: u32, y: u32) usize {
         return (@as(usize, y) * @as(usize, buffer.width) + @as(usize, x)) * 4;
     }
