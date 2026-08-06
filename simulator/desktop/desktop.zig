@@ -25,6 +25,10 @@ const audio_bind = @import("audio_bind");
 /// `camera_apple` / `camera_native`): AVFoundation on macOS, an inert binder that leaves the seam
 /// honestly dark elsewhere.
 const camera_bind = @import("camera_bind");
+/// Whether this build owns a leak-failing allocator around the whole session (turned on with
+/// -Dleak-check=true). Off by default, so `zig build run` is unchanged; when on, closing the window
+/// exits non-zero on a detected leak, keeping the desktop honest on exit and parallel with the shell.
+const leak_options = @import("leak_options");
 
 const c = @import("sdl.zig");
 
@@ -176,8 +180,26 @@ fn windowScale(w: c_int, h: c_int) f32 {
 }
 
 pub fn main(init: std.process.Init) !u8 {
-    const gpa = init.gpa;
+    // The default path leans on nothing but the process allocator, so `zig build run` is unchanged.
+    if (!leak_options.enforce) return run(init, init.gpa);
 
+    // The leak gate: own a checking allocator so its verdict is not the one start.zig discards, back the
+    // whole session with it, and turn a detected leak into a non-zero exit once the window closes.
+    var checked: std.heap.DebugAllocator(.{}) = .init;
+    const code = run(init, checked.allocator()) catch |err| {
+        _ = checked.deinit();
+        return err;
+    };
+    if (checked.deinit() == .leak) {
+        std.debug.print("desktop: allocation leak detected\n", .{});
+        return 1;
+    }
+    return code;
+}
+
+/// The windowed session, over an explicit general-purpose allocator so the leak gate can back it with a
+/// checking allocator. Returns 0 when the window closes.
+fn run(init: std.process.Init, gpa: std.mem.Allocator) !u8 {
     var host: live.Host = undefined;
     try live.runScenario(&host, gpa);
     defer host.deinit();

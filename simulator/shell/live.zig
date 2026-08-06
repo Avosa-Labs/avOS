@@ -13,6 +13,9 @@ const io_adapters = compat.io;
 const live = @import("live_render");
 const graphics = @import("graphics");
 const design = @import("design");
+/// Whether this build owns a leak-failing allocator around the whole render (the `leak-check` gate turns
+/// it on; every other build leaves it off, so the ordinary `zig build shell` path is byte-identical).
+const leak_options = @import("leak_options");
 
 const Framebuffer = graphics.framebuffer.Framebuffer;
 const theme = design.theme;
@@ -26,8 +29,32 @@ fn baseFill() graphics.framebuffer.Rgba {
 }
 
 pub fn main(init: std.process.Init) !u8 {
+    // The default path leans on nothing but the process allocator, so `zig build shell` is unchanged.
+    if (!leak_options.enforce) return run(init, init.gpa);
+
+    // The leak gate: own a checking allocator so its verdict is not the one start.zig discards, back the
+    // whole render with it, and turn a detected leak into a non-zero exit the build step fails on. Its
+    // own page-backed pages mean it works identically whether or not the exe links libc.
+    var checked: std.heap.DebugAllocator(.{}) = .init;
+    const code = run(init, checked.allocator()) catch |err| {
+        _ = checked.deinit();
+        return err;
+    };
+    if (checked.deinit() == .leak) {
+        var buf: [256]u8 = undefined;
+        var ef = io_adapters.stderr(init.io, &buf);
+        try ef.interface.print("shell: allocation leak detected\n", .{});
+        try ef.interface.flush();
+        return 1;
+    }
+    return code;
+}
+
+/// The render itself, over an explicit general-purpose allocator so the leak gate can back it with a
+/// checking allocator. The arena stays `init.arena` — page-backed and freed wholesale, deliberately
+/// outside the checker, since its scratch is never individually freed and is not a leak.
+fn run(init: std.process.Init, gpa: std.mem.Allocator) !u8 {
     const io = init.io;
-    const gpa = init.gpa;
     const arena = init.arena.allocator();
 
     var err_buffer: [4 * 1024]u8 = undefined;
@@ -46,6 +73,11 @@ pub fn main(init: std.process.Init) !u8 {
         const prefix = if (args.len > 2) args[2] else "session_";
         return renderSession(gpa, io, err, &host, prefix);
     }
+
+    // The leak gate's scenario: render every surface once into one reused in-memory framebuffer, writing
+    // no files. It drives the whole render bridge — every app surface, not just the session's eight —
+    // through the caller's allocator, so a leak anywhere the OS renders is caught headless and offline.
+    if (std.mem.eql(u8, which, "leakcheck")) return renderEverySurface(gpa, &host);
 
     const surface = parseSurface(which) orelse {
         try err.print("shell: unknown surface '{s}'\n", .{which});
@@ -80,6 +112,22 @@ pub fn main(init: std.process.Init) !u8 {
         try err.flush();
         return 1;
     };
+    return 0;
+}
+
+/// Renders every surface once into one reused, in-memory framebuffer — writing nothing — so the leak
+/// gate exercises the full render bridge on a headless host. Returns 0; a leak is reported by the owned
+/// checker in `main`, not here.
+fn renderEverySurface(gpa: std.mem.Allocator, host: *live.Host) !u8 {
+    var idle = live.Interaction{};
+    idle.attach(gpa);
+    defer idle.release();
+    live.seedAgentPresence(&idle);
+    var target = try Framebuffer.init(gpa, live.width, live.height, baseFill());
+    defer target.deinit();
+    for (std.enums.values(live.Surface)) |surface| {
+        try live.renderSurface(&target, host, surface, 0.0, &idle);
+    }
     return 0;
 }
 

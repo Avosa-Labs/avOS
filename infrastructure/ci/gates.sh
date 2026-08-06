@@ -89,6 +89,10 @@ run_gate 'engine-cache' "$repository_root/infrastructure/ci/engine-cache.sh"
 run_gate 'brand-check' zig build brand-check
 run_gate 'brand-check (synthetic brand)' zig build brand-check "-Dbrand=$reference_brand"
 run_gate 'simulator (canonical demo)' zig build simulator -- --no-ledger
+# Renders every surface under a leak-failing allocator whose verdict is inspected (not the one
+# start.zig discards), so a leak on any path the OS renders exits non-zero and fails the build. Debug,
+# headless, offline — no display, no network.
+run_gate 'leak-check' zig build leak-check -Dleak-check=true
 # Some checks need a reference device, which needs KVM on Linux. A host that
 # cannot run them reports each by name as skipped: an absent gate that printed
 # nothing would eventually be read as a passing one.

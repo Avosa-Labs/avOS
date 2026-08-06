@@ -1221,6 +1221,14 @@ pub fn build(b: *std.Build) void {
     // surface and sample the framebuffer at the layout engine's rectangles, so they run here.
     addModuleTests(b, test_step, "live_render", live_render_module);
 
+    // The leak gate's switch: when on, the shell and the windowed desktop own a leak-failing allocator
+    // around the whole render and turn a detected leak into a non-zero exit (see live.zig / desktop.zig).
+    // Off by default, so `zig build shell` and `zig build run` are byte-identical to before; the
+    // `leak-check` step and the CI gate pass it on.
+    const leak_check = b.option(bool, "leak-check", "Render under a leak-failing allocator; fail the build on a detected leak") orelse false;
+    const leak_options = b.addOptions();
+    leak_options.addOption(bool, "enforce", leak_check);
+
     // The headless shell: renders the live surfaces to PNG files, for hosts without a display.
     const live_module = b.createModule(.{
         .root_source_file = b.path("simulator/shell/live.zig"),
@@ -1231,6 +1239,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "live_render", .module = live_render_module },
             .{ .name = "graphics", .module = graphics_module },
             .{ .name = "design", .module = design_module },
+            .{ .name = "leak_options", .module = leak_options.createModule() },
         },
     });
     const live_exe = b.addExecutable(.{ .name = "shell", .root_module = live_module });
@@ -1239,6 +1248,15 @@ pub fn build(b: *std.Build) void {
     run_live.step.dependOn(b.getInstallStep());
     if (b.args) |forwarded| run_live.addArgs(forwarded);
     b.step("shell", "Render a live designed surface from the real run to a PNG").dependOn(&run_live.step);
+
+    // The CI leak gate: render every surface once under the leak-failing allocator and fail the build on
+    // a detected leak — the non-zero exit the run step surfaces. Enable with -Dleak-check=true (the CI
+    // gate does). Headless and offline: it writes no files and touches no network.
+    const leak_check_step = b.step("leak-check", "Render every surface under a leak-failing allocator; fail on a leak");
+    const run_leak = b.addRunArtifact(live_exe);
+    run_leak.addArg("leakcheck");
+    run_leak.expectExitCode(0);
+    leak_check_step.dependOn(&run_leak.step);
 
     // The windowed desktop shell: the OS in a real window, on the GPU, with input — built only when a
     // display library (SDL2) is present, so headless CI stays green while a desktop gets the real thing.
@@ -1356,6 +1374,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "mind_provider", .module = mind_provider_module },
                 .{ .name = "audio_bind", .module = audio_bind_module },
                 .{ .name = "camera_bind", .module = camera_bind_module },
+                .{ .name = "leak_options", .module = leak_options.createModule() },
             },
         });
         // The binding is declared directly (simulator/desktop/sdl.zig), so no header include is
