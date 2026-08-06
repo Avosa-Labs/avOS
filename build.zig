@@ -1,6 +1,45 @@
 const std = @import("std");
 const line = @import("compat/zig/line.zig");
 
+/// The macOS application bundle's property list. macOS reads the usage descriptions here before it
+/// will prompt for and grant a TCC-gated service to the process: without the location key CoreLocation
+/// is denied and the weather app falls back to coarse IP geolocation, and without the camera key the
+/// capture stack is denied and the Camera app finds no device. Every name is neutral — the identifier
+/// holds no product name — so the brand gate stays green.
+const darwin_info_plist =
+    \\<?xml version="1.0" encoding="UTF-8"?>
+    \\<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+    \\<plist version="1.0">
+    \\<dict>
+    \\    <key>CFBundlePackageType</key>
+    \\    <string>APPL</string>
+    \\    <key>CFBundleInfoDictionaryVersion</key>
+    \\    <string>6.0</string>
+    \\    <key>CFBundleName</key>
+    \\    <string>Personal OS</string>
+    \\    <key>CFBundleDisplayName</key>
+    \\    <string>Personal OS</string>
+    \\    <key>CFBundleExecutable</key>
+    \\    <string>desktop</string>
+    \\    <key>CFBundleIdentifier</key>
+    \\    <string>com.personal-os.desktop</string>
+    \\    <key>CFBundleVersion</key>
+    \\    <string>1</string>
+    \\    <key>CFBundleShortVersionString</key>
+    \\    <string>1.0</string>
+    \\    <key>LSMinimumSystemVersion</key>
+    \\    <string>11.0</string>
+    \\    <key>NSHighResolutionCapable</key>
+    \\    <true/>
+    \\    <key>NSLocationWhenInUseUsageDescription</key>
+    \\    <string>Your local weather forecast uses your current location.</string>
+    \\    <key>NSCameraUsageDescription</key>
+    \\    <string>The camera app uses the camera to take photos and read the scene.</string>
+    \\</dict>
+    \\</plist>
+    \\
+;
+
 /// Files and directories the formatter owns. Generated output and the local
 /// tool directory are excluded because they are not authored source.
 const formatted_paths = [_][]const u8{
@@ -181,6 +220,11 @@ pub fn build(b: *std.Build) void {
             .name = "vendor-engines",
             .root = "tools/vendor-engines/main.zig",
             .description = "Fetch each pinned engine, verify its digest, and unpack it into the local cache",
+        },
+        .{
+            .name = "fetch-model",
+            .root = "tools/fetch-model/main.zig",
+            .description = "Fetch the pinned on-device model, verify its digest, and place it in .models/",
         },
         .{
             .name = "example-check",
@@ -448,6 +492,11 @@ pub fn build(b: *std.Build) void {
     security_module.addImport("boot", boot_module);
     security_module.addImport("hardware", hardware_module);
     addModuleTests(b, test_step, "security", security_module);
+    // The principal service issues an agent's manifest endorsed by a key the account
+    // holds in the keystore, so the services layer reaches the keystore and the
+    // secure element that backs it.
+    services_module.addImport("security", security_module);
+    services_module.addImport("hardware", hardware_module);
     addModuleTests(b, test_step, "design", design_module);
     addModuleTests(b, test_step, "shell", shell_module);
 
@@ -575,13 +624,23 @@ pub fn build(b: *std.Build) void {
     // real local backend. Absent, the local mind keeps its honest-until-loaded unavailable
     // fallback. The engine is arm64 NEON, CPU backend statically registered (GGML_USE_CPU) — no
     // GPU, Accelerate, OpenMP, or dynamic backend loading.
+    // Hoisted so the windowed desktop shell (built later, when SDL is present) can bind the real
+    // llama.cpp backend to the assistant's mind. Null when the engine source is not vendored.
+    var llama_engine_opt: ?*std.Build.Module = null;
+    var llama_backend_opt: ?*std.Build.Module = null;
     if (llamaRoot(b)) |root| {
         const module = b.createModule(.{
             .root_source_file = b.path("agents/model/local/llama/llama.zig"),
             .target = target,
             .optimize = optimize,
+            // ggml counts the size of a compute graph by walking a null base pointer and adding field
+            // offsets to it (`(char *)NULL + size`), which the C sanitizer traps as a non-zero offset on
+            // a null pointer. It is a deliberate sizing idiom in the vendored engine, not a fault, so the
+            // C sanitizer is off for this module — the assistant builds its context without trapping.
+            .sanitize_c = .off,
         });
         const llama_engine_module = module;
+        llama_engine_opt = llama_engine_module;
         module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{root}) });
         module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/ggml/include", .{root}) });
         module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/ggml/src", .{root}) });
@@ -692,6 +751,7 @@ pub fn build(b: *std.Build) void {
         });
         llama_backend_module.link_libc = true;
         llama_backend_module.link_libcpp = true;
+        llama_backend_opt = llama_backend_module;
         addModuleTests(b, test_step, "local-llama-backend", llama_backend_module);
         addCompileCheck(b, engine_compile_step, "local-llama-backend", llama_backend_module);
 
@@ -706,6 +766,9 @@ pub fn build(b: *std.Build) void {
                 .root_source_file = b.path("agents/model/local/llama/vision.zig"),
                 .target = target,
                 .optimize = optimize,
+                // The vision runtime compiles the same ggml sources; the C sanitizer is off for the same
+                // null-base sizing idiom as the text engine above.
+                .sanitize_c = .off,
                 .imports = &.{
                     .{ .name = "llama_engine", .module = llama_engine_module },
                 },
@@ -768,6 +831,43 @@ pub fn build(b: *std.Build) void {
         }
     }
 
+    // The platform audio seam (services/media/audio.zig): one neutral interface a per-OS backend binds
+    // behind, and the lock-free relay a backend's realtime capture thread hands samples across. Created
+    // once and shared by every consumer — the CoreAudio and ALSA adapters, the screening route, the live
+    // render bridge, and the desktop shell that binds a real backend into it — so the `Audio`, `Backend`,
+    // and `CaptureRelay` types are one type across the OS, not a per-module copy.
+    const audio_seam_module = b.createModule(.{
+        .root_source_file = b.path("services/media/audio.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // The platform camera seam (services/media/camera.zig): one neutral interface a per-OS capture
+    // backend binds behind, with the privacy indicator wired at the frame source so no consumer can hold
+    // the camera open with the light off. Created once and shared by every consumer — the V4L2 and
+    // AVFoundation adapters, the live render bridge, and the desktop shell that binds a real backend into
+    // it — so the `CameraSource`, `Backend`, and `Frame` types are one type across the OS, not a
+    // per-module copy. Pure Zig with no hardware, so its structural-indicator tests run on every host.
+    const camera_seam_module = b.createModule(.{
+        .root_source_file = b.path("services/media/camera.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    addModuleTests(b, test_step, "camera-seam", camera_seam_module);
+
+    // The screening audio route: the duplex path a screening agent answers a call over, expressed over
+    // the audio seam. Pure Zig with no hardware — it decides availability and opens seam streams — so it
+    // builds and its tests run on every host, green with no audio device present.
+    const screening_route_module = b.createModule(.{
+        .root_source_file = b.path("services/telephony/screening_route.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "audio", .module = audio_seam_module },
+        },
+    });
+    addModuleTests(b, test_step, "screening-route", screening_route_module);
+
     // The CoreAudio host-audio adapter: a real macOS backend behind the platform audio seam
     // (services/media/audio.zig), enumerating the host's actual devices through the Core Audio HAL.
     // Built only on macOS — off macOS the seam keeps its honest-until-bound default and this module is
@@ -775,11 +875,6 @@ pub fn build(b: *std.Build) void {
     // module, so nothing crosses a relative module boundary, and links the CoreAudio and
     // CoreFoundation frameworks (the latter for CFString device names).
     if (target.result.os.tag == .macos) {
-        const audio_seam_module = b.createModule(.{
-            .root_source_file = b.path("services/media/audio.zig"),
-            .target = target,
-            .optimize = optimize,
-        });
         const module = b.createModule(.{
             .root_source_file = b.path("services/media/coreaudio/coreaudio.zig"),
             .target = target,
@@ -807,11 +902,6 @@ pub fn build(b: *std.Build) void {
     // `extern` (there are no ALSA headers to @cImport), so nothing crosses a relative module boundary,
     // and links the system "asound" library so the hint calls reach real ALSA.
     if (target.result.os.tag == .linux) {
-        const audio_seam_module = b.createModule(.{
-            .root_source_file = b.path("services/media/audio.zig"),
-            .target = target,
-            .optimize = optimize,
-        });
         const module = b.createModule(.{
             .root_source_file = b.path("services/media/alsa/alsa.zig"),
             .target = target,
@@ -844,11 +934,6 @@ pub fn build(b: *std.Build) void {
     // external library to link (no gates.yml change) and the UAPI struct and ioctl request are
     // hand-declared, so no headers are needed to build; only libc is linked.
     if (target.result.os.tag == .linux) {
-        const camera_seam_module = b.createModule(.{
-            .root_source_file = b.path("services/media/camera.zig"),
-            .target = target,
-            .optimize = optimize,
-        });
         const module = b.createModule(.{
             .root_source_file = b.path("services/media/v4l2/v4l2.zig"),
             .target = target,
@@ -870,11 +955,6 @@ pub fn build(b: *std.Build) void {
     // -fobjc-arc) exposes a pure-C ABI the adapter binds to; the AVFoundation, Foundation, CoreMedia,
     // and CoreVideo frameworks are linked so the calls reach the real stack.
     if (target.result.os.tag == .macos) {
-        const camera_seam_module = b.createModule(.{
-            .root_source_file = b.path("services/media/camera.zig"),
-            .target = target,
-            .optimize = optimize,
-        });
         const module = b.createModule(.{
             .root_source_file = b.path("services/media/avfoundation/avfoundation.zig"),
             .target = target,
@@ -1126,11 +1206,36 @@ pub fn build(b: *std.Build) void {
             .{ .name = "graphics", .module = graphics_module },
             .{ .name = "design", .module = design_module },
             .{ .name = "applications", .module = applications_module },
+            // The mind seam (pure Zig, no engine): the shell holds a local mind the assistant asks.
+            // The real llama.cpp backend is loaded into it by the windowed shell when weights exist.
+            .{ .name = "agents", .module = agents_module },
+            // The control plane: the shell owns a real audit ledger so an in-app agent action runs
+            // through the same framework gate-and-record the domains use, never a parallel path.
+            .{ .name = "core", .module = core_module },
+            // The platform audio seam and the screening audio route: the Phone screening path consults
+            // the route for a real capture+playback device, so it reports an honest "audio unavailable"
+            // where none is bound (the headless renderer and CI) and a real route where the desktop shell
+            // has bound a backend. The seam is the shared instance the desktop binds into.
+            .{ .name = "audio", .module = audio_seam_module },
+            .{ .name = "screening_route", .module = screening_route_module },
+            // The platform camera seam: the Camera capture path consults the bound source for a real
+            // frame where a device exists, so it stays honestly dark on the headless renderer and CI (no
+            // backend bound) and takes a real frame on the desktop shell that has bound one. The seam is
+            // the shared instance the desktop binds into.
+            .{ .name = "camera", .module = camera_seam_module },
         },
     });
     // The live surfaces carry a per-screen pixel gate (P6.3): its tests render each designed
     // surface and sample the framebuffer at the layout engine's rectangles, so they run here.
     addModuleTests(b, test_step, "live_render", live_render_module);
+
+    // The leak gate's switch: when on, the shell and the windowed desktop own a leak-failing allocator
+    // around the whole render and turn a detected leak into a non-zero exit (see live.zig / desktop.zig).
+    // Off by default, so `zig build shell` and `zig build run` are byte-identical to before; the
+    // `leak-check` step and the CI gate pass it on.
+    const leak_check = b.option(bool, "leak-check", "Render under a leak-failing allocator; fail the build on a detected leak") orelse false;
+    const leak_options = b.addOptions();
+    leak_options.addOption(bool, "enforce", leak_check);
 
     // The headless shell: renders the live surfaces to PNG files, for hosts without a display.
     const live_module = b.createModule(.{
@@ -1142,6 +1247,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "live_render", .module = live_render_module },
             .{ .name = "graphics", .module = graphics_module },
             .{ .name = "design", .module = design_module },
+            .{ .name = "leak_options", .module = leak_options.createModule() },
         },
     });
     const live_exe = b.addExecutable(.{ .name = "shell", .root_module = live_module });
@@ -1151,11 +1257,120 @@ pub fn build(b: *std.Build) void {
     if (b.args) |forwarded| run_live.addArgs(forwarded);
     b.step("shell", "Render a live designed surface from the real run to a PNG").dependOn(&run_live.step);
 
+    // The CI leak gate: render every surface once under the leak-failing allocator and fail the build on
+    // a detected leak — the non-zero exit the run step surfaces. Enable with -Dleak-check=true (the CI
+    // gate does). Headless and offline: it writes no files and touches no network.
+    const leak_check_step = b.step("leak-check", "Render every surface under a leak-failing allocator; fail on a leak");
+    const run_leak = b.addRunArtifact(live_exe);
+    run_leak.addArg("leakcheck");
+    run_leak.expectExitCode(0);
+    leak_check_step.dependOn(&run_leak.step);
+
     // The windowed desktop shell: the OS in a real window, on the GPU, with input — built only when a
     // display library (SDL2) is present, so headless CI stays green while a desktop gets the real thing.
     // SDL is backed by Metal/AppKit on macOS and Vulkan/Wayland on Linux.
     const run_step = b.step("run", "Run the OS in a window (needs SDL2); falls back to rendering frames");
     if (sdlPrefix(b)) |prefix| {
+        // The assistant mind provider: the real llama.cpp-backed loader when the engine is vendored,
+        // else a no-op so the mind stays honestly offline. Built here so the desktop shell can bind a
+        // real on-device model to the home command bar.
+        const mind_provider_module = if (llama_engine_opt) |engine| blk: {
+            const m = b.createModule(.{
+                .root_source_file = b.path("simulator/desktop/mind_llama.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "live_render", .module = live_render_module },
+                    .{ .name = "llama_engine", .module = engine },
+                    .{ .name = "local_llama_backend", .module = llama_backend_opt.? },
+                },
+            });
+            break :blk m;
+        } else b.createModule(.{
+            .root_source_file = b.path("simulator/desktop/mind_offline.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "live_render", .module = live_render_module }},
+        });
+
+        // The device's real audio backend, bound into the shell's screening path behind one cross-platform
+        // `audio_bind` entry point (mirroring the location binding below): Apple hosts bind the CoreAudio
+        // adapter, every other platform compiles the inert binder that leaves the seam honestly unbound
+        // until its backend is wired. The Apple binder reaches the CoreAudio adapter, which links the
+        // audio frameworks; both binders share the one seam the interaction holds, so the bound backend is
+        // the same `Audio` type the render bridge reads.
+        const audio_bind_module = if (target.result.os.tag.isDarwin()) blk: {
+            const coreaudio_module = b.createModule(.{
+                .root_source_file = b.path("services/media/coreaudio/coreaudio.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{.{ .name = "audio", .module = audio_seam_module }},
+            });
+            coreaudio_module.addIncludePath(b.path("services/media/coreaudio")); // the coreaudio_shim.h
+            coreaudio_module.link_libc = true;
+            coreaudio_module.linkFramework("CoreAudio", .{});
+            coreaudio_module.linkFramework("CoreFoundation", .{});
+            coreaudio_module.linkFramework("AudioToolbox", .{});
+            coreaudio_module.linkFramework("AudioUnit", .{});
+            const m = b.createModule(.{
+                .root_source_file = b.path("simulator/desktop/audio_apple.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "live_render", .module = live_render_module },
+                    .{ .name = "audio", .module = audio_seam_module },
+                    .{ .name = "coreaudio", .module = coreaudio_module },
+                },
+            });
+            break :blk m;
+        } else b.createModule(.{
+            .root_source_file = b.path("simulator/desktop/audio_native.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "live_render", .module = live_render_module }},
+        });
+
+        // The device's real camera backend, bound into the shell's Camera capture path behind one
+        // cross-platform `camera_bind` entry point (mirroring the audio and location bindings): Apple
+        // hosts bind the AVFoundation adapter, every other platform compiles the inert binder that leaves
+        // the seam honestly dark until its backend is wired. The Apple binder reaches the AVFoundation
+        // adapter, which compiles its Objective-C shim and links the capture frameworks; both binders
+        // share the one seam the interaction holds, so the bound backend is the same `CameraSource` type
+        // the capture path reads.
+        const camera_bind_module = if (target.result.os.tag.isDarwin()) blk: {
+            const avfoundation_module = b.createModule(.{
+                .root_source_file = b.path("services/media/avfoundation/avfoundation.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{.{ .name = "camera", .module = camera_seam_module }},
+            });
+            avfoundation_module.addIncludePath(b.path("services/media/avfoundation")); // the shim.h
+            avfoundation_module.addCSourceFile(.{
+                .file = b.path("services/media/avfoundation/shim.m"),
+                .flags = &.{"-fobjc-arc"},
+            });
+            avfoundation_module.link_libc = true;
+            avfoundation_module.linkFramework("AVFoundation", .{});
+            avfoundation_module.linkFramework("Foundation", .{});
+            avfoundation_module.linkFramework("CoreMedia", .{});
+            avfoundation_module.linkFramework("CoreVideo", .{});
+            const m = b.createModule(.{
+                .root_source_file = b.path("simulator/desktop/camera_apple.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "live_render", .module = live_render_module },
+                    .{ .name = "avfoundation", .module = avfoundation_module },
+                },
+            });
+            break :blk m;
+        } else b.createModule(.{
+            .root_source_file = b.path("simulator/desktop/camera_native.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "live_render", .module = live_render_module }},
+        });
+
         const desktop_module = b.createModule(.{
             .root_source_file = b.path("simulator/desktop/desktop.zig"),
             .target = target,
@@ -1164,6 +1379,10 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "live_render", .module = live_render_module },
                 .{ .name = "graphics", .module = graphics_module },
                 .{ .name = "design", .module = design_module },
+                .{ .name = "mind_provider", .module = mind_provider_module },
+                .{ .name = "audio_bind", .module = audio_bind_module },
+                .{ .name = "camera_bind", .module = camera_bind_module },
+                .{ .name = "leak_options", .module = leak_options.createModule() },
             },
         });
         // The binding is declared directly (simulator/desktop/sdl.zig), so no header include is
@@ -1172,12 +1391,56 @@ pub fn build(b: *std.Build) void {
         desktop_module.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/lib", .{prefix}) });
         desktop_module.linkSystemLibrary("SDL2", .{ .use_pkg_config = .no });
         desktop_module.link_libc = true;
+        // The llama.cpp engine is C++; when its backend is compiled in, the exe links libc++.
+        if (llama_engine_opt != null) desktop_module.link_libcpp = true;
+        // The device's real location comes from the platform's native location service, behind one
+        // cross-platform `device_current_location` entry point so the shell links the same on every OS.
+        // Apple hosts use CoreLocation (an Objective-C file linked against its frameworks); every other
+        // platform compiles the portable C backend, which reports its native fix where one is wired and
+        // otherwise defers to the shell's cross-platform IP fallback.
+        if (target.result.os.tag.isDarwin()) {
+            desktop_module.addCSourceFile(.{ .file = b.path("simulator/desktop/location_apple.m"), .flags = &.{ "-fobjc-arc", "-fno-sanitize=undefined" } });
+            desktop_module.linkFramework("CoreLocation", .{});
+            desktop_module.linkFramework("Foundation", .{});
+        } else {
+            desktop_module.addCSourceFile(.{ .file = b.path("simulator/desktop/location_native.c"), .flags = &.{"-fno-sanitize=undefined"} });
+        }
         const desktop_exe = b.addExecutable(.{ .name = "desktop", .root_module = desktop_module });
-        b.installArtifact(desktop_exe);
-        const run_desktop = b.addRunArtifact(desktop_exe);
-        run_desktop.step.dependOn(b.getInstallStep());
-        if (b.args) |forwarded| run_desktop.addArgs(forwarded);
-        run_step.dependOn(&run_desktop.step);
+        if (target.result.os.tag.isDarwin()) {
+            // macOS grants CoreLocation (and every other TCC-gated service) only to a code identity
+            // that carries a bundle: an Info.plist with a usage string, sitting next to the executable
+            // inside Contents/MacOS. Assemble a minimal .app under the install prefix — the executable
+            // installed into Contents/MacOS, the plist and PkgInfo written beside it — and run the
+            // binary from inside it, so the weather fix comes from the real location service rather
+            // than the coarse IP fallback.
+            const contents_dir: std.Build.InstallDir = .{ .custom = "Personal OS.app/Contents" };
+            const macos_dir: std.Build.InstallDir = .{ .custom = "Personal OS.app/Contents/MacOS" };
+
+            const bundle_exe = b.addInstallArtifact(desktop_exe, .{ .dest_dir = .{ .override = macos_dir } });
+            b.getInstallStep().dependOn(&bundle_exe.step);
+
+            const bundle_files = b.addWriteFiles();
+            const info_plist = bundle_files.add("Info.plist", darwin_info_plist);
+            const pkg_info = bundle_files.add("PkgInfo", "APPL????");
+            b.getInstallStep().dependOn(&b.addInstallFileWithDir(info_plist, contents_dir, "Info.plist").step);
+            b.getInstallStep().dependOn(&b.addInstallFileWithDir(pkg_info, contents_dir, "PkgInfo").step);
+
+            // Execute the binary from inside the bundle so macOS attributes it to the bundle identity
+            // for TCC/location. Running the inner binary directly keeps stdio attached; `open` would
+            // detach it. The path is under the install prefix, so it exists once the install step ran.
+            const inner_binary = b.getInstallPath(macos_dir, "desktop");
+            const run_desktop = b.addSystemCommand(&.{inner_binary});
+            run_desktop.stdio = .inherit;
+            run_desktop.step.dependOn(b.getInstallStep());
+            if (b.args) |forwarded| run_desktop.addArgs(forwarded);
+            run_step.dependOn(&run_desktop.step);
+        } else {
+            b.installArtifact(desktop_exe);
+            const run_desktop = b.addRunArtifact(desktop_exe);
+            run_desktop.step.dependOn(b.getInstallStep());
+            if (b.args) |forwarded| run_desktop.addArgs(forwarded);
+            run_step.dependOn(&run_desktop.step);
+        }
     } else {
         // No display library: play the whole session to image frames instead.
         const run_session = b.addRunArtifact(live_exe);

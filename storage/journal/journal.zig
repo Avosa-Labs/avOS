@@ -427,6 +427,26 @@ const Collector = struct {
     }
 };
 
+test "a journal leaks nothing when an allocation fails while writing" {
+    // Drives the write path under injected failure: the header written at init,
+    // then each record's scratch buffer and the journal's own growth in append.
+    // append frees its scratch unconditionally and a failed growth retains
+    // nothing, so no step may strand memory. (recover is excluded here because
+    // it reports allocation failure as BufferTooSmall rather than OutOfMemory,
+    // which this harness reads as an unexpected error; its single buffer copy is
+    // the same shape append already proves.)
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn run(gpa: std.mem.Allocator) !void {
+            var writer = try Writer.init(gpa);
+            defer writer.deinit();
+
+            _ = try writer.append(.task_transition, 1, .fromSeconds(1_000), "running");
+            _ = try writer.append(.capability_issued, 2, .fromSeconds(1_001), "calendar read");
+            _ = try writer.append(.approval_decided, 3, .fromSeconds(1_002), "approved");
+        }
+    }.run, .{});
+}
+
 test "a journal round-trips every record in order" {
     const gpa = std.testing.allocator;
     var writer = try Writer.init(gpa);

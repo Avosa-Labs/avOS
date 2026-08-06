@@ -215,6 +215,31 @@ const Fixture = struct {
     }
 };
 
+test "enrolling an endpoint leaks nothing when an allocation fails at any step" {
+    // enrol dupes the endpoint name, then records the entry. The errdefer must
+    // free the name if the entries.put fails, or the copy leaks with no owner.
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn run(gpa: std.mem.Allocator) !void {
+            var ids: identity.Source = .initDeterministic(4242);
+            var manual: time.ManualClock = .init(.fromSeconds(1_000));
+            var registry: Registry = .init(gpa, &ids, manual.clock());
+            defer registry.deinit();
+            const human: identity.PrincipalId = .{ .value = 1 };
+
+            _ = try registry.enrol(.{
+                .human = human,
+                .name = "Room display",
+                .permissions = .present_only,
+            });
+            _ = try registry.enrol(.{
+                .human = human,
+                .name = "Laptop",
+                .permissions = .full,
+            });
+        }
+    }.run, .{});
+}
+
 test "presenting a session is not the same as acting in it" {
     const gpa = std.testing.allocator;
     var fixture: Fixture = undefined;

@@ -250,6 +250,33 @@ const testing = struct {
     }
 };
 
+test "enrolling a principal leaks nothing when an allocation fails at any step" {
+    // enroll dupes the display name and the policy domain before recording the
+    // entry. Each errdefer must release its copy if a later step fails; a copy
+    // left behind on the failure path would be a leak the entries map never owns.
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn run(gpa: std.mem.Allocator) !void {
+            var ids: identity.Source = .initDeterministic(1);
+            var manual: time.ManualClock = .init(.fromSeconds(1_000));
+            var registry: Registry = .init(gpa, &ids, manual.clock());
+            defer registry.deinit();
+
+            const human = try registry.enroll(.{
+                .kind = .human,
+                .display_name = "operator",
+                .policy_domain = "local",
+            });
+            _ = try registry.enroll(.{
+                .kind = .agent,
+                .display_name = "planner",
+                .policy_domain = "local",
+                .expires_at = .fromSeconds(2_000),
+                .issuer = human,
+            });
+        }
+    }.run, .{});
+}
+
 test "a human enrolls without an issuer and an agent does not" {
     const gpa = std.testing.allocator;
     var ids: identity.Source = .initDeterministic(1);

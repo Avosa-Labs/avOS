@@ -13,11 +13,69 @@
 //! shell -- session` to render the same surfaces to images instead.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const live = @import("live_render");
 const graphics = @import("graphics");
 const design = @import("design");
+const mind_provider = @import("mind_provider");
+/// The device's real audio backend, bound into the shell's screening path per-OS (see `audio_apple` /
+/// `audio_native`): CoreAudio on macOS, an inert binder that leaves the seam honestly unbound elsewhere.
+const audio_bind = @import("audio_bind");
+/// The device's real camera backend, bound into the shell's Camera capture path per-OS (see
+/// `camera_apple` / `camera_native`): AVFoundation on macOS, an inert binder that leaves the seam
+/// honestly dark elsewhere.
+const camera_bind = @import("camera_bind");
+/// Whether this build owns a leak-failing allocator around the whole session (turned on with
+/// -Dleak-check=true). Off by default, so `zig build run` is unchanged; when on, closing the window
+/// exits non-zero on a detected leak, keeping the desktop honest on exit and parallel with the shell.
+const leak_options = @import("leak_options");
 
 const c = @import("sdl.zig");
+
+/// The device's real location from the platform's native location service (see `location_native`).
+/// Writes the coordinate and the locality name; returns 0 on success, non-zero when unavailable.
+extern fn device_current_location(out_lat: *f64, out_lon: *f64, city_buf: [*]u8, city_cap: c_int) c_int;
+
+/// Where a provisioned on-device model lives, relative to the working directory. `zig build fetch-model`
+/// writes the default model here; the directory is ignored by git and never committed.
+const models_dir = ".models";
+
+/// Resolves the on-device model to load, so `zig build run` just works with no configuration. A custom
+/// agent may point `LOCAL_MODEL_PATH` at its own weights; otherwise the first provisioned `.gguf` in the
+/// local models directory is used automatically. Returns an empty path when none is present, which
+/// leaves the assistant honestly offline. The path is written into `buf` when auto-discovered.
+fn resolveModelPath(init: std.process.Init, buf: []u8) []const u8 {
+    // A custom agent's configured model overrides discovery.
+    if (init.environ_map.get("LOCAL_MODEL_PATH")) |configured| {
+        if (configured.len > 0) return configured;
+    }
+    // Otherwise auto-detect a provisioned model: the first .gguf in the local models directory.
+    var base = std.Io.Dir.cwd();
+    var dir = base.openDir(init.io, models_dir, .{ .iterate = true }) catch return "";
+    defer dir.close(init.io);
+    var it = dir.iterate();
+    while (it.next(init.io) catch null) |entry| {
+        if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".gguf")) {
+            return std.fmt.bufPrint(buf, models_dir ++ "/{s}", .{entry.name}) catch "";
+        }
+    }
+    return "";
+}
+
+/// Fetches live weather at the device's real location. It asks the platform's native location service
+/// first — accurate to the actual place — and falls back to the cross-platform IP lookup only when no
+/// native fix is available (an OS without a wired backend, or the person has not authorized location).
+fn resolveWeather(interaction: *live.Interaction, gpa: std.mem.Allocator, io: std.Io) void {
+    var lat: f64 = 0;
+    var lon: f64 = 0;
+    var city: [64]u8 = undefined;
+    if (device_current_location(&lat, &lon, &city, city.len) == 0) {
+        const end = std.mem.indexOfScalar(u8, &city, 0) orelse city.len;
+        interaction.weatherRefreshAt(gpa, io, lat, lon, city[0..end]);
+        return;
+    }
+    interaction.weatherRefresh(gpa, io);
+}
 
 const Framebuffer = graphics.framebuffer.Framebuffer;
 const anim = graphics.anim;
@@ -41,27 +99,29 @@ fn navigate(current: live.Surface, mx: i32, my: i32) live.Surface {
     if (current == .boot) return .lock;
     if (current == .lock) return .home;
 
-    // A tap in the header returns home from any sub-surface.
-    if (current != .home and sy < 110) return .home;
+    // The back button: a small target at the top-left of every sub-surface returns to where the app
+    // was opened from. It is the ONLY way out — tapping the body never closes the app.
+    if (current != .home and current != .library) {
+        if (sx < 64 and sy < 96) return .home;
+    }
+    if (current == .library and sx < 64 and sy < 96) return .home;
 
     if (current == .home) {
         // The dock and the app grid: hit-test each tile so a tap opens that app, not a band.
         if (dockApp(sx, sy, screen_w, screen_h)) |app| return app;
         if (live.homeGridApp(sx, sy)) |app_surface| return app_surface;
         if (live.homeAllApps(sx, sy)) return .library; // "All apps" opens the full list
-        if (sy >= 104 and sy <= 184) return .approval; // the command bar / active task
-        if (sy >= 200 and sy <= 440) return .activity; // the in-motion list
-        return .home;
+        return .home; // the home body stays home
     }
 
-    // The library: a tap on a tile opens that app.
+    // The library: a tap on a tile opens that app; anything else stays in the library.
     if (current == .library) {
         if (live.libraryApp(sx, sy)) |app_surface| return app_surface;
         return .library;
     }
 
-    // On an app or a sub-surface, tapping the body returns home.
-    return .home;
+    // On any app surface, a body tap that missed every control stays in the app — it never closes.
+    return current;
 }
 
 /// The app a tap on the dock opens, or null if the tap is not on the dock. The layout
@@ -95,6 +155,17 @@ fn dockApp(sx: i32, sy: i32, screen_w: i32, screen_h: i32) ?live.Surface {
     return null;
 }
 
+/// Whether a surface carries continuous motion of its own, so the loop must keep repainting it
+/// frame after frame. The opening cycle reveals and breathes, the wind-down plays, and the clock's
+/// hands sweep; every other surface holds still until input or live state moves it, so an idle home
+/// or app surface is painted once and then leaves the GPU alone.
+fn surfaceAnimates(surface: live.Surface) bool {
+    return switch (surface) {
+        .boot, .lock, .shutdown, .clock => true,
+        else => false,
+    };
+}
+
 /// The factor to scale the full-resolution device into a window that fits the display,
 /// with a little breathing room. Never scales up: a device smaller than the screen opens
 /// at its own size. Falls back to 1:1 if the display bounds cannot be read.
@@ -109,8 +180,26 @@ fn windowScale(w: c_int, h: c_int) f32 {
 }
 
 pub fn main(init: std.process.Init) !u8 {
-    const gpa = init.gpa;
+    // The default path leans on nothing but the process allocator, so `zig build run` is unchanged.
+    if (!leak_options.enforce) return run(init, init.gpa);
 
+    // The leak gate: own a checking allocator so its verdict is not the one start.zig discards, back the
+    // whole session with it, and turn a detected leak into a non-zero exit once the window closes.
+    var checked: std.heap.DebugAllocator(.{}) = .init;
+    const code = run(init, checked.allocator()) catch |err| {
+        _ = checked.deinit();
+        return err;
+    };
+    if (checked.deinit() == .leak) {
+        std.debug.print("desktop: allocation leak detected\n", .{});
+        return 1;
+    }
+    return code;
+}
+
+/// The windowed session, over an explicit general-purpose allocator so the leak gate can back it with a
+/// checking allocator. Returns 0 when the window closes.
+fn run(init: std.process.Init, gpa: std.mem.Allocator) !u8 {
     var host: live.Host = undefined;
     try live.runScenario(&host, gpa);
     defer host.deinit();
@@ -169,15 +258,48 @@ pub fn main(init: std.process.Init) !u8 {
     var interaction: live.Interaction = .{}; // live state a tap changes (the calculator keypad, the store, …)
     interaction.attach(gpa);
     defer interaction.release();
+    // The Clock surface reads the device's real wall clock; captured before seeding so the agent's world
+    // time and the surface's own read the same instant.
+    interaction.captureDeviceTime(init.io);
+    // Run each in-app agent's real work once, so every app opens showing its genuine last agent action
+    // derived from its domain — the Files organize, the Calendar propose and held commit, and the rest.
+    live.seedAgentPresence(&interaction);
+    // Bind the on-device model to the assistant. `zig build run` works with no configuration: a model
+    // provisioned into the local models directory is discovered automatically. A custom agent can point
+    // LOCAL_MODEL_PATH at its own weights. With no model present the mind stays honestly offline.
+    var model_buf: [512]u8 = undefined;
+    mind_provider.tryLoad(&interaction, resolveModelPath(init, &model_buf));
+    // Fetch live weather at the device's real location. Prefer CoreLocation (GPS/Wi-Fi, accurate to the
+    // actual place) on macOS; fall back to the coarse IP lookup when it is unavailable or unauthorized.
+    resolveWeather(&interaction, gpa, init.io);
+    // Bind the device's real audio backend into the Phone screening path. On macOS this is CoreAudio, so
+    // the screening agent finds a real capture+playback route; on a platform without a wired backend the
+    // seam stays unbound and the path reports audio honestly unavailable. Binding enumerates nothing and
+    // opens no stream, so it never lights the microphone.
+    audio_bind.bind(&interaction);
+    // Bind the device's real camera backend into the Camera capture path. On macOS this is AVFoundation,
+    // so a shutter press takes a real frame where a device exists; on a platform without a wired backend
+    // the seam stays dark and the path is honestly frameless. Binding enumerates nothing and starts no
+    // session, so it never lights the camera — only opening the viewfinder (below) does.
+    camera_bind.bind(&interaction);
     var boot_seen: u32 = 0;
     var shutdown_frames: u32 = 0; // frames since the device began winding down
     var lock_seen: u32 = 0;
     var frames: u32 = 0;
     var running = true;
     var event: c.SDL_Event = undefined;
+    c.SDL_StartTextInput(); // the home command bar accepts a typed question for the assistant
+
+    // Repaint only when the frame would actually differ: on the first pass, when input or an
+    // auto-advance moved the surface, or while a self-animating surface is on screen. A still
+    // surface with no input costs the GPU nothing. `dirty` starts set so the first frame paints.
+    var dirty = true;
+    var prev_surface: live.Surface = surface;
 
     while (running) {
         while (c.SDL_PollEvent(&event) != 0) {
+            // Any event we act on can move state, so the next frame must be repainted.
+            dirty = true;
             switch (event.type) {
                 c.SDL_QUIT => running = false,
                 c.SDL_KEYDOWN => {
@@ -199,6 +321,31 @@ pub fn main(init: std.process.Init) !u8 {
                         (key == c.SDLK_UP or key == c.SDLK_SPACE or key == c.SDLK_RETURN))
                     {
                         surface = if (surface == .boot) .lock else .home;
+                    }
+                    // On home, the command bar is the assistant: Return sends the typed question to the
+                    // on-device model, Backspace edits it.
+                    if ((surface == .home or surface == .calculator) and key == c.SDLK_RETURN) mind_provider.ask(&interaction);
+                    if ((surface == .home or surface == .calculator) and key == c.SDLK_BACKSPACE) interaction.assistantBackspace();
+                    // In messaging, the compose bar takes the keyboard: Return sends the typed message
+                    // (or starts the conversation on the new-conversation screen), Backspace edits it.
+                    if (surface == .messages and key == c.SDLK_RETURN) {
+                        if (interaction.composing_new) interaction.msgConfirmConversation() else interaction.msgSend();
+                    }
+                    if (surface == .messages and key == c.SDLK_BACKSPACE) interaction.msgComposeBackspace();
+                },
+                c.SDL_TEXTINPUT => {
+                    // Typed characters go into whichever text field is active: the home command bar, or
+                    // the messaging compose bar when a thread or the new-conversation screen is open.
+                    if (surface == .home or surface == .calculator) {
+                        for (event.text.text) |byte| {
+                            if (byte == 0) break;
+                            interaction.assistantType(byte);
+                        }
+                    } else if (surface == .messages and (interaction.open_conv != null or interaction.composing_new)) {
+                        for (event.text.text) |byte| {
+                            if (byte == 0) break;
+                            interaction.msgComposeType(byte);
+                        }
                     }
                 },
                 c.SDL_MOUSEBUTTONDOWN => {
@@ -234,6 +381,14 @@ pub fn main(init: std.process.Init) !u8 {
                         // handled by booking focus on a free hour
                     } else if (surface == .browser and live.browserTap(&interaction, sx, sy)) {
                         // handled by opening a page, bookmarking, or granting the site a permission
+                    } else if (surface == .tasks and live.tasksTap(&interaction, sx, sy)) {
+                        // handled by completing a task
+                    } else if (surface == .wallet and live.walletTap(&interaction, sx, sy)) {
+                        // handled by approving the held payment
+                    } else if (surface == .photos and live.photosTap(&interaction, sx, sy)) {
+                        // handled by favouriting a photo
+                    } else if (surface == .smarthome and live.smarthomeTap(&interaction, sx, sy)) {
+                        // handled by toggling a device or approving the held unlock
                     } else if (surface == .agents) {
                         // A tap on an agent opens its detail; anything else navigates as usual.
                         if (live.agentRowAt(&host, sx, sy)) |index| {
@@ -276,14 +431,34 @@ pub fn main(init: std.process.Init) !u8 {
             break :blk @as(f32, @floatFromInt(shutdown_frames)) / 60.0;
         } else @as(f32, @floatFromInt(frames)) / 60.0;
 
-        // Paint the current surface straight to the framebuffer — an instant cut, no transition frames.
-        try live.renderSurface(gpa, &fb, &host, surface, t, &interaction);
+        // An auto-advance (boot→lock→home) or any self-animating surface is a change that must be
+        // drawn; a surface that just held still since the last pass is not.
+        if (surface != prev_surface) dirty = true;
+        // The camera's viewfinder follows the surface: entering the Camera app opens a real capture
+        // session — which lights the privacy indicator at the frame source — and leaving it stops the
+        // session, so the indicator is on exactly while the viewfinder is live and a shutter press finds
+        // a real frame. On a host with no camera bound both calls are no-ops, so the camera never lights.
+        if (surface != prev_surface) {
+            if (surface == .camera) {
+                interaction.cameraViewfinderOpen();
+            } else if (prev_surface == .camera) {
+                interaction.cameraViewfinderClose();
+            }
+        }
+        prev_surface = surface;
+        if (surfaceAnimates(surface)) dirty = true;
 
-        _ = c.SDL_UpdateTexture(texture, null, @ptrCast(fb.pixels.ptr), @intCast(live.width * 4));
-        _ = c.SDL_RenderClear(renderer);
-        _ = c.SDL_RenderCopy(renderer, texture, null, null);
-        c.SDL_RenderPresent(renderer);
-        c.SDL_Delay(16); // ~60 fps
+        // Paint the current surface straight to the framebuffer — an instant cut, no transition
+        // frames — but only when the frame would differ, so an idle surface leaves the GPU idle.
+        if (dirty) {
+            try live.renderSurface(&fb, &host, surface, t, &interaction);
+            _ = c.SDL_UpdateTexture(texture, null, @ptrCast(fb.pixels.ptr), @intCast(live.width * 4));
+            _ = c.SDL_RenderClear(renderer);
+            _ = c.SDL_RenderCopy(renderer, texture, null, null);
+            c.SDL_RenderPresent(renderer);
+            dirty = false;
+        }
+        c.SDL_Delay(16); // cap the loop at ~60 fps; input is polled every pass, so latency stays ≤ one frame
     }
     return 0;
 }

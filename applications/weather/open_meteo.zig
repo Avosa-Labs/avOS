@@ -111,6 +111,59 @@ fn percentEncode(text: []const u8, out: []u8) ![]const u8 {
     return out[0..n];
 }
 
+/// Builds the hourly-forecast request URL for a coordinate into `buf`, asking for `hours` hours of
+/// temperature and weather code — the series the app draws as its forecast strip.
+pub fn hourlyUrl(coord: Coord, hours: u16, buf: []u8) ![]const u8 {
+    return std.fmt.bufPrint(
+        buf,
+        "{s}?latitude={d}&longitude={d}&hourly=temperature_2m,weather_code&forecast_hours={d}",
+        .{ forecast_host, coord.latitude, coord.longitude, hours },
+    );
+}
+
+/// Parses an hourly response body into `out`, one reading per hour, pairing each temperature with its
+/// weather code. Returns the written slice, capped at `out.len`.
+pub fn parseHourly(gpa: std.mem.Allocator, body: []const u8, out: []Reading) Error![]const Reading {
+    const Shape = struct {
+        hourly: struct { temperature_2m: []const f64, weather_code: []const u16 },
+    };
+    const parsed = std.json.parseFromSlice(Shape, gpa, body, .{ .ignore_unknown_fields = true }) catch return Error.MalformedResponse;
+    defer parsed.deinit();
+    const h = parsed.value.hourly;
+    const n = @min(@min(h.temperature_2m.len, h.weather_code.len), out.len);
+    for (0..n) |i| out[i] = .{ .temp_c = @intFromFloat(@round(h.temperature_2m[i])), .condition = conditionFromWmo(h.weather_code[i]) };
+    return out[0..n];
+}
+
+/// A transport that carries a GET to a URL and returns the response body — a seam, so this module is
+/// pure and exercised offline against recorded bodies, while the running OS injects a real socket.
+pub const Transport = struct {
+    context: *anyopaque,
+    get_fn: *const fn (context: *anyopaque, url: []const u8, out: []u8) anyerror![]const u8,
+
+    pub fn get(transport: Transport, url: []const u8, out: []u8) ![]const u8 {
+        return transport.get_fn(transport.context, url, out);
+    }
+};
+
+/// Fetches the live current reading at a coordinate through `transport`.
+pub fn fetchCurrent(gpa: std.mem.Allocator, transport: Transport, coord: Coord) !Reading {
+    var url_buf: [256]u8 = undefined;
+    var body_buf: [8192]u8 = undefined;
+    const url = try currentUrl(coord, &url_buf);
+    const body = try transport.get(url, &body_buf);
+    return parseCurrent(gpa, body);
+}
+
+/// Fetches the live hourly forecast at a coordinate through `transport`, into `out`.
+pub fn fetchHourly(gpa: std.mem.Allocator, transport: Transport, coord: Coord, out: []Reading) ![]const Reading {
+    var url_buf: [256]u8 = undefined;
+    var body_buf: [16384]u8 = undefined;
+    const url = try hourlyUrl(coord, @intCast(out.len), &url_buf);
+    const body = try transport.get(url, &body_buf);
+    return parseHourly(gpa, body, out);
+}
+
 // --- Tests ---
 
 const testing = std.testing;
@@ -185,4 +238,46 @@ test "the round trip: a geocode body then a current body yields a live reading" 
     const reading = try parseCurrent(gpa, cur);
     try testing.expectEqual(@as(i16, -3), reading.temp_c); // -2.6 rounds to -3
     try testing.expectEqual(Condition.snow, reading.condition);
+}
+
+test "the hourly URL asks for the temperature and code series over a bounded window" {
+    var buf: [256]u8 = undefined;
+    const url = try hourlyUrl(.{ .latitude = 47.61, .longitude = -122.33 }, 6, &buf);
+    try testing.expect(std.mem.indexOf(u8, url, "hourly=temperature_2m,weather_code") != null);
+    try testing.expect(std.mem.indexOf(u8, url, "forecast_hours=6") != null);
+}
+
+test "an hourly body parses to a series pairing each temperature with its code" {
+    const gpa = testing.allocator;
+    const body =
+        \\{"hourly":{"time":["a","b","c"],"temperature_2m":[11.7,12.4,13.6],"weather_code":[0,3,61]}}
+    ;
+    var out: [6]Reading = undefined;
+    const series = try parseHourly(gpa, body, &out);
+    try testing.expectEqual(@as(usize, 3), series.len);
+    try testing.expectEqual(@as(i16, 12), series[0].temp_c); // 11.7 rounds to 12
+    try testing.expectEqual(Condition.clear, series[0].condition); // code 0
+    try testing.expectEqual(Condition.cloudy, series[1].condition); // code 3
+    try testing.expectEqual(Condition.rain, series[2].condition); // code 61
+}
+
+// A fake transport that replies with a fixed body, so fetch is exercised end to end offline.
+const FakeTransport = struct {
+    body: []const u8,
+    fn get(context: *anyopaque, url: []const u8, out: []u8) anyerror![]const u8 {
+        _ = url;
+        const self: *FakeTransport = @ptrCast(@alignCast(context));
+        @memcpy(out[0..self.body.len], self.body);
+        return out[0..self.body.len];
+    }
+    fn transport(self: *FakeTransport) Transport {
+        return .{ .context = self, .get_fn = get };
+    }
+};
+
+test "fetchCurrent carries a coordinate through the transport and parses the reply" {
+    var fake = FakeTransport{ .body = "{\"current\":{\"temperature_2m\":18.2,\"weather_code\":2}}" };
+    const reading = try fetchCurrent(testing.allocator, fake.transport(), .{ .latitude = 47.6, .longitude = -122.3 });
+    try testing.expectEqual(@as(i16, 18), reading.temp_c);
+    try testing.expectEqual(Condition.cloudy, reading.condition);
 }

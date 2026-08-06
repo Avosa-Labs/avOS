@@ -15,9 +15,11 @@ const fb = @import("framebuffer.zig");
 const paint = @import("paint.zig");
 const vector = @import("vector.zig");
 const svg_icon = @import("svg_icon.zig");
+const app_tile = @import("app_tile.zig");
 const design = @import("design");
 const theme = design.theme;
 const glyphs = design.icons.glyphs;
+const tiles = design.icons.tiles;
 
 const Framebuffer = fb.Framebuffer;
 const Rgba = fb.Rgba;
@@ -46,6 +48,12 @@ pub const App = enum {
     mail,
     notes,
     maps,
+    tasks,
+    music,
+    wallet,
+    photos,
+    clock,
+    home,
 };
 
 /// The gradient a given app's tile uses.
@@ -67,6 +75,42 @@ pub fn gradientFor(app: App) theme.Gradient {
         .mail => theme.icon_mail,
         .notes => theme.icon_notes,
         .maps => theme.icon_maps,
+        // The delivered tiles below carry their own gradient in their source SVG, which is what draws;
+        // these fallbacks are the nearest palette hue used only if that artwork fails to parse.
+        .tasks => theme.icon_agents,
+        .music => theme.icon_contacts,
+        .wallet => theme.icon_weather,
+        .photos => theme.icon_health,
+        .clock => theme.icon_camera,
+        .home => theme.icon_calendar,
+    };
+}
+
+/// The delivered app-tile source SVG for an app: the full artwork the tile renderer rasterises.
+fn tileSvg(app: App) []const u8 {
+    return switch (app) {
+        .agents => tiles.agents,
+        .settings => tiles.settings,
+        .messages => tiles.messages,
+        .phone => tiles.phone,
+        .calendar => tiles.calendar,
+        .files => tiles.files,
+        .contacts => tiles.contacts,
+        .camera => tiles.camera,
+        .weather => tiles.weather,
+        .browser => tiles.browser,
+        .calculator => tiles.calculator,
+        .store => tiles.store,
+        .health => tiles.health,
+        .mail => tiles.mail,
+        .notes => tiles.notes,
+        .maps => tiles.maps,
+        .tasks => tiles.tasks,
+        .music => tiles.music,
+        .wallet => tiles.wallet,
+        .photos => tiles.photos,
+        .clock => tiles.clock,
+        .home => tiles.home,
     };
 }
 
@@ -85,8 +129,13 @@ fn stroke(target: *Framebuffer, rect: paint.Rect, pts: []const [2]f32, w: f32, c
     vector.strokePolyline(target, buffer[0..count], w, white, closed);
 }
 
-/// Draws a complete app icon — the squircle tile in its gradient, then its white glyph — into `rect`.
+/// Draws a complete app icon into `rect`. The delivered tile artwork — a gradient squircle body, its
+/// specular highlight and shade, the hairline outline, and the app's white glyph — is rasterised from its
+/// source vectors. If that asset fails to parse, the hand-built gradient-and-glyph composition renders
+/// instead, so the set always shows something on-brand.
 pub fn draw(target: *Framebuffer, rect: paint.Rect, app: App) void {
+    if (app_tile.render(target, rect, tileSvg(app))) return;
+
     const radius = @as(u32, @intCast(rect.w)) * theme.icon_radius_ratio_num / theme.icon_radius_ratio_den;
     const gradient = gradientFor(app);
     paint.paint(target, &.{.{ .rounded_vgradient = .{
@@ -122,6 +171,9 @@ pub fn draw(target: *Framebuffer, rect: paint.Rect, app: App) void {
         .weather => drawWeather(target, rect, w),
         .notes => drawNotes(target, rect, w),
         .maps => drawMaps(target, rect, w),
+        // These ship with delivered tile artwork and have no hand-built glyph; the gradient body drawn
+        // above stands in on the rare parse failure that reaches here.
+        .tasks, .music, .wallet, .photos, .clock, .home => {},
     }
 }
 
@@ -141,6 +193,7 @@ fn deliveredGlyph(app: App) ?[]const u8 {
         .health => glyphs.running,
         .notes => glyphs.file,
         .contacts, .calculator, .store, .mail, .weather => null,
+        .tasks, .music, .wallet, .photos, .clock, .home => null,
     };
 }
 

@@ -447,6 +447,35 @@ test "a correctly signed package verifies and installs" {
     try std.testing.expectEqual(@as(usize, 1), fixture.installer.installedCount());
 }
 
+test "recording an installation leaks nothing when an allocation fails" {
+    // install dupes the package name to key the installed map. The errdefer must
+    // free that copy if the put fails, or it leaks with nothing holding it. An
+    // unsigned package under development mode drives the install path without a
+    // publisher key or signature standing between it and the allocation.
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn run(gpa: std.mem.Allocator) !void {
+            var manual: time.ManualClock = .init(.fromSeconds(1_000));
+            var installer: Installer = .init(gpa, manual.clock());
+            defer installer.deinit();
+            installer.development_mode = true;
+
+            const contents = "component bytes";
+            const pkg: Package = .{
+                .identity = .ofContents(contents),
+                .manifest = .{
+                    .name = "calendar agent",
+                    .publisher = "reference publisher",
+                    .version = .{ .major = 1, .minor = 0, .patch = 0 },
+                    .declared_capabilities = &.{},
+                },
+                .contents = contents,
+                .signature = null,
+            };
+            _ = try installer.install(pkg);
+        }
+    }.run, .{});
+}
+
 test "an unsigned package is refused outside development mode" {
     const gpa = std.testing.allocator;
     var fixture: Fixture = undefined;

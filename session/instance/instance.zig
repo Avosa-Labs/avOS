@@ -175,8 +175,14 @@ pub const Instance = struct {
         }
 
         const owned = try instance.gpa.dupe(u8, description);
-        errdefer instance.gpa.free(owned);
-        try instance.owned_text.append(instance.gpa, owned);
+        {
+            // The errdefer covers only the window before ownership moves into
+            // owned_text. Once the append succeeds the list holds `owned` and
+            // deinit releases it; a failure in effects.put or ledger.append
+            // below must not free it here, or deinit would free it a second time.
+            errdefer instance.gpa.free(owned);
+            try instance.owned_text.append(instance.gpa, owned);
+        }
 
         try instance.effects.put(instance.gpa, key, .{
             .key = key,
@@ -372,6 +378,39 @@ test "a task continues on a second endpoint without changing the principal" {
     try std.testing.expect(fixture.instance.presenting.eql(fixture.desktop));
     try std.testing.expect(fixture.instance.human.eql(human_before));
     try std.testing.expect(fixture.instance.transfer.?.completed);
+}
+
+test "claiming an effect across a transfer leaks nothing when an allocation fails" {
+    // Drives the dupe -> owned_text.append -> effects.put -> ledger.append chain
+    // under injected failure at every step. The errdefer that frees the duped
+    // description must release ownership the instant the append transfers it into
+    // owned_text; a failure in effects.put or ledger.append afterwards must leave
+    // exactly one owner, or deinit double-frees it.
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn run(gpa: std.mem.Allocator) !void {
+            var ids: identity.Source = .initDeterministic(5150);
+            var manual: time.ManualClock = .init(.fromSeconds(1_000));
+            const clock = manual.clock();
+            const human: identity.PrincipalId = .{ .value = 1 };
+
+            var endpoints: endpoint_model.Registry = .init(gpa, &ids, clock);
+            defer endpoints.deinit();
+            var ledger: audit.Ledger = .init(gpa, &ids, clock);
+            defer ledger.deinit();
+            var instance: Instance = .init(gpa, clock, human, &endpoints, &ledger);
+            defer instance.deinit();
+
+            const phone = try endpoints.enrol(.{ .human = human, .name = "Phone", .permissions = .full });
+            const desktop = try endpoints.enrol(.{ .human = human, .name = "Desktop", .permissions = .full });
+
+            try instance.present(phone);
+            try instance.claimEffect(0xc0ffee, "send a confirmation to the venue", phone);
+            try instance.transferTo(desktop);
+            // A second claim runs the whole chain with the map already populated —
+            // the exact shape that made the over-scoped errdefer double-free.
+            try instance.claimEffect(0xbeef, "pay the deposit", desktop);
+        }
+    }.run, .{});
 }
 
 test "an effect claimed on one endpoint cannot be repeated on another" {

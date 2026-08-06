@@ -41,6 +41,13 @@ pub const Model = struct {
     day_line: []const u8 = "Today",
     tasks: []const Task = &.{},
     active_title: ?[]const u8 = null,
+    /// Whether the on-device assistant mind is loaded. When it is not, the command bar says so
+    /// honestly rather than inviting a question it cannot answer.
+    assistant_online: bool = false,
+    /// The assistant's last reply, shown in the command bar when present. Untrusted mind output.
+    assistant_reply: []const u8 = "",
+    /// What the person is currently typing into the command bar, shown as they type.
+    assistant_prompt: []const u8 = "",
 };
 
 pub const demo = Model{
@@ -79,7 +86,19 @@ pub fn render(screen: *Framebuffer, model: Model, t: f32) void {
     const bar_mid: f32 = @as(f32, @floatFromInt(bar.y)) + @as(f32, @floatFromInt(bar.h)) / 2.0;
     commandBar(screen, bar);
     orb(screen, @as(f32, @floatFromInt(bar.x)) + u(24), bar_mid, u(10), t);
-    _ = text.drawWeighted(screen, @as(f32, @floatFromInt(bar.x)) + u(44), bar_mid + u(4.5), "What should we do next?", u(13), s(theme.screen_text_faint), .regular);
+    // The command bar reflects the real assistant: its last reply if it answered, an honest offline
+    // note when no mind is loaded, or the prompt when the mind is ready and idle.
+    const bar_text_x = @as(f32, @floatFromInt(bar.x)) + u(44);
+    const bar_edge = @as(f32, @floatFromInt(bar.x + @as(i32, @intCast(bar.w)))) - u(16);
+    if (model.assistant_prompt.len > 0) {
+        _ = text.drawClipped(screen, bar_text_x, bar_mid + u(4.5), model.assistant_prompt, u(13), s(theme.screen_text), bar_edge);
+    } else if (model.assistant_reply.len > 0) {
+        _ = text.drawClipped(screen, bar_text_x, bar_mid + u(4.5), model.assistant_reply, u(13), s(theme.screen_text_soft), bar_edge);
+    } else if (!model.assistant_online) {
+        _ = text.drawWeighted(screen, bar_text_x, bar_mid + u(4.5), "Assistant offline \u{00B7} load a model", u(12.5), s(theme.screen_text_faint), .regular);
+    } else {
+        _ = text.drawWeighted(screen, bar_text_x, bar_mid + u(4.5), "What should we do next?", u(13), s(theme.screen_text_faint), .regular);
+    }
 
     // Section label and the task-graph link, both pinned to the reference's heavier weights.
     const label_y = u(90) + u(48) + u(24);
@@ -176,6 +195,12 @@ pub fn appName(app: iconography.App) []const u8 {
         .mail => "Mail",
         .notes => "Notes",
         .maps => "Maps",
+        .tasks => "Tasks",
+        .music => "Music",
+        .wallet => "Wallet",
+        .photos => "Photos",
+        .clock => "Clock",
+        .home => "Home",
     };
 }
 

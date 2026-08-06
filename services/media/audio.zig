@@ -125,6 +125,96 @@ pub const Audio = struct {
     }
 };
 
+/// The path a bound backend hands captured samples across, off its realtime thread.
+///
+/// A capture callback runs on the audio hardware's realtime thread: it must never block, allocate, or
+/// call back into general OS code, or it drops frames and glitches. So the adapter's callback does the
+/// one thing that is realtime-safe — copies the block it was handed into this relay and returns — and
+/// the rest of the system drains it from an ordinary thread. This is that hand-off: a bounded,
+/// single-producer/single-consumer ring the callback writes and one consumer reads, with no lock on
+/// either side. The producer only advances `write`, the consumer only advances `read`, and each reads
+/// the other's index with an acquiring load, so a block is visible to the consumer only after its bytes
+/// are fully written. It never allocates: the slots are fixed storage sized at compile time, so the
+/// realtime side does no heap work. When the consumer falls behind and the ring is full the producer
+/// drops the block and counts it rather than blocking the realtime thread — an honest, bounded
+/// backpressure signal, never a stall in the audio callback.
+pub const CaptureRelay = struct {
+    /// The most bytes one captured block carries — one realtime callback's PCM. A block larger than this
+    /// is dropped and counted rather than truncated, so a partial frame never reaches the consumer.
+    pub const block_capacity = 4096;
+    /// How many blocks the ring buffers before the producer must drop. A power of two so the slot index
+    /// is a mask, not a divide.
+    pub const slot_count = 32;
+    const slot_mask = slot_count - 1;
+
+    comptime {
+        if (slot_count & slot_mask != 0) @compileError("slot_count must be a power of two");
+    }
+
+    /// Fixed slot storage — no allocation on the realtime path.
+    slots: [slot_count][block_capacity]u8 = undefined,
+    /// Bytes written into each slot, valid for a slot the consumer is reading.
+    lengths: [slot_count]usize = undefined,
+    /// Free-running counters: the producer advances `write`, the consumer advances `read`. The live
+    /// count is `write - read`; the slot is the counter masked to the ring.
+    write: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    read: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    /// Blocks the producer had to drop because the ring was full (or the block was oversized). A count,
+    /// not a stall — the realtime thread never waits on the consumer.
+    dropped_blocks: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+
+    pub fn init() CaptureRelay {
+        return .{};
+    }
+
+    /// Producer side, called on the realtime thread: copy one captured block in and publish it. Returns
+    /// false without blocking when the block does not fit the ring (full) or the slot (oversized),
+    /// counting the drop. Realtime-safe: a bounded copy and two atomic operations, no lock, no allocation.
+    pub fn push(relay: *CaptureRelay, samples: []const u8) bool {
+        if (samples.len > block_capacity) {
+            _ = relay.dropped_blocks.fetchAdd(1, .monotonic);
+            return false;
+        }
+        const w = relay.write.load(.monotonic); // producer owns write; a plain load is enough
+        const r = relay.read.load(.acquire); // observe the consumer's progress
+        if (w - r >= slot_count) {
+            _ = relay.dropped_blocks.fetchAdd(1, .monotonic);
+            return false;
+        }
+        const slot: usize = @intCast(w & slot_mask);
+        @memcpy(relay.slots[slot][0..samples.len], samples);
+        relay.lengths[slot] = samples.len;
+        relay.write.store(w + 1, .release); // publish: the block is visible only after its bytes are
+        return true;
+    }
+
+    /// Consumer side, called on an ordinary thread: drain one block into `out`, or null when the ring is
+    /// empty. Returns the byte length written. `out` must be at least `block_capacity` so a full block
+    /// always fits.
+    pub fn pop(relay: *CaptureRelay, out: []u8) ?usize {
+        const r = relay.read.load(.monotonic); // consumer owns read
+        const w = relay.write.load(.acquire); // observe the producer's published blocks
+        if (r == w) return null; // empty
+        const slot: usize = @intCast(r & slot_mask);
+        const len = relay.lengths[slot];
+        const n = @min(len, out.len);
+        @memcpy(out[0..n], relay.slots[slot][0..n]);
+        relay.read.store(r + 1, .release); // free the slot for the producer
+        return n;
+    }
+
+    /// How many blocks the producer dropped for lack of room — the honest backpressure signal a caller
+    /// reads to know the consumer is falling behind, never a reason the realtime thread stalled.
+    pub fn dropped(relay: *const CaptureRelay) u64 {
+        return relay.dropped_blocks.load(.monotonic);
+    }
+
+    /// Whether any block is waiting to be drained.
+    pub fn pending(relay: *const CaptureRelay) bool {
+        return relay.write.load(.acquire) != relay.read.load(.acquire);
+    }
+};
+
 // --- Tests ---
 
 const testing = std.testing;
@@ -180,4 +270,90 @@ test "unbinding returns the interface to silent" {
     try testing.expect(!audio.available());
     var buf: [4]Device = undefined;
     try testing.expectEqual(@as(usize, 0), audio.devices(&buf).len);
+}
+
+test "the capture relay carries blocks across in order and reports empty when drained" {
+    var relay = CaptureRelay.init();
+    try testing.expect(!relay.pending());
+
+    // Push three blocks and drain them: the consumer sees them in the order the producer wrote.
+    try testing.expect(relay.push(&[_]u8{ 1, 2, 3 }));
+    try testing.expect(relay.push(&[_]u8{ 4, 5 }));
+    try testing.expect(relay.push(&[_]u8{6}));
+    try testing.expect(relay.pending());
+
+    var out: [CaptureRelay.block_capacity]u8 = undefined;
+    try testing.expectEqual(@as(?usize, 3), relay.pop(&out));
+    try testing.expectEqualSlices(u8, &[_]u8{ 1, 2, 3 }, out[0..3]);
+    try testing.expectEqual(@as(?usize, 2), relay.pop(&out));
+    try testing.expectEqualSlices(u8, &[_]u8{ 4, 5 }, out[0..2]);
+    try testing.expectEqual(@as(?usize, 1), relay.pop(&out));
+    try testing.expectEqualSlices(u8, &[_]u8{6}, out[0..1]);
+    try testing.expectEqual(@as(?usize, null), relay.pop(&out)); // drained
+    try testing.expect(!relay.pending());
+    try testing.expectEqual(@as(u64, 0), relay.dropped());
+}
+
+test "a full relay drops without blocking rather than stalling the producer" {
+    var relay = CaptureRelay.init();
+    // Fill every slot.
+    var i: usize = 0;
+    while (i < CaptureRelay.slot_count) : (i += 1) try testing.expect(relay.push(&[_]u8{0}));
+    // The next push finds no room: it drops and counts, and never blocks.
+    try testing.expect(!relay.push(&[_]u8{0}));
+    try testing.expectEqual(@as(u64, 1), relay.dropped());
+    // Draining one frees exactly one slot, so one more push succeeds.
+    var out: [CaptureRelay.block_capacity]u8 = undefined;
+    _ = relay.pop(&out);
+    try testing.expect(relay.push(&[_]u8{0}));
+    // An oversized block never truncates onto the consumer — it is dropped and counted.
+    var big: [CaptureRelay.block_capacity + 1]u8 = undefined;
+    try testing.expect(!relay.push(&big));
+    try testing.expectEqual(@as(u64, 2), relay.dropped());
+}
+
+// The realtime hand-off under a genuine producer/consumer race: one thread pushes a long sequence of
+// numbered blocks (standing in for the audio callback), another drains concurrently. The lock-free ring
+// must lose nothing to corruption — every block the consumer receives is one the producer wrote, in
+// order, and pushed == popped + dropped exactly. Runs on any host with threads; needs no audio hardware.
+const RelayRace = struct {
+    relay: *CaptureRelay,
+    total: u32,
+    done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+    fn produce(ctx: *RelayRace) void {
+        var seq: u32 = 0;
+        while (seq < ctx.total) : (seq += 1) {
+            const block: [4]u8 = @bitCast(seq); // the sequence number is the block's payload
+            while (!ctx.relay.push(&block)) {} // spin until the consumer frees a slot; never blocks
+        }
+        ctx.done.store(true, .release);
+    }
+};
+
+test "the relay hand-off loses nothing to a concurrent producer and consumer" {
+    var relay = CaptureRelay.init();
+    var ctx = RelayRace{ .relay = &relay, .total = 20_000 };
+
+    const producer = try std.Thread.spawn(.{}, RelayRace.produce, .{&ctx});
+
+    var out: [CaptureRelay.block_capacity]u8 = undefined;
+    var received: u32 = 0;
+    var expected: u32 = 0;
+    while (true) {
+        if (relay.pop(&out)) |len| {
+            try testing.expectEqual(@as(usize, 4), len);
+            const seq: u32 = @bitCast(out[0..4].*);
+            // The producer retries until room, so every block arrives once and in order.
+            try testing.expectEqual(expected, seq);
+            expected += 1;
+            received += 1;
+        } else if (ctx.done.load(.acquire) and !relay.pending()) {
+            break;
+        }
+    }
+    producer.join();
+
+    // Nothing was corrupted or lost: every produced block was received exactly once, in sequence.
+    try testing.expectEqual(ctx.total, received);
 }

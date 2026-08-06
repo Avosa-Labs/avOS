@@ -27,10 +27,12 @@ pub const SDL_PIXELFORMAT_ABGR8888: u32 = 0x16762004;
 // Event types the loop handles.
 pub const SDL_QUIT: u32 = 0x100;
 pub const SDL_KEYDOWN: u32 = 0x300;
+pub const SDL_TEXTINPUT: u32 = 0x303;
 pub const SDL_MOUSEBUTTONDOWN: u32 = 0x401;
 
 pub const SDLK_ESCAPE: i32 = 27;
 pub const SDLK_RETURN: i32 = 13;
+pub const SDLK_BACKSPACE: i32 = 8;
 pub const SDLK_SPACE: i32 = 32;
 // Letter keys are their lowercase ASCII codes.
 pub const SDLK_r: i32 = 114;
@@ -69,12 +71,21 @@ pub const MouseButtonEvent = extern struct {
     y: i32,
 };
 
+/// A text-input event: the UTF-8 bytes a key produced, NUL-terminated, up to 32 bytes.
+pub const TextInputEvent = extern struct {
+    type: u32,
+    timestamp: u32,
+    windowID: u32,
+    text: [32]u8,
+};
+
 /// The event union. SDL's real `SDL_Event` is 56 bytes; the padding keeps this the same size so
-/// `SDL_PollEvent` writes within bounds. Only `type`, `button`, and `key` are read.
+/// `SDL_PollEvent` writes within bounds. Only `type`, `button`, `key`, and `text` are read.
 pub const Event = extern union {
     type: u32,
     key: KeyboardEvent,
     button: MouseButtonEvent,
+    text: TextInputEvent,
     padding: [56]u8,
 };
 
@@ -96,4 +107,5 @@ pub extern fn SDL_RenderClear(renderer: ?*Renderer) c_int;
 pub extern fn SDL_RenderCopy(renderer: ?*Renderer, texture: ?*Texture, srcrect: ?*const Rect, dstrect: ?*const Rect) c_int;
 pub extern fn SDL_RenderPresent(renderer: ?*Renderer) void;
 pub extern fn SDL_PollEvent(event: ?*Event) c_int;
+pub extern fn SDL_StartTextInput() void;
 pub extern fn SDL_Delay(ms: u32) void;

@@ -43,6 +43,19 @@ pub fn blankScreen(gpa: std.mem.Allocator) !Framebuffer {
     return Framebuffer.init(gpa, screen_w, screen_h, s(theme.screen_top));
 }
 
+/// Resets a reused screen to the base fill a fresh `blankScreen` carries, so a persistent
+/// scratch screen can be repainted frame after frame without reallocating one.
+pub fn clearScreen(screen: *Framebuffer) void {
+    const fill = s(theme.screen_top);
+    var i: usize = 0;
+    while (i < screen.pixels.len) : (i += 4) {
+        screen.pixels[i + 0] = fill.r;
+        screen.pixels[i + 1] = fill.g;
+        screen.pixels[i + 2] = fill.b;
+        screen.pixels[i + 3] = fill.a;
+    }
+}
+
 /// Paints the light screen wash — the gradient every app screen rests on.
 pub fn screenWash(screen: *Framebuffer) void {
     paint.paint(screen, &.{.{ .vgradient = .{

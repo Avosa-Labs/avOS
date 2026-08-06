@@ -25,6 +25,7 @@ pub const accessibility = @import("accessibility/accessibility.zig");
 pub const audit = @import("audit/audit.zig");
 pub const policy = @import("policy/policy.zig");
 pub const provenance = @import("provenance/provenance.zig");
+pub const trust = @import("trust/trust.zig");
 pub const recovery = @import("recovery/recovery.zig");
 pub const package = @import("package/package.zig");
 pub const update = @import("update/update.zig");
@@ -50,4 +51,5 @@ test {
     _ = recovery;
     _ = package;
     _ = update;
+    _ = trust;
 }

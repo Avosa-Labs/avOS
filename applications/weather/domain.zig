@@ -60,12 +60,17 @@ pub const Deterministic = struct {
 const Cached = struct { location: []const u8, reading: Reading, at_tick: u64 };
 const Applied = struct { key: u128, result: []const u8 };
 
+/// How many hours of forecast the app holds for a place.
+pub const hourly_span: usize = 6;
+const Hourly = struct { location: []const u8, readings: [hourly_span]Reading, count: usize };
+
 pub const Store = struct {
     gpa: std.mem.Allocator,
     connector: Connector,
     saved: std.ArrayListUnmanaged([]const u8) = .empty,
     alerts: std.ArrayListUnmanaged([]const u8) = .empty,
     cache: std.ArrayListUnmanaged(Cached) = .empty,
+    hourly_cache: std.ArrayListUnmanaged(Hourly) = .empty,
     applied: std.ArrayListUnmanaged(Applied) = .empty,
     /// A logical clock, advanced on each read, so a cached reading's age is observable.
     tick: u64 = 0,
@@ -79,6 +84,7 @@ pub const Store = struct {
         store.saved.deinit(store.gpa);
         store.alerts.deinit(store.gpa);
         store.cache.deinit(store.gpa);
+        store.hourly_cache.deinit(store.gpa);
         store.applied.deinit(store.gpa);
         store.* = undefined;
     }
@@ -126,6 +132,41 @@ pub const Store = struct {
             }
         }
         store.cache.append(store.gpa, .{ .location = location, .reading = reading, .at_tick = store.tick }) catch {};
+    }
+
+    /// Records a live current reading for a place, fetched from a real provider outside the domain and
+    /// injected here so the surface reads it back like any other. `location` must outlive the store.
+    pub fn injectCurrent(store: *Store, location: []const u8, reading: Reading) void {
+        store.tick += 1;
+        store.recordReading(location, reading);
+    }
+
+    /// Records a place's live hourly forecast — the real series a provider returned, stored so the app
+    /// draws the hours as read, not derived.
+    pub fn injectHourly(store: *Store, location: []const u8, readings: []const Reading) void {
+        const n = @min(readings.len, hourly_span);
+        for (store.hourly_cache.items) |*entry| {
+            if (std.mem.eql(u8, entry.location, location)) {
+                @memcpy(entry.readings[0..n], readings[0..n]);
+                entry.count = n;
+                return;
+            }
+        }
+        var entry: Hourly = .{ .location = location, .readings = undefined, .count = n };
+        @memcpy(entry.readings[0..n], readings[0..n]);
+        store.hourly_cache.append(store.gpa, entry) catch {};
+    }
+
+    /// A place's live hourly forecast, written into `out`; empty when none has been fetched.
+    pub fn hourlyOf(store: Store, location: []const u8, out: []Reading) []const Reading {
+        for (store.hourly_cache.items) |entry| {
+            if (std.mem.eql(u8, entry.location, location)) {
+                const n = @min(entry.count, out.len);
+                @memcpy(out[0..n], entry.readings[0..n]);
+                return out[0..n];
+            }
+        }
+        return out[0..0];
     }
 
     fn priorResult(store: *Store, key: u128) ?[]const u8 {

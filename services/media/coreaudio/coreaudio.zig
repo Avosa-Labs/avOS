@@ -11,11 +11,14 @@
 //! Every CoreAudio and CoreFoundation C type stays inside this module (all of it comes through
 //! `bindings.zig`); nothing above the seam sees a HAL type. The returned device names must outlive the
 //! call, so the backend context owns fixed-size name buffers and the returned `[]const u8` slices point
-//! into them — never onto the stack. Beyond enumerate/can-open, the adapter opens a real playback
-//! stream: a default-output AudioUnit whose stream format is set from the seam `Format`, driven by a
+//! into them — never onto the stack. Beyond enumerate/can-open, the adapter opens real streams:
+//! playback is a default-output AudioUnit whose stream format is set from the seam `Format`, driven by a
 //! zero-fill render callback (running silence — the proof is a real, started CoreAudio stream, not
-//! audible content), started on open and torn down on stop. The output unit and its live flag are held
-//! in the backend context, so `stopStream`/`streamLive` at the seam read the truth of the hardware.
+//! audible content); capture is the default-input device on a HAL AudioUnit whose realtime input
+//! callback renders each block and hands it to the attached `CaptureRelay` in bounded chunks, lock-free.
+//! The realtime thread is isolated inside this module: its callback touches only its own staging buffer
+//! and the relay, never general OS code. The units and their live flags are held in the backend context,
+//! so `stopStream`/`streamLive` at the seam read the truth of the hardware.
 //!
 //! Built only on macOS (see the build's os gate); off macOS the seam keeps its honest-until-bound
 //! default and this module is never compiled.
@@ -30,6 +33,10 @@ const max_devices = 64;
 const max_entries = max_devices * 2;
 /// Bytes reserved per device name, UTF-8, NUL-terminated by CoreFoundation before we trim.
 const name_capacity = 128;
+/// Bytes the capture callback renders one hardware block into before handing it to the relay. Sized
+/// past a generous input callback (a few thousand frames of interleaved f32) so a block always fits;
+/// the relay then carries it across in `CaptureRelay.block_capacity` chunks.
+const capture_staging_bytes = 16 * 1024;
 
 /// The bound CoreAudio backend. It owns the name storage the returned `Device` slices point into, so a
 /// device name lives as long as the backend, not the call. One is enough for a process.
@@ -38,11 +45,31 @@ pub const CoreAudioBackend = struct {
     /// back a slice into it, so the name outlives the enumeration call.
     name_store: [max_entries][name_capacity]u8 = undefined,
     /// The default-output AudioUnit while a playback stream is open, else null. Its presence is the live
-    /// flag the seam reads: a stream is live exactly when this holds a started unit.
+    /// flag the seam reads for playback: a stream is live exactly when this holds a started unit.
     output_unit: ?c.AudioComponentInstance = null,
+    /// The default-input HAL AudioUnit while a capture stream is open, else null. Its render callback
+    /// runs on CoreAudio's realtime thread and hands samples out only through `capture_relay`.
+    input_unit: ?c.AudioComponentInstance = null,
+    /// Where the capture callback drops each block. Attach one before opening a capture stream; the
+    /// callback pushes into it lock-free and never calls back into general code on the realtime thread.
+    /// Null leaves capture running but discarding — an open input with nowhere wired to receive.
+    capture_relay: ?*audio.CaptureRelay = null,
+    /// The channel count the open capture stream carries, so the realtime callback shapes its render
+    /// buffer without reading back the format across the seam.
+    capture_channels: u8 = 0,
+    /// The realtime callback renders one hardware block here, then relays it. Owned by the context so it
+    /// outlives every callback and needs no per-block allocation. Aligned for f32 samples.
+    capture_staging: [capture_staging_bytes]u8 align(16) = undefined,
 
     pub fn init() CoreAudioBackend {
         return .{};
+    }
+
+    /// Wires the relay the capture callback hands blocks to. Set it before opening a capture stream so
+    /// the realtime thread has somewhere to deliver; without it a capture stream still opens but its
+    /// samples are discarded rather than delivered.
+    pub fn attachCaptureRelay(self: *CoreAudioBackend, relay: *audio.CaptureRelay) void {
+        self.capture_relay = relay;
     }
 
     /// The seam backend that reaches this adapter. Bind it to an `Audio` with `audio.bind(...)`.
@@ -59,7 +86,7 @@ pub const CoreAudioBackend = struct {
 
     fn openStreamFn(context: *anyopaque, device_id: u32, direction: audio.Direction, format: audio.Format) audio.OpenError!void {
         const self: *CoreAudioBackend = @ptrCast(@alignCast(context));
-        _ = device_id; // the default-output unit follows the system default device
+        _ = device_id; // the units follow the system default device for their direction
         return self.openStream(direction, format);
     }
 
@@ -70,7 +97,7 @@ pub const CoreAudioBackend = struct {
 
     fn streamLiveFn(context: *anyopaque) bool {
         const self: *CoreAudioBackend = @ptrCast(@alignCast(context));
-        return self.output_unit != null;
+        return self.output_unit != null or self.input_unit != null;
     }
 
     fn devicesFn(context: *anyopaque, out: []audio.Device) []const audio.Device {
@@ -191,16 +218,46 @@ pub const CoreAudioBackend = struct {
         return fallback;
     }
 
-    /// Opens and starts a real stream for a direction. Playback opens the system default-output
-    /// AudioUnit, sets its client (input-scope) stream format from the seam `Format`, installs a
-    /// zero-fill render callback, initializes and starts it — a genuinely running CoreAudio stream. Any
-    /// HAL step that fails leaves nothing half-open (the unit is disposed) and yields `StreamFailed`.
-    /// Capture is not run by this adapter yet, so a capture request keeps the seam's validate-only
-    /// success (the device was already confirmed to exist) without a live stream — honest about what is
-    /// and is not wired.
+    /// Opens and starts a real stream for a direction, dispatching to the output or input path. Each
+    /// leaves nothing half-open on failure and yields `StreamFailed`; a HAL error at any step is honest
+    /// rather than a pretend stream.
     fn openStream(self: *CoreAudioBackend, direction: audio.Direction, format: audio.Format) audio.OpenError!void {
-        if (direction != .playback) return; // capture stream not wired; validation already passed
-        if (self.output_unit != null) self.stopStream(); // never leak a prior open
+        return switch (direction) {
+            .playback => self.openOutput(format),
+            .capture => self.openInput(format),
+        };
+    }
+
+    /// Builds the interleaved, packed linear-PCM stream description a unit's client side speaks, from the
+    /// seam `Format`. Shared by the output and input paths so both agree on sample shape.
+    fn clientFormat(format: audio.Format) c.AudioStreamBasicDescription {
+        const bits: c.UInt32 = switch (format.encoding) {
+            .s16 => 16,
+            .f32 => 32,
+        };
+        const flags: c.UInt32 = switch (format.encoding) {
+            .s16 => c.kAudioFormatFlagIsSignedInteger | c.kAudioFormatFlagIsPacked,
+            .f32 => c.kAudioFormatFlagIsFloat | c.kAudioFormatFlagIsPacked,
+        };
+        const bytes_per_frame: c.UInt32 = (bits / 8) * @as(c.UInt32, format.channels);
+        return .{
+            .mSampleRate = @floatFromInt(format.sample_rate_hz),
+            .mFormatID = c.kAudioFormatLinearPCM,
+            .mFormatFlags = flags,
+            .mBytesPerPacket = bytes_per_frame,
+            .mFramesPerPacket = 1,
+            .mBytesPerFrame = bytes_per_frame,
+            .mChannelsPerFrame = format.channels,
+            .mBitsPerChannel = bits,
+            .mReserved = 0,
+        };
+    }
+
+    /// Opens the system default-output AudioUnit, sets its client (input-scope) stream format from the
+    /// seam `Format`, installs a zero-fill render callback, initializes and starts it — a genuinely
+    /// running CoreAudio stream carrying inaudible silence (the proof is a started stream, not content).
+    fn openOutput(self: *CoreAudioBackend, format: audio.Format) audio.OpenError!void {
+        if (self.output_unit != null) self.stopOutput(); // never leak a prior open
 
         var desc = c.AudioComponentDescription{
             .componentType = c.kAudioUnitType_Output,
@@ -216,27 +273,8 @@ pub const CoreAudioBackend = struct {
         errdefer _ = c.AudioComponentInstanceDispose(unit);
 
         // The client format on the output unit's input scope, element 0 — the side the render callback
-        // feeds. Interleaved, packed linear PCM in the seam's encoding.
-        const bits: c.UInt32 = switch (format.encoding) {
-            .s16 => 16,
-            .f32 => 32,
-        };
-        const flags: c.UInt32 = switch (format.encoding) {
-            .s16 => c.kAudioFormatFlagIsSignedInteger | c.kAudioFormatFlagIsPacked,
-            .f32 => c.kAudioFormatFlagIsFloat | c.kAudioFormatFlagIsPacked,
-        };
-        const bytes_per_frame: c.UInt32 = (bits / 8) * @as(c.UInt32, format.channels);
-        var asbd = c.AudioStreamBasicDescription{
-            .mSampleRate = @floatFromInt(format.sample_rate_hz),
-            .mFormatID = c.kAudioFormatLinearPCM,
-            .mFormatFlags = flags,
-            .mBytesPerPacket = bytes_per_frame,
-            .mFramesPerPacket = 1,
-            .mBytesPerFrame = bytes_per_frame,
-            .mChannelsPerFrame = format.channels,
-            .mBitsPerChannel = bits,
-            .mReserved = 0,
-        };
+        // feeds.
+        var asbd = clientFormat(format);
         if (c.AudioUnitSetProperty(unit, c.kAudioUnitProperty_StreamFormat, c.kAudioUnitScope_Input, 0, &asbd, @sizeOf(c.AudioStreamBasicDescription)) != 0) {
             return audio.OpenError.StreamFailed;
         }
@@ -254,16 +292,142 @@ pub const CoreAudioBackend = struct {
         self.output_unit = unit;
     }
 
+    /// Opens the system default-input device on a HAL AudioUnit: enables input on bus 1 and disables
+    /// output on bus 0, points the unit at the current default input device, sets the client format the
+    /// callback reads, and installs the input callback — a genuinely running capture stream. The callback
+    /// runs on CoreAudio's realtime thread and delivers samples only through the attached relay, never by
+    /// calling back into general code. Any HAL step that fails disposes the unit and yields `StreamFailed`.
+    fn openInput(self: *CoreAudioBackend, format: audio.Format) audio.OpenError!void {
+        if (self.input_unit != null) self.stopInput(); // never leak a prior open
+
+        // The device the capture unit is pointed at: the current system default input.
+        var default_input: c.AudioDeviceID = 0;
+        var dev_addr = c.AudioObjectPropertyAddress{
+            .mSelector = c.kAudioHardwarePropertyDefaultInputDevice,
+            .mScope = c.kAudioObjectPropertyScopeGlobal,
+            .mElement = c.kAudioObjectPropertyElementMain,
+        };
+        var dev_size: c.UInt32 = @sizeOf(c.AudioDeviceID);
+        if (c.AudioObjectGetPropertyData(c.kAudioObjectSystemObject, &dev_addr, 0, null, &dev_size, &default_input) != 0 or default_input == 0) {
+            return audio.OpenError.StreamFailed;
+        }
+
+        var desc = c.AudioComponentDescription{
+            .componentType = c.kAudioUnitType_Output,
+            .componentSubType = c.kAudioUnitSubType_HALOutput,
+            .componentManufacturer = c.kAudioUnitManufacturer_Apple,
+            .componentFlags = 0,
+            .componentFlagsMask = 0,
+        };
+        const comp = c.AudioComponentFindNext(null, &desc) orelse return audio.OpenError.StreamFailed;
+
+        var unit: c.AudioComponentInstance = null;
+        if (c.AudioComponentInstanceNew(comp, &unit) != 0 or unit == null) return audio.OpenError.StreamFailed;
+        errdefer _ = c.AudioComponentInstanceDispose(unit);
+
+        // Enable input on the input bus (1), disable output on the output bus (0).
+        var on: c.UInt32 = 1;
+        var off: c.UInt32 = 0;
+        if (c.AudioUnitSetProperty(unit, c.kAudioOutputUnitProperty_EnableIO, c.kAudioUnitScope_Input, 1, &on, @sizeOf(c.UInt32)) != 0) return audio.OpenError.StreamFailed;
+        if (c.AudioUnitSetProperty(unit, c.kAudioOutputUnitProperty_EnableIO, c.kAudioUnitScope_Output, 0, &off, @sizeOf(c.UInt32)) != 0) return audio.OpenError.StreamFailed;
+
+        // Point the unit at the default input device.
+        if (c.AudioUnitSetProperty(unit, c.kAudioOutputUnitProperty_CurrentDevice, c.kAudioUnitScope_Global, 0, &default_input, @sizeOf(c.AudioDeviceID)) != 0) {
+            return audio.OpenError.StreamFailed;
+        }
+
+        // The client format on the input bus's output scope (element 1) — the shape the callback reads.
+        var asbd = clientFormat(format);
+        if (c.AudioUnitSetProperty(unit, c.kAudioUnitProperty_StreamFormat, c.kAudioUnitScope_Output, 1, &asbd, @sizeOf(c.AudioStreamBasicDescription)) != 0) {
+            return audio.OpenError.StreamFailed;
+        }
+
+        // The input callback fires on the realtime thread when a block is ready; it carries the context.
+        var cb = c.AURenderCallbackStruct{ .inputProc = captureReady, .inputProcRefCon = @ptrCast(self) };
+        if (c.AudioUnitSetProperty(unit, c.kAudioOutputUnitProperty_SetInputCallback, c.kAudioUnitScope_Global, 0, &cb, @sizeOf(c.AURenderCallbackStruct)) != 0) {
+            return audio.OpenError.StreamFailed;
+        }
+
+        self.capture_channels = format.channels;
+        if (c.AudioUnitInitialize(unit) != 0) return audio.OpenError.StreamFailed;
+        errdefer _ = c.AudioUnitUninitialize(unit);
+
+        if (c.AudioOutputUnitStart(unit) != 0) return audio.OpenError.StreamFailed;
+
+        self.input_unit = unit;
+    }
+
+    /// Stops and tears down whichever streams are open — output, input, or both. Idempotent.
+    fn stopStream(self: *CoreAudioBackend) void {
+        self.stopOutput();
+        self.stopInput();
+    }
+
     /// Stops and tears down the open playback stream, if any: stop, uninitialize, dispose, clear the
     /// live flag. Idempotent — with nothing open it does nothing.
-    fn stopStream(self: *CoreAudioBackend) void {
+    fn stopOutput(self: *CoreAudioBackend) void {
         const unit = self.output_unit orelse return;
         _ = c.AudioOutputUnitStop(unit);
         _ = c.AudioUnitUninitialize(unit);
         _ = c.AudioComponentInstanceDispose(unit);
         self.output_unit = null;
     }
+
+    /// Stops and tears down the open capture stream, if any. Stopping the unit ends the realtime
+    /// callback before the context it delivers into goes away. Idempotent.
+    fn stopInput(self: *CoreAudioBackend) void {
+        const unit = self.input_unit orelse return;
+        _ = c.AudioOutputUnitStop(unit);
+        _ = c.AudioUnitUninitialize(unit);
+        _ = c.AudioComponentInstanceDispose(unit);
+        self.input_unit = null;
+    }
 };
+
+/// The capture unit's input callback: CoreAudio pulls this on a realtime thread when a hardware block is
+/// ready. It renders the block into the context's staging buffer and hands the bytes to the relay in
+/// bounded chunks — a lock-free, allocation-free copy. It never calls into general OS code and never
+/// blocks: the one path off this thread is the relay, which drops rather than stalls when the consumer
+/// falls behind. With no relay attached the block is rendered and discarded.
+fn captureReady(
+    in_refcon: ?*anyopaque,
+    io_action_flags: ?*c.AudioUnitRenderActionFlags,
+    in_timestamp: ?*const c.AudioTimeStamp,
+    in_bus: c.UInt32,
+    in_frames: c.UInt32,
+    io_data: ?*c.AudioBufferList,
+) callconv(.c) c.OSStatus {
+    _ = io_data; // an input callback is handed null data; the block is pulled with AudioUnitRender
+    const self: *CoreAudioBackend = @ptrCast(@alignCast(in_refcon orelse return 0));
+    const unit = self.input_unit orelse return 0;
+
+    // A one-buffer list pointing at the context-owned staging buffer — interleaved, so all channels sit
+    // in the single buffer. Built on the stack each callback: no allocation.
+    var list: c.AudioBufferList = undefined;
+    list.mNumberBuffers = 1;
+    const buffers: [*]c.AudioBuffer = @ptrCast(&list.mBuffers);
+    buffers[0] = .{
+        .mNumberChannels = self.capture_channels,
+        .mDataByteSize = capture_staging_bytes,
+        .mData = &self.capture_staging,
+    };
+
+    var render_flags: c.AudioUnitRenderActionFlags = 0;
+    const flags_ptr = io_action_flags orelse &render_flags;
+    const status = c.AudioUnitRender(unit, flags_ptr, in_timestamp, in_bus, in_frames, &list);
+    if (status != 0) return status;
+
+    const captured = buffers[0].mDataByteSize;
+    if (self.capture_relay) |relay| {
+        var off: c.UInt32 = 0;
+        while (off < captured) {
+            const n = @min(captured - off, audio.CaptureRelay.block_capacity);
+            _ = relay.push(self.capture_staging[off .. off + n]);
+            off += n;
+        }
+    }
+    return 0;
+}
 
 /// The output unit's render proc: zero-fill every buffer so the stream runs real, inaudible silence.
 /// A started AudioUnit pulls this on a realtime thread; it touches only the buffers it is handed.

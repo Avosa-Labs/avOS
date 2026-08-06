@@ -1,0 +1,16 @@
+{
+  "generated_at": "2026-07-30",
+  "selection_rule": "the default on-device assistant model, pinned to a released quantised GGUF from its project's official source; the digest is the SHA-256 of that file; it is fetched into the ignored .models/ directory and never committed, so a fresh device has a working assistant with no configuration",
+  "models": [
+    {
+      "name": "assistant",
+      "role": "text-assistant",
+      "purpose": "The default on-device assistant model the home command bar answers with — a small instruction-tuned model, quantised so it loads and runs on a laptop CPU. Provisioned into .models/ by `zig build fetch-model` and discovered automatically at run.",
+      "file": "qwen2.5-0.5b-instruct-q4_k_m.gguf",
+      "source": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf",
+      "size": 491400032,
+      "sha256": "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db",
+      "license": "Apache-2.0"
+    }
+  ]
+}
