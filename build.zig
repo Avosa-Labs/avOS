@@ -633,6 +633,11 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("agents/model/local/llama/llama.zig"),
             .target = target,
             .optimize = optimize,
+            // ggml counts the size of a compute graph by walking a null base pointer and adding field
+            // offsets to it (`(char *)NULL + size`), which the C sanitizer traps as a non-zero offset on
+            // a null pointer. It is a deliberate sizing idiom in the vendored engine, not a fault, so the
+            // C sanitizer is off for this module — the assistant builds its context without trapping.
+            .sanitize_c = .off,
         });
         const llama_engine_module = module;
         llama_engine_opt = llama_engine_module;
@@ -761,6 +766,9 @@ pub fn build(b: *std.Build) void {
                 .root_source_file = b.path("agents/model/local/llama/vision.zig"),
                 .target = target,
                 .optimize = optimize,
+                // The vision runtime compiles the same ggml sources; the C sanitizer is off for the same
+                // null-base sizing idiom as the text engine above.
+                .sanitize_c = .off,
                 .imports = &.{
                     .{ .name = "llama_engine", .module = llama_engine_module },
                 },
